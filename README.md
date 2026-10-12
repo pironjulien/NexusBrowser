@@ -69,27 +69,27 @@ Engineered natively for **Google Antigravity** and sovereign agentic orchestrati
 
 ```mermaid
 flowchart LR
-    subgraph Antigravity["Google Antigravity & AI Agents"]
-        Agent["AI Agent / LLM\n(Gemini 2.5 / Flash)"]
-        MCP["MCP Tools Client\n(32 Browser Tools)"]
+    subgraph Antigravity ["Google Antigravity and AI Agents"]
+        Agent["AI Agent / LLM<br/>Gemini 2.5 / Flash"]
+        MCP["MCP Tools Client<br/>32 Browser Tools"]
     end
 
-    subgraph Bridge["Secure Local Bridge (Python 3.10+)"]
-        Server["Bridge Server\n(127.0.0.1:9224 WS / 9225 HTTP)"]
-        TokenAuth["Local Token Auth\n(NexusSecure Token)"]
+    subgraph Bridge ["Secure Local Bridge"]
+        Server["Bridge Server<br/>127.0.0.1:9224 WS / 9225 HTTP"]
+        TokenAuth["Local Token Auth<br/>NexusSecure Token"]
     end
 
-    subgraph Chrome["Google Chrome (Manifest V3)"]
-        SW["Background Service Worker\n(background.js)"]
-        CDP["Chrome DevTools Protocol\n(chrome.debugger)"]
-        SidePanel["Gemini Side Panel UI\n(sidepanel.html)"]
-        ContentScript["Content Script & SoM\n(content_script.js)"]
-        Tabs["Web Pages & Tabs\n(DOM / React / SPA)"]
+    subgraph Chrome ["Google Chrome MV3"]
+        SW["Background Service Worker<br/>background.js"]
+        CDP["Chrome DevTools Protocol<br/>chrome.debugger"]
+        SidePanel["Gemini Side Panel UI<br/>sidepanel.html"]
+        ContentScript["Content Script and SoM<br/>content_script.js"]
+        Tabs["Web Pages and Tabs<br/>DOM / React / SPA"]
     end
 
     Agent <--> MCP
-    MCP <-->|HTTP REST / JSON| Server
-    Server <-->|Secure WebSocket| SW
+    MCP <-->|"HTTP REST / JSON"| Server
+    Server <-->|"Secure WebSocket"| SW
     SW <--> CDP
     SW <--> SidePanel
     CDP <--> Tabs
