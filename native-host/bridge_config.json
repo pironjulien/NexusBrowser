@@ -3,6 +3,9 @@
   "allowed_origins": [
     "chrome-extension://ljgneacjmkmiopjfacahdpcigiofnngo/",
     "chrome-extension://bmoppmncalloednpbnkkaikbehponacg/",
-    "chrome-extension://imicfnbdjlkndfcbopfpalpdcepbiobo/"
+    "chrome-extension://imicfnbdjlkndfcbopfpalpdcepbiobo/",
+    "chrome-extension://ighbankpbmmkejcddeelfampplgbnkfe/",
+    "chrome-extension://mfijmlhofcfejdhgpljfkfeaejgadggi/",
+    "chrome-extension://moapppidhpphhdlmhonnhbdcibpdnbon/"
   ]
 }

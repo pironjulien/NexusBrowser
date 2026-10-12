@@ -93,7 +93,26 @@ function scheduleBridgeReconnect(overrideDelayMs = null) {
     reconnectTimer = setTimeout(connectBridgeWS, delayMs);
 }
 
+async function ensureOffscreenDocument() {
+    if (!chrome.offscreen?.createDocument) return;
+    try {
+        if (chrome.runtime?.getContexts) {
+            const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
+            if (contexts && contexts.length > 0) return;
+        }
+    } catch (_) {}
+    try {
+        await chrome.offscreen.createDocument({
+            url: "offscreen.html",
+            reasons: ["BLOBS"],
+            justification: "NexusAGY persistent local WebSocket bridge connection"
+        });
+        console.log("[NexusAGY] Offscreen keepalive document created.");
+    } catch (_) {}
+}
+
 if (typeof chrome !== "undefined") {
+    ensureOffscreenDocument();
     if (chrome.sidePanel?.setPanelBehavior) {
         chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
     }
@@ -118,11 +137,18 @@ if (typeof chrome !== "undefined") {
             }
         });
     }
-    if (chrome.runtime?.onStartup) chrome.runtime.onStartup.addListener(() => setTimeout(connectBridgeWS, 300));
-    if (chrome.runtime?.onInstalled) chrome.runtime.onInstalled.addListener(() => setTimeout(connectBridgeWS, 300));
+    if (chrome.runtime?.onStartup) chrome.runtime.onStartup.addListener(() => {
+        ensureOffscreenDocument();
+        setTimeout(connectBridgeWS, 300);
+    });
+    if (chrome.runtime?.onInstalled) chrome.runtime.onInstalled.addListener(() => {
+        ensureOffscreenDocument();
+        setTimeout(connectBridgeWS, 300);
+    });
     if (chrome.alarms?.create) {
         chrome.alarms.create("bridge_keepalive_alarm", { periodInMinutes: 1 });
         chrome.alarms.onAlarm.addListener(() => {
+            ensureOffscreenDocument();
             if (!bridgeWs || bridgeWs.readyState !== WebSocket.OPEN) {
                 connectBridgeWS();
             }
