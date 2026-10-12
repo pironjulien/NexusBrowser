@@ -9,13 +9,13 @@
 
 > **Moteur autonome de Browser Use, remplissage de formulaires et automatisation web Chromium pour Google Antigravity et agents IA. Équipé d'un pont Chrome DevTools Protocol (CDP) temps réel, d'un balisage visuel Set-of-Marks et d'un panneau latéral copilote Google Gemini 1:1.**
 
-Conçu pour égaler et surpasser les meilleures intégrations Browser Use de **Claude** (Claude Computer Use / Browser) et **OpenAI Codex** (Operator / Codex Browser), **Antigravity Chrome** donne à votre agent IA les yeux et les mains nécessaires pour interagir avec le Web de manière 100% autonome et déterministe.
+Développé nativement pour **Google Antigravity** et les flux d'orchestration agentiques souverains, **Antigravity Chrome** donne à votre agent IA les yeux et les mains nécessaires pour interagir avec le Web de manière 100% autonome, déterministe et silencieuse.
 
 ---
 
-## ⚡ En quoi Antigravity Chrome égale & surpasse Claude et Codex
+## ⚡ Architecture SOTA & Avantages Techniques
 
-| Fonctionnalité | Claude Computer Use / Plugins Codex | Antigravity Chrome (Ce Projet) |
+| Dimension | Approche Conventionnelle (Scripts Web) | Antigravity Chrome (Ce Projet) |
 | :--- | :--- | :--- |
 | **Remplissage de formulaires** | Approximation par frappe aveugle | **Saisie déterministe (`fill`, `type_keys`) avec validation d'état DOM et événements natifs React/Vue** |
 | **Ancrage visuel (Grounding)** | Vision brute approximative (pixels) | **Arbre d'accessibilité (`axtree`) + Set-of-Marks (SoM) avec badges `[#1]`, `[#2]` dynamiques** |
@@ -42,7 +42,7 @@ Conçu pour égaler et surpasser les meilleures intégrations Browser Use de **C
 
 ### 3. 🏷️ Set-of-Marks (SoM) & Vision AI Grounding
 - Injection instantanée de badges numérotés (`[#1]`, `[#2]`, ...) sur tous les éléments interactifs de la page active (y compris au sein du Shadow DOM récursif).
-- Permet aux modèles multimodaux (Gemini 2.5 Pro / Flash, Claude 3.7 Sonnet) de désigner avec une précision absolue l'élément à manipuler, éliminant tout risque d'erreur de sélecteur.
+- Permet aux modèles multimodaux (Gemini 2.5 Pro / Flash) de désigner avec une précision absolue l'élément à manipuler, éliminant tout risque d'erreur de sélecteur.
 
 ### 4. 🔍 Extraction de Données & Inspection Web
 - **Accessibility Tree (`axtree`)** : Extraction de la hiérarchie d'accessibilité compacte pour une compréhension instantanée de la structure logique de la page.
