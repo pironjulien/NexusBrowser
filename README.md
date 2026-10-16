@@ -1,179 +1,234 @@
-# Antigravity Chrome — Autonomous Browser Use & Web Automation Bridge 🌐🤖✨
+# antigravity-chrome-sidepanel
 
-[![Chrome Manifest V3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/mv3/intro/)
-[![Model Context Protocol](https://img.shields.io/badge/MCP-FastMCP%20%2F%20CDP-FF6F00?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io/)
-[![Google Gemini Design](https://img.shields.io/badge/UI-Google%20Gemini%201%3A1-9B72CB?logo=google&logoColor=white)](https://gemini.google.com)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Author](https://img.shields.io/badge/Author-Julien%20Piron-10a37f)](https://julienpiron.fr)
+**Antigravity Browser Bridge 2.2.0**: a Chrome (Manifest V3) extension and a small local bridge server that let an AI
+agent, such as Google Antigravity, drive the user's real Chrome **in a background tab**, with real (trusted) mouse
+and keyboard events sent through the Chrome DevTools Protocol, while the user keeps working in their own tabs.
 
-> **Autonomous Browser Use, form filling, and Chromium web automation bridge engineered for Google Antigravity and AI agents. Equipped with real-time Chrome DevTools Protocol (CDP), Set-of-Marks visual grounding, and a 1:1 Google Gemini copilot Side Panel.**
+Chrome 116+ (125+ for out-of-process iframes) · Python 3.10+ for the bridge · MIT licence
 
-Engineered natively for **Google Antigravity** and sovereign agentic orchestration loops, **Antigravity Chrome** equips your AI agents with real eyes and hands to interact with the modern Web in a 100% autonomous, deterministic, and silent fashion.
+## Why
 
----
+Browser automation usually means a separate headless browser (no sessions, no extensions) or screen-level computer
+use that moves the user's cursor and brings the window to the front. This extension works inside the browser the user
+already uses: the agent gets its own background tab, grouped under an "Antigravity" tab group, and acts there through
+`chrome.debugger` without activating the tab or the window. Clicks and typing are real input events
+(`isTrusted: true`) aimed at a point that was checked to hit the target, and every action reports how it was done.
 
-## ⚡ SOTA Architecture & Technical Advantages
+## What it does
 
-| Dimension | Conventional Approach (Web Scripts) | Antigravity Chrome (This Project) |
-| :--- | :--- | :--- |
-| **Form Filling** | Blind typing approximation | **Deterministic input (`fill`, `type_keys`) with DOM state verification & native React/Vue events** |
-| **Visual Grounding** | Coarse pixel guessing | **Accessibility tree (`axtree`) + Set-of-Marks (SoM) with dynamic `[#1]`, `[#2]` badges** |
-| **Underlying Protocol** | Full OS screen capture | **Direct Chrome DevTools Protocol (CDP) via secure local WebSocket (`127.0.0.1:9224`)** |
-| **Multi-Tab Management** | Limited or non-existent | **Full control: `list_tabs`, `select_tab`, `new_tab`, `close_tab`, quick `@` tab picker** |
-| **Concurrent Background Isolation** | Steals focus or blocks user | **100% background execution (`active: false`) without focus theft + dedicated Chrome "Antigravity" Tab Groups** |
-| **Data Extraction** | Basic text scraping | **Structured DOM tree dumps, real-time console logs, session cookies, and vector PDF export** |
-| **Interface & Ergonomics** | Headless black box | **Persistent MV3 Side Panel styled after Google Gemini (`#131314`), voice dictation, and Auto mode** |
+### Strict locators
 
----
+Every targeting command accepts a `locator`, modelled on Playwright's `getByRole` / `getByLabel` / `getByText` /
+`getByPlaceholder` / `getByTestId`:
 
-## 🚀 Key Automation Capabilities
+```json
+{"role": "button", "name": "Submit"}
+{"label": "Email"}
+{"text": "Continue", "exact": true}
+{"placeholder": "Search"}
+{"testId": "submit"}
+```
 
-### 1. 📝 Autonomous Form Filling & Data Entry
-- Automated multi-field form filling (text inputs, passwords, textareas, dropdown `<select>` menus, checkboxes, radio buttons).
-- Native dispatch of synthetic JavaScript events (`input`, `change`, `blur`) required by modern Single Page Applications (React, Next.js, Vue, Angular).
-- Multi-step wizards and form workflows with validation error detection and self-correcting loops.
+Also `altText`, `title`, `hasText`, `nth` (negative counts from the end), `includeHidden`, and state filters
+(`checked`, `disabled`, `expanded`, `pressed`, `selected`, `level`). Matching is strict: several matches without
+`nth` is an error that lists the candidates. `find` lists candidates (role, name, frame, visibility, state, box)
+without acting. In the main frame Chrome's accessibility tree (`Accessibility.queryAXTree`) is used, completed by a
+DOM engine (`locator_kit.js`) shared with the page scripts. CSS selectors and Set-of-Marks numbers (`mark`) are still
+accepted.
 
-### 2. 🎯 Deterministic Clicking & Web Navigation
-- Precision Playwright-grade clicks by CSS selector, XPath, or screen coordinates with visual laser ripple (`__antigravity_visual_click`).
-- Semantic click support based on visible text and ARIA roles.
-- Intelligent scrolling (`scroll`) and hovering (`hover`) to expose dropdown menus and tooltips.
-- Seamless multi-tab navigation (`navigate`, `reload`, `select_tab`, `new_tab`, `close_tab`).
+### Real clicks and typing through CDP
 
-### 3. 🏷️ Set-of-Marks (SoM) & Vision AI Grounding
-- Instant numerical badge injection (`[#1]`, `[#2]`, ...) on all interactive elements across the active page (including recursive Shadow DOM).
-- Enables multimodal models (Gemini 2.5 Pro / Flash) to target elements with pinpoint accuracy, eliminating selector fragility.
+- `click`, `hover`, `drag_and_drop`, `click_mark`, `semantic_click` send `Input.dispatchMouseEvent` to the agent tab
+  without bringing it forward (left, right, middle, double click). The target is scrolled to the centre and the
+  clicked point must reach it (`elementFromPoint` through shadow roots and frames); a covered element is reported as
+  an error instead of clicking something else. Page focus emulation is enabled before mouse input so background tabs
+  receive the press and release.
+- `fill` (replace), `type` (append), `semantic_fill` and targeted `type_keys` focus the field with a real click,
+  select with a real Ctrl+A, type with `Input.insertText` (or key by key) and read the value back (`verified`). This
+  works on `contenteditable` editors. The old native-setter path remains as a reported fallback.
+- `press_key` accepts shortcuts (`Control+A`, `Shift+Tab`); `check` / `uncheck` click only when the state differs and
+  read it back.
+- Responses carry `method` (`cdp`, or `js_fallback` when the debugger cannot attach), and `trusted_click`,
+  `trusted_hover`, `trusted_drop` from a probe that records whether a trusted event actually reached the element.
 
-### 4. 🔍 Data Extraction & Web Inspection
-- **Accessibility Tree (`axtree`)**: Compact semantic hierarchy extraction for rapid spatial and logical understanding.
-- **Live Console Logs**: Real-time capture of `console.log`, `console.error`, and warnings for web diagnostics.
-- **Screenshots & PDF**: Compressed WebP/PNG dumps (< 200 KB) and vector PDF rendering via CDP.
-- **Cookies & Sessions**: Read and inject session cookies for persistent authenticated browsing without repeated login prompts.
+### Cross-origin and out-of-process iframes
 
-### 5. 💬 1:1 Google Gemini Copilot Side Panel
-- Persistent Chrome docking interface (`sidepanel.html`), accessible at any time via **`Ctrl + Shift + A`**.
-- Native Google Gemini dark aesthetic (`#131314`), Google Sans fluid typography, and animated sparkle indicator.
-- **Dynamic Context Chip ("Work with Tabs")**: Auto-detects active tab with `@` shortcut and `+` action button.
-- **Native Voice Input**: Web Speech API interactive microphone with real-time audio pulse and transcription.
-- **`AGY 2.0 • Auto` Mode**: Automatically routes user prompts between direct model inference, deep Pro reasoning, or Flash speed.
+Out-of-process iframes are reached through flat child sessions (`Target.setAutoAttach` with `flatten`, commands
+addressed by `sessionId`, Chrome 125+); same-process cross-origin frames through an isolated world. Points are mapped
+back to the main viewport through each owning `<iframe>`, and real input goes to the main page. `content`,
+`interactive_map` and `find` report the frame.
 
-### 6. 🛡️ Concurrent Background Isolation & "Antigravity" Tab Groups
-- **Zero Interruption (Parallel Independent Work)**: Antigravity opens working tabs in the background by default (`active: false`). Users continue browsing, typing, and working without cursor interruption or focus theft.
-- **Persistent Agent Targeting (`lastAgentTabId`)**: All agent commands execute deterministically on background tabs without touching the user's active foreground tab.
-- **Native Chrome Tab Groups (`chrome.tabGroups`)**: Tabs created by the agent are automatically grouped into a dedicated purple Chrome group named **"Antigravity"**, isolated from personal tabs and collapsible in a single click.
-- **Non-Intrusive Status Pill**: Subtle translucent `⚡ Antigravity · [Action]` pill in the bottom-right corner of driven tabs, click-transparent (`pointer-events: none`) with 0 ms latency and zero CPU footprint.
+### Network and downloads
 
----
+`network_requests` keeps a ring buffer of 500 requests per tab (main session and iframes), filterable by URL fragment
+or regex, method, status, type. `Cookie`, `Set-Cookie`, `Authorization`, `Proxy-Authorization`, `X-Api-Key`,
+`X-Auth-Token`, `X-CSRF-Token` and `X-XSRF-Token` headers are always masked. `network_response` returns a body
+(truncated, binary flagged). `wait_download` waits for a download started from the agent's tab and returns its path.
 
-## 🏛️ Technical Architecture
+### Dialogs
+
+JavaScript dialogs (`alert`, `confirm`, `prompt`) are never accepted automatically. The open dialog is
+reported in the response of the command that opened it (`dialogOpened`) and of every following command
+(`pendingDialogs`); commands that need the blocked page are refused until `handle_dialog` accepts or dismisses it.
+
+### Background tab and tab groups
+
+The agent works in its own tab (`create_tab` opens it in the background), remembered in `chrome.storage.session` so it
+survives a service worker restart. `close_tab`, `navigate` and `reload` without a tab id or a known agent tab are
+refused instead of targeting the user's active tab. No mouse command calls `tabs.update({active: true})` or
+`windows.update({focused: true})`. Agent tabs are grouped under a purple "Antigravity" tab group, and a small,
+click-through status pill shows the current action. The debugger is detached after 30 s of inactivity.
+
+### Other commands
+
+Tabs (`list_tabs`, `get_active_tab`, `select_tab`, `create_tab`, `close_tab`, `group_tabs`, `navigate`, `reload`),
+reading (`get_dom`, `get_accessibility_tree`, `interactive_map` with Set-of-Marks badges, `vision_inspect`,
+`get_logs`, `screenshot`, `print_pdf`, `get_cookies`), waiting (`wait_load`, `wait_network_idle`), `scroll`,
+`select_option`, `upload_file`, `evaluate`, `cdp_send`, `ping` (version and loaded feature list).
+
+### Side panel
+
+`Ctrl+Shift+A` opens a side panel styled after Gemini. It shows the bridge status and the active tab, and accepts quick
+commands (`map`, `screenshot`, `inspect`, `cookies`, `reload`, `click #N`, `go <url>`, scrolling) that it runs through
+the same engine. It does not call any language model: the model selector is cosmetic and a "summary" card shows the
+beginning of the page text. The agent itself drives Chrome through the bridge.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph Antigravity ["Google Antigravity and AI Agents"]
-        Agent["AI Agent / LLM<br/>Gemini 2.5 / Flash"]
-        MCP["MCP Tools Client<br/>32 Browser Tools"]
-    end
-
-    subgraph Bridge ["Secure Local Bridge"]
-        Server["Bridge Server<br/>127.0.0.1:9224 WS / 9225 HTTP"]
-        TokenAuth["Local Token Auth<br/>NexusSecure Token"]
-    end
-
-    subgraph Chrome ["Google Chrome MV3"]
-        SW["Background Service Worker<br/>background.js"]
-        CDP["Chrome DevTools Protocol<br/>chrome.debugger"]
-        SidePanel["Gemini Side Panel UI<br/>sidepanel.html"]
-        ContentScript["Content Script and SoM<br/>content_script.js"]
-        Tabs["Web Pages and Tabs<br/>DOM / React / SPA"]
-    end
-
-    Agent <--> MCP
-    MCP <-->|"HTTP REST / JSON"| Server
-    Server <-->|"Secure WebSocket"| SW
-    SW <--> CDP
-    SW <--> SidePanel
-    CDP <--> Tabs
-    ContentScript <--> Tabs
+    Agent["AI agent or MCP client"] -->|"HTTP POST api command with token"| Server["bridge_server.py"]
+    Server -->|"WebSocket 127.0.0.1 9224"| Offscreen["offscreen document keepalive"]
+    Offscreen --> SW["background.js service worker"]
+    SW -->|"chrome.debugger CDP"| Tab["agent background tab"]
+    SW --> Content["content_script.js and locator_kit.js"]
+    Content --> Tab
+    Panel["side panel and popup"] --> SW
 ```
 
----
-
-## 🛠️ Agent Tools Directory (MCP / API)
-
-The Antigravity agent has access to 32 dedicated tools to automate Chrome:
-
-| Tool | Description |
-| :--- | :--- |
-| `browser_new_tab(url, background=True, group="Antigravity")` | Opens a tab in the background without stealing focus and assigns it to the Antigravity group. |
-| `browser_group_tabs(tab_ids, title, color)` | Groups tabs into a named, colored Chrome tab group (`chrome.tabGroups`). |
-| `browser_interactive_map(viewport_only=True)` | Compact interactive element map with SoM `[#N]` marks (saves 85% to 95% tokens). |
-| `browser_navigate(url)` | Navigates target tab to specified URL. |
-| `browser_click(selector, mark)` | Executes precision Playwright-grade click with visual ripple on selector or SoM mark `[#N]`. |
-| `browser_fill(selector, text, mark)` | Deterministic form input (React, Next.js, contenteditable). |
-| `browser_hover(selector, mark)` | Hovers over an element to reveal dropdown menus and tooltips. |
-| `browser_press_key(key)` | Dispatches native key events (`Enter`, `Tab`, `ArrowDown`, etc.). |
-| `browser_select_option(selector, value)` | Selects an option in `<select>` dropdown menus. |
-| `browser_drag_and_drop(from_mark, to_mark)` | Multi-step drag and drop action via CDP. |
-| `browser_wait_load()` | Waits for complete DOM document stabilization. |
-| `browser_wait_network_idle()` | Waits for active Fetch/XHR network requests to complete. |
-| `browser_upload(files, selector)` | Direct file upload bypassing OS file picker dialogs. |
-| `browser_scroll(direction, y)` | Scrolls target page (`up`, `down`, pixels). |
-| `browser_screenshot(format, mark)` | Captures tab or element screenshot in compact WebP/PNG (< 200 KB). |
-| `browser_content()` | Extracts clean DOM or text from active page. |
-| `browser_axtree()` | Retrieves semantic accessibility tree for agent reasoning. |
-| `browser_list_tabs()` | Lists all open tabs with IDs, URLs, titles, and `groupId`. |
-| `browser_active_tab()` | Returns active tab metadata. |
-| `browser_select_tab(tab_id)` | Switches focus and foreground to specified tab. |
-| `browser_close_tab(tab_id)` | Closes specified tab or background agent tab. |
-| `browser_reload(bypass_cache)` | Reloads tab content with optional cache bypass. |
-| `browser_eval(script)` | Evaluates arbitrary JavaScript within the page context. |
-| `browser_get_cookies(urls)` | Retrieves session cookies for authentication persistence. |
-| `browser_check_handoff()` | Proactively detects 2FA, OTP, or CAPTCHA verification challenges. |
-| `browser_cdp_send(method, params)` | Sends raw Chrome DevTools Protocol commands directly. |
-| `browser_logs()` | Fetches browser console logs. |
-
----
-
-## 🚀 Quickstart & Setup
-
-### 1. Clone the Repository
-```bash
-git clone https://github.com/pironjulien/antigravity-chrome-sidepanel.git
-cd antigravity-chrome-sidepanel
+```
+extension/
+  manifest.json       MV3 manifest: debugger, tabs, tabGroups, scripting, downloads, offscreen, sidePanel, storage
+  background.js       service worker: command dispatch, CDP input, locators, frames, network log, dialogs, downloads
+  locator_kit.js      role/label/text locator engine shared with page scripts
+  content_script.js   page side: status pill, Set-of-Marks badges
+  offscreen.html/.js  keeps the WebSocket to the bridge alive
+  sidepanel.*         side panel UI
+  popup.*             toolbar popup (status)
+native-host/
+  bridge_server.py    local server: WebSocket 127.0.0.1:9224 (extension), HTTP 127.0.0.1:9225 (agent)
+  bridge_security.py  per-user token (created on first start, restricted file permissions)
+  bridge_config.json  explicit list of extension origins allowed on the WebSocket
+tests/
+  browser.test.cjs    84 Node tests against simulated Chrome APIs, CDP input and DOM (no browser needed)
 ```
 
-### 2. Load the Extension in Google Chrome
-1. Open Google Chrome and navigate to `chrome://extensions`.
-2. Enable **Developer mode** (toggle in top-right corner).
-3. Click **Load unpacked**.
-4. Select the `extension/` directory from this repository.
+The bridge HTTP API:
 
-### 3. Start the Local Bridge Server
-```bash
-python native-host/bridge_server.py
+- `GET /api/status` returns `{status, version, connected_clients, port}`.
+- `POST /api/command` with `Content-Type: application/json` and body `{"action", "params", "timeout"}` (timeout 0.1 to
+  120 s) returns `{"success", "data"}` or `{"success": false, "error"}`.
+- Every request needs the header `X-NexusAGY-Token` with the content of the token file. Requests carrying an `Origin`
+  header (that is, coming from a web page) are refused. Headers are limited to 64 KB and bodies to 16 MB.
+
+## Installation
+
+1. **Bridge**: install Python 3.10+ and `websockets` (12 to 16), then start the server.
+
+   ```powershell
+   git clone https://github.com/pironjulien/antigravity-chrome-sidepanel.git
+   cd antigravity-chrome-sidepanel
+   python -m pip install "websockets>=12,<17"
+   python native-host/bridge_server.py            # optional: --token-file <path> --log-file <path>
+   ```
+
+   The token is created on first start in `%USERPROFILE%\.nexusagy\bridge-token` (override with `--token-file`).
+
+2. **Extension**: open `chrome://extensions`, enable Developer mode, choose *Load unpacked* and select the
+   `extension` folder. Copy the extension ID shown by Chrome.
+
+3. **Allow the extension**: add `chrome-extension://<your extension ID>/` to `allowed_origins` in
+   `native-host/bridge_config.json` and restart the bridge. An unpacked extension's ID depends on its folder, so the IDs
+   already listed will not match yours.
+
+4. **Agent side**: call the HTTP API from your agent or wrap it in MCP tools. Example from PowerShell:
+
+   ```powershell
+   $token = Get-Content "$env:USERPROFILE\.nexusagy\bridge-token" -Raw
+   $body = @{ action = 'create_tab'; params = @{ url = 'https://example.com'; background = $true } } | ConvertTo-Json
+   Invoke-RestMethod http://127.0.0.1:9225/api/command -Method Post -ContentType 'application/json' `
+     -Headers @{ 'X-NexusAGY-Token' = $token.Trim() } -Body $body
+   ```
+
+   The MCP client used with Antigravity (40 browser tools) is part of a private configuration and is not included here.
+
+## Usage examples
+
+```json
+{"action": "click", "params": {"locator": {"role": "button", "name": "Sign in"}}}
+{"action": "fill",  "params": {"locator": {"label": "Email"}, "text": "ada@example.com"}}
+{"action": "find",  "params": {"locator": {"role": "link", "hasText": "Docs"}}}
+{"action": "network_requests", "params": {"filter": "/api/", "failed_only": true}}
+{"action": "handle_dialog", "params": {"accept": false}}
 ```
-> The server listens on `ws://127.0.0.1:9224` (WebSocket) and `http://127.0.0.1:9225` (REST API). It is immediately ready to accept agent requests.
 
-### 4. Everyday Usage
-- **Side Panel Shortcut**: Press **`Ctrl + Shift + A`** to toggle the panel anytime.
-- **`@` Tab Picker**: Type `@` in the text box to target any open browser tab.
-- **Voice Dictation**: Click the microphone icon and speak natural-language instructions.
-- **Autonomous Agents**: Trigger agent workflows from Antigravity; Chrome is driven autonomously in the background!
+## Measurements
 
----
+From the project's changelog (October 15, 2026), measured in the author's real Chrome with an agent tab in the
+background:
 
-## ⌨️ Shortcuts Reference
+- Real-browser validation `--mouse`: 11/11 checks (trusted-only button, double and right click, CSS `:hover` menu,
+  covered element reported, drag and drop counted once, same-origin iframe button, `confirm()`), two runs in a row,
+  the user's active tab unchanged and their tabs intact.
+- Real-browser validation `--full-live`: 27/27 checks (duplicate button names with `nth`, `testId`, label and
+  placeholder fields, a field that rejects untrusted input, `contenteditable`, check box, `<select>`, an out-of-process
+  and a same-process cross-origin iframe, masked `Authorization` header with body read back, a download), two runs in
+  a row.
+- Offline: 84/84 Node tests (`test.ps1`, October 16, 2026).
 
-| Shortcut | Action |
-| :--- | :--- |
-| `Ctrl + Shift + A` | Open / close the Chrome Side Panel |
-| `@` | Open tab context selector |
-| `Enter` | Submit prompt to copilot |
-| `click #N` | Direct click on Set-of-Marks badge `#N` |
+The two real-browser validation scripts are not part of this repository (they depend on the private agent client).
 
----
+## Security
 
-## 👨‍💻 Author & License
+- The bridge listens on 127.0.0.1 only. The agent-facing HTTP API requires the per-user token and refuses any request
+  with an `Origin` header, so web pages cannot call it.
+- The WebSocket accepts only the extension origins listed in `bridge_config.json`. This is a check of the `Origin`
+  header, which a local non-browser process can forge: it stops web pages, not other programs running as the same
+  user.
+- Sensitive network headers are masked in the network log.
+- JavaScript dialogs are never accepted automatically. Mouse commands never activate the tab or the window.
+- The extension requests broad permissions (`debugger` and `<all_urls>`, with commands such as
+  `get_cookies`, `evaluate` and `cdp_send`): whoever holds the bridge token controls the browser session. Keep the token private.
 
-Engineered by **Julien Piron** ([julienpiron.fr](https://julienpiron.fr) • [julienpiron.com](https://julienpiron.com) • X: [@julienpironfr](https://x.com/julienpironfr)).  
-Released under the **MIT License**. See [LICENSE](LICENSE) for details.
+## Working alongside other agents
+
+On the author's PC this bridge is one of three desktop agents (with
+[claude-windows-computer-use](https://github.com/pironjulien/claude-windows-computer-use) and
+[codex-windows-computer-use](https://github.com/pironjulien/codex-windows-computer-use)). They share a foreground token
+(`%USERPROFILE%\.nexus\foreground.lock`, exclusive `LockFileEx` on 1 byte at offset 2^32, released by Windows when the
+handle closes) and an emergency stop (Ctrl+Alt+Shift+Esc writes `%USERPROFILE%\.nexus\stop`; a new version younger
+than 120 s blocks every action for the remaining time, latched in memory). Background CDP input needs neither the
+mouse nor the foreground, so it never takes the token. **In this repository, both protocols are enforced by the
+agent-side client, which is not included**: the extension and the bridge do not read the stop file. An agent built on
+this bridge should check `%USERPROFILE%\.nexus\stop` before each action.
+
+## Limits
+
+- Chrome only (Manifest V3, `chrome.debugger`). While the debugger is attached, Chrome shows its "is being debugged"
+  banner on the agent tab. Protected pages (`chrome://`, the Web Store) cannot be scripted.
+- The accessibility-tree engine covers the main frame only; frames use the DOM engine.
+- When the debugger cannot attach (another debugger, protected tab), clicks fall back to JavaScript events, reported
+  as `js_fallback` with `trusted_click: false`; many sites ignore those.
+- Reloading the extension can keep the old service worker for a while; `ping` reports the loaded feature list so an
+  agent can detect it.
+- UI strings and code comments are partly in French.
+
+## Development
+
+```powershell
+pwsh -NoProfile -File test.ps1   # Node tests of the extension and a syntax check of the bridge
+```
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Julien Piron.
