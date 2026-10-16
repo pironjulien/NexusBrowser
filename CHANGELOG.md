@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow the extension's `manifest.json`.
 
+## [2.4.0] - 2026-10-16
+
+### Added
+- `export`: main page content as Markdown, text or cleaned HTML, with metadata, optional area and bounded size.
+- `export_gsuite`: Google Docs, Sheets and Slides through Google's official export URLs with the user's session;
+  binary formats written to disk.
+- `export_youtube_transcript`: YouTube transcripts (manual, auto-generated or translated), timed and plain text.
 ## [2.3.0] - 2026-10-16
 
 ### Security

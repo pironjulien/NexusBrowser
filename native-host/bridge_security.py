@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 TOKEN_HEADER = "X-NexusAGY-Token"
 
 

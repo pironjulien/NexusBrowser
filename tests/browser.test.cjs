@@ -2416,3 +2416,331 @@ test('carte du panneau : boutons et liens seulement ; jamais la valeur d\'un cha
     assert.equal(res.data.elements.length, 1);
     assert.ok(!JSON.stringify(res).includes('MotDePasse!'));
 });
+
+// -----------------------------------------------------------------------------
+// Exports de contenu (export_kit.js) : article avec bruit, Google Docs/Sheets/Slides, transcription YouTube.
+// -----------------------------------------------------------------------------
+const ARTICLE_URL = 'https://blog.example.invalid/articles/pont-local';
+
+function articlePage(h) {
+    return [
+        h('header', {class: 'site-header'},
+            h('nav', {}, h('ul', {}, h('li', {}, h('a', {href: '/'}, 'Accueil')), h('li', {}, h('a', {href: '/blog'}, 'Menu principal du blog')), h('li', {}, h('a', {href: '/contact'}, 'Contact'))))),
+        h('div', {class: 'cookie-banner'}, h('p', {}, 'Nous utilisons des cookies pour mesurer l\'audience, acceptez-les tous, vraiment tous.')),
+        h('meta', {name: 'author', content: 'Julien Piron'}),
+        h('meta', {property: 'article:published_time', content: '2026-10-16T09:00:00Z'}),
+        h('meta', {property: 'og:site_name', content: 'Carnet Nexus'}),
+        h('script', {}, 'window.tracker = "SCRIPT_SECRET";'),
+        h('main', {},
+            h('article', {id: 'main-article', class: 'post'},
+                h('h1', {}, 'Un pont local authentifié'),
+                h('p', {}, 'Le pont relie l\'agent à Chrome, avec une ', h('strong', {}, 'preuve HMAC'), ' dans les deux sens, et chaque message est signé, numéroté puis vérifié.'),
+                h('div', {class: 'ad-slot'}, h('p', {}, 'Publicité : achetez nos montres connectées en promotion aujourd\'hui seulement, profitez-en.')),
+                h('h2', {}, 'Étapes'),
+                h('ol', {}, h('li', {}, 'Nonce de l\'extension'), h('li', {}, 'Preuve du pont'), h('li', {}, 'Preuve du client')),
+                h('p', {}, 'La documentation complète se trouve sur ', h('a', {href: '/docs/pont'}, 'la page du pont'), ', avec des exemples, des schémas et des mesures réelles.'),
+                h('table', {},
+                    h('tr', {}, h('th', {}, 'Port'), h('th', {}, 'Rôle')),
+                    h('tr', {}, h('td', {}, '9224'), h('td', {}, 'WebSocket | signé')),
+                    h('tr', {}, h('td', {}, '9225'), h('td', {}, 'API REST'))),
+                h('pre', {class: 'language-python'}, 'print("bonjour")\nprint("pont")'),
+                h('form', {}, h('label', {}, 'Votre e-mail'), h('input', {type: 'email', value: 'julien@example.invalid'}), h('button', {}, 'S\'abonner')),
+                h('p', {}, 'Conclusion : aucun programme local ne peut plus se faire passer pour le pont, ni rejouer une commande déjà signée.')
+            )
+        ),
+        h('aside', {class: 'sidebar'}, h('h3', {}, 'À lire aussi'), h('p', {}, 'Abonnez-vous à la lettre d\'information pour ne rien manquer de nos nouveautés.')),
+        h('footer', {}, h('p', {}, 'Mentions légales et plan du site, tous droits réservés, copyright 2026.'))
+    ];
+}
+
+function exportHarness(build = articlePage, {url = ARTICLE_URL, page = {}, chromeOverrides = {}} = {}) {
+    const dom = richDom(build);
+    dom.doc.title = 'Un pont local authentifié — Carnet Nexus';
+    dom.doc.baseURI = url;
+    dom.html.attrs.lang = 'fr';
+    Object.assign(dom.page, {location: {href: url}, URL}, page);
+    const h = harness(dom.page, {tabs: {get: async (id) => ({id, url, title: dom.doc.title, windowId: 10})}, ...chromeOverrides});
+    return {h, dom};
+}
+
+const NOISE = ['Menu principal', 'cookies', 'Publicité', 'Abonnez-vous', 'Mentions légales', 'SCRIPT_SECRET', 'julien@example.invalid', 'S\'abonner'];
+
+test('export : Markdown du corps de l\'article, sans menus, publicités, bandeau ni champ ; métadonnées', async () => {
+    const {h} = exportHarness();
+    const res = await h.run('export_content', {tabId: 1});
+    const d = res.data;
+    assert.equal(d.format, 'markdown');
+    assert.equal(d.root.method, 'article');
+    assert.equal(d.root.id, 'main-article');
+    const md = d.content;
+    assert.match(md, /^# Un pont local authentifié\n/);
+    assert.match(md, /avec une \*\*preuve HMAC\*\* dans les deux sens/);
+    assert.match(md, /\n## Étapes\n\n1\. Nonce de l'extension\n2\. Preuve du pont\n3\. Preuve du client\n/);
+    assert.match(md, /\[la page du pont\]\(https:\/\/blog\.example\.invalid\/docs\/pont\)/);
+    assert.match(md, /\| Port \| Rôle \|\n\| --- \| --- \|\n\| 9224 \| WebSocket \\\| signé \|\n\| 9225 \| API REST \|/);
+    assert.match(md, /```python\nprint\("bonjour"\)\nprint\("pont"\)\n```/);
+    assert.match(md, /Conclusion : aucun programme local/);
+    for (const noise of NOISE) assert.ok(!md.includes(noise), `bruit présent : ${noise}`);
+    assert.deepEqual(plain(d.metadata), {
+        title: 'Un pont local authentifié', author: 'Julien Piron', published: '2026-10-16T09:00:00Z', modified: null,
+        lang: 'fr', site_name: 'Carnet Nexus', description: null, canonical: null
+    });
+    assert.equal(d.url, ARTICLE_URL);
+    assert.equal(d.truncated, false);
+    assert.equal(d.total_chars, md.length);
+    assert.equal(d.stats.tables, 1);
+    assert.equal(d.stats.code_blocks, 1);
+    assert.ok(d.stats.words > 40);
+    assert.ok(!JSON.stringify(res).includes('julien@example.invalid'));
+});
+
+test('export : sans <article>, la racine est trouvée au score (paragraphes, densité de liens)', async () => {
+    const page = (h) => [
+        h('div', {id: 'top-links'}, h('a', {href: '/a'}, 'Lien un'), h('a', {href: '/b'}, 'Lien deux'), h('a', {href: '/c'}, 'Lien trois')),
+        h('div', {class: 'layout'},
+            h('div', {id: 'story', class: 'content'},
+                h('p', {}, 'Premier paragraphe du récit, assez long pour compter, avec des virgules, des détails, et du sens.'),
+                h('p', {}, 'Deuxième paragraphe du récit, qui prolonge le premier, toujours avec des virgules, et des faits.')),
+            h('div', {class: 'related'}, h('p', {}, 'Articles similaires que vous pourriez aimer lire ensuite, cliquez ici.')))
+    ];
+    const {h} = exportHarness(page);
+    const res = await h.run('export_content', {tabId: 1});
+    assert.equal(res.data.root.method, 'scored');
+    assert.equal(res.data.root.id, 'story');
+    assert.match(res.data.content, /Premier paragraphe[^\n]+\n\nDeuxième paragraphe/);
+    assert.ok(!res.data.content.includes('Lien deux') && !res.data.content.includes('similaires'));
+});
+
+test('export : formats text et html nettoyé (aucun attribut, script ni champ)', async () => {
+    const {h} = exportHarness();
+    const text = (await h.run('export_content', {tabId: 1, format: 'text'})).data;
+    assert.equal(text.format, 'text');
+    assert.match(text.content, /^Un pont local authentifié\n\nLe pont relie l'agent à Chrome, avec une preuve HMAC dans/);
+    assert.match(text.content, /Port\tRôle\n9224\tWebSocket \| signé/);
+    assert.ok(!text.content.includes('**') && !text.content.includes('](') && !text.content.includes('Publicité'));
+    const html = (await h.run('export_content', {tabId: 1, format: 'html'})).data.content;
+    assert.match(html, /<h1>Un pont local authentifié<\/h1>/);
+    assert.match(html, /<strong>preuve HMAC<\/strong>/);
+    assert.match(html, /<a href="https:\/\/blog\.example\.invalid\/docs\/pont">la page du pont<\/a>/);
+    assert.match(html, /<thead><tr><th>Port<\/th><th>Rôle<\/th><\/tr><\/thead>/);
+    assert.match(html, /<pre><code class="language-python">print\(&quot;bonjour&quot;\)/);
+    assert.ok(!/class="post"|<script|<input|<form|SCRIPT_SECRET|Publicité/.test(html));
+    const bad = await h.run('export_content', {tabId: 1, format: 'docx'});
+    assert.match(bad.error, /format inconnu/);
+});
+
+test('export : zone par selector ou locator (strict), troncature signalée', async () => {
+    const {h} = exportHarness();
+    const zone = (await h.run('export_content', {tabId: 1, selector: 'table'})).data;
+    assert.equal(zone.root.method, 'selector');
+    assert.equal(zone.content, '| Port | Rôle |\n| --- | --- |\n| 9224 | WebSocket \\| signé |\n| 9225 | API REST |');
+    const byLocator = (await h.run('export_content', {tabId: 1, locator: {role: 'list', hasText: 'Nonce'}})).data;
+    assert.equal(byLocator.root.method, 'locator');
+    assert.equal(byLocator.content, '1. Nonce de l\'extension\n2. Preuve du pont\n3. Preuve du client');
+    const missing = await h.run('export_content', {tabId: 1, selector: '#absent'});
+    assert.match(missing.error, /Aucun élément ne correspond au sélecteur/);
+    const ambiguous = await h.run('export_content', {tabId: 1, locator: {role: 'list'}});
+    assert.match(ambiguous.error, /Localisateur ambigu .* 2 éléments correspondent/);
+    const second = (await h.run('export_content', {tabId: 1, locator: {role: 'list', nth: -1}})).data;
+    assert.match(second.content, /^1\. Nonce/);
+    const cut = (await h.run('export_content', {tabId: 1, maxChars: 120})).data;
+    assert.equal(cut.truncated, true);
+    assert.ok(cut.content.length <= 120 && cut.total_chars > 120);
+});
+
+// --- Google Docs / Sheets / Slides ---------------------------------------------------------------------------
+function fakeResponse({status = 200, body = '', bytes = null, type = 'text/plain; charset=utf-8', url = null, disposition = null} = {}) {
+    const headers = {'content-type': type};
+    if (disposition) headers['content-disposition'] = disposition;
+    return {
+        ok: status >= 200 && status < 300, status, url, redirected: false,
+        headers: {get: (name) => headers[String(name).toLowerCase()] ?? null},
+        text: async () => body,
+        arrayBuffer: async () => (bytes || new TextEncoder().encode(body)).buffer
+    };
+}
+
+function gsuiteHarness(url, responder, extra = {}) {
+    const fetches = [];
+    const page = {
+        document: {title: 'Doc', cookie: 'SID=cookie-secret-value', documentElement: {}},
+        location: {href: url},
+        btoa, AbortController, setTimeout, clearTimeout, TextEncoder, Uint8Array,
+        fetch: async (u, opts) => { fetches.push({url: u, credentials: opts && opts.credentials, from: 'page'}); return responder(u, opts); }
+    };
+    const h = harness(page, {tabs: {get: async (id) => ({id, url, title: 'Plan 2026 - Google Docs', windowId: 10})}, ...extra});
+    return {h, fetches};
+}
+
+test('gsuite : Docs en Markdown par l\'URL d\'export officielle, cookies de la session, jamais renvoyés', async () => {
+    const url = 'https://docs.google.com/document/u/1/d/1AbCdEfGhIjKlMnOp/edit?tab=t.0';
+    const {h, fetches} = gsuiteHarness(url, (u) => fakeResponse({body: '# Plan 2026\n\nTexte du document.', type: 'text/markdown', url: u, disposition: 'attachment; filename="Plan 2026.md"'}));
+    const res = await h.run('export_gsuite', {tabId: 1});
+    assert.deepEqual(plain(fetches), [{url: 'https://docs.google.com/document/u/1/d/1AbCdEfGhIjKlMnOp/export?format=md', credentials: 'include', from: 'page'}]);
+    const d = res.data;
+    assert.equal(d.kind, 'document');
+    assert.equal(d.format, 'md');
+    assert.equal(d.binary, false);
+    assert.equal(d.text, '# Plan 2026\n\nTexte du document.');
+    assert.equal(d.filename, 'Plan 2026.md');
+    assert.equal(d.title, 'Plan 2026');
+    assert.equal(d.via, 'page');
+    assert.ok(!JSON.stringify(res).includes('cookie-secret-value'));
+});
+
+test('gsuite : formats binaires en base64 (docx), Sheets avec gid, Slides en pptx', async () => {
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0xff, 0x00, 0x10]);
+    const docx = gsuiteHarness('https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit', (u) => fakeResponse({bytes, type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', url: u}));
+    const d = (await docx.h.run('export_gsuite', {tabId: 1, format: 'docx'})).data;
+    assert.equal(d.binary, true);
+    assert.equal(d.bytes, 7);
+    assert.deepEqual([...Buffer.from(d.base64, 'base64')], [...bytes]);
+    assert.equal(d.text, undefined);
+
+    const sheet = gsuiteHarness('https://docs.google.com/spreadsheets/d/1ZyXwVuTsRqPoNm/edit#gid=123456', (u) => fakeResponse({body: 'a,b\n1,2\n', type: 'text/csv', url: u}));
+    const s = (await sheet.h.run('export_gsuite', {tabId: 1})).data;
+    assert.equal(sheet.fetches[0].url, 'https://docs.google.com/spreadsheets/d/1ZyXwVuTsRqPoNm/export?format=csv&gid=123456');
+    assert.equal(s.text, 'a,b\n1,2\n');
+    assert.equal(s.gid, '123456');
+    await sheet.h.run('export_gsuite', {tabId: 1, format: 'xlsx', gid: 7});
+    assert.equal(sheet.fetches[1].url, 'https://docs.google.com/spreadsheets/d/1ZyXwVuTsRqPoNm/export?format=xlsx&gid=7');
+
+    const slides = gsuiteHarness('https://docs.google.com/presentation/d/1SlIdEsDeCk0123/edit#slide=id.p', (u) => fakeResponse({bytes, type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', url: u}));
+    const p = (await slides.h.run('export_gsuite', {tabId: 1, format: 'pptx'})).data;
+    assert.equal(slides.fetches[0].url, 'https://docs.google.com/presentation/d/1SlIdEsDeCk0123/export/pptx');
+    assert.equal(p.kind, 'presentation');
+    const bad = await slides.h.run('export_gsuite', {tabId: 1, format: 'xlsx'});
+    assert.match(bad.error, /non exportable pour Google Slides : txt, pdf, pptx, odp/);
+});
+
+test('gsuite : erreurs claires (page non Google, droits, connexion, HTML au lieu du fichier), aucun fetch hors Google', async () => {
+    const other = gsuiteHarness('https://example.invalid/document/d/1AbCdEfGhIjKlMnOp/edit', () => fakeResponse());
+    assert.match((await other.h.run('export_gsuite', {tabId: 1})).error, /n'est pas un Google Docs, Sheets ou Slides/);
+    assert.equal(other.fetches.length, 0);
+    const docUrl = 'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit';
+    const denied = gsuiteHarness(docUrl, (u) => fakeResponse({status: 403, url: u}));
+    assert.match((await denied.h.run('export_gsuite', {tabId: 1})).error, /refusé \(HTTP 403\) : droits insuffisants/);
+    const login = gsuiteHarness(docUrl, () => fakeResponse({type: 'text/html', body: '<html>Connexion</html>', url: 'https://accounts.google.com/ServiceLogin?continue=x'}));
+    assert.match((await login.h.run('export_gsuite', {tabId: 1})).error, /Google demande une connexion/);
+    const html = gsuiteHarness(docUrl, (u) => fakeResponse({type: 'text/html; charset=utf-8', body: '<html>Erreur</html>', url: u}));
+    assert.match((await html.h.run('export_gsuite', {tabId: 1, format: 'pdf'})).error, /page HTML au lieu du fichier/);
+    const published = gsuiteHarness('https://docs.google.com/document/d/e/2PACX-1vabcdefghijkl/pub', () => fakeResponse());
+    assert.match((await published.h.run('export_gsuite', {tabId: 1})).error, /publié sur le Web/);
+    assert.equal(published.fetches.length, 0);
+});
+
+test('gsuite : fetch refusé dans la page (CORS) -> repli fetch du service worker avec credentials include', async () => {
+    const url = 'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit';
+    const {h, fetches} = gsuiteHarness(url, () => { throw new TypeError('Failed to fetch'); });
+    h.ctx.fetch = async (u, opts) => { fetches.push({url: u, credentials: opts.credentials, from: 'extension'}); return fakeResponse({body: 'Texte brut', url: u}); };
+    const res = await h.run('export_gsuite', {tabId: 1, format: 'txt'});
+    assert.deepEqual(plain(fetches.map(f => [f.from, f.credentials])), [['page', 'include'], ['extension', 'include']]);
+    assert.equal(res.data.via, 'extension');
+    assert.equal(res.data.text, 'Texte brut');
+});
+
+// --- YouTube -----------------------------------------------------------------------------------------------------
+const VIDEO = 'dQw4w9WgXcQ';
+const TRACKS = [
+    {baseUrl: `https://www.youtube.com/api/timedtext?v=${VIDEO}&lang=fr&sig=abc`, languageCode: 'fr', name: {simpleText: 'Français'}, isTranslatable: true},
+    {baseUrl: `https://www.youtube.com/api/timedtext?v=${VIDEO}&lang=en&kind=asr&sig=def`, languageCode: 'en', kind: 'asr', name: {runs: [{text: 'Anglais (générés automatiquement)'}]}, isTranslatable: true}
+];
+const JSON3 = (lines) => JSON.stringify({events: [{tStartMs: 0, dDurationMs: 500}, ...lines.map(([ms, text]) => ({tStartMs: ms, dDurationMs: 2000, segs: [{utf8: text}]}))]});
+
+function youtubeHarness({tracks = TRACKS, responder, initial, player, entries = []} = {}) {
+    const fetches = [];
+    const url = `https://www.youtube.com/watch?v=${VIDEO}&t=42s`;
+    const pr = {videoDetails: {videoId: VIDEO, title: 'Vidéo de test', author: 'Chaîne Nexus', lengthSeconds: '212'}, playabilityStatus: {status: 'OK'},
+        captions: tracks ? {playerCaptionsTracklistRenderer: {captionTracks: tracks, audioTracks: [{defaultCaptionTrackIndex: 0}]}} : undefined};
+    const page = {
+        document: {getElementById: (id) => (id === 'movie_player' ? player || null : null)},
+        window: {ytInitialPlayerResponse: initial === undefined ? pr : initial},
+        location: {href: url},
+        performance: {getEntriesByType: () => entries.map(name => ({name}))},
+        btoa, AbortController, setTimeout, clearTimeout, Date,
+        fetch: async (u) => { fetches.push(u); return responder(u, pr); }
+    };
+    const h = harness(page, {tabs: {get: async (id) => ({id, url, title: 'Vidéo de test - YouTube', windowId: 10})}});
+    return {h, fetches, pr};
+}
+
+test('youtube : piste choisie par langue (manuelle d\'abord), json3 rendu en texte horodaté et brut', async () => {
+    const {h, fetches} = youtubeHarness({responder: (u) => fakeResponse({body: JSON3([[1200, 'Bonjour'], [65000, 'et   bienvenue\n'], [3725000, 'Fin']]), url: u})});
+    const res = await h.run('export_youtube_transcript', {tabId: 1, lang: 'fr'});
+    const d = res.data;
+    assert.match(fetches[0], /lang=fr/);
+    assert.match(fetches[0], /fmt=json3/);
+    assert.equal(d.video_id, VIDEO);
+    assert.equal(d.title, 'Vidéo de test');
+    assert.equal(d.channel, 'Chaîne Nexus');
+    assert.deepEqual(plain(d.track), {lang: 'fr', name: 'Français', auto: false, translatable: true, translated: false, translated_to: null, source_format: 'json3'});
+    assert.equal(d.timed_text, '[00:01] Bonjour\n[01:05] et bienvenue\n[1:02:05] Fin');
+    assert.equal(d.text, 'Bonjour et bienvenue Fin');
+    assert.equal(d.segments, 3);
+    assert.equal(d.method, 'direct');
+    assert.deepEqual(plain(d.available_tracks.map(t => [t.lang, t.auto])), [['fr', false], ['en', true]]);
+});
+
+test('youtube : piste auto-générée signalée, traduction par tlang, vtt, aucune piste -> erreur claire', async () => {
+    const vtt = 'WEBVTT\n\n00:00:01.000 --> 00:00:03.000\n<c>Hello</c> world\n\n00:00:03.000 --> 00:00:05.000\nHello world\n\n00:01:00.500 --> 00:01:02.000\nSecond &amp; last';
+    const en = youtubeHarness({responder: (u) => fakeResponse({body: /fmt=vtt/.test(u) ? vtt : '', url: u})});
+    const d = (await en.h.run('export_youtube_transcript', {tabId: 1, lang: 'en-US', format: 'vtt'})).data;
+    assert.equal(d.track.auto, true);
+    assert.equal(d.track.source_format, 'vtt');
+    assert.equal(d.timed_text, '[00:01] Hello world\n[01:00] Second & last');
+    const de = youtubeHarness({responder: (u) => fakeResponse({body: JSON3([[0, 'Hallo']]), url: u})});
+    const t = (await de.h.run('export_youtube_transcript', {tabId: 1, lang: 'de'})).data;
+    assert.match(de.fetches[0], /tlang=de/);
+    assert.equal(t.track.translated, true);
+    assert.equal(t.track.translated_to, 'de');
+    const none = youtubeHarness({tracks: null, responder: () => fakeResponse()});
+    assert.match((await none.h.run('export_youtube_transcript', {tabId: 1})).error, /Aucune piste de sous-titres/);
+    assert.equal(none.fetches.length, 0);
+    const noTranslate = youtubeHarness({tracks: [{...TRACKS[0], isTranslatable: false}], responder: () => fakeResponse()});
+    assert.match((await noTranslate.h.run('export_youtube_transcript', {tabId: 1, lang: 'ja'})).error, /Aucune piste en « ja » ni traduisible : pistes disponibles fr/);
+});
+
+test('youtube : données du lecteur obsolètes (navigation SPA) -> getPlayerResponse de la vidéo ouverte', async () => {
+    const player = {getPlayerResponse: null};
+    const {h, pr} = youtubeHarness({initial: {videoDetails: {videoId: 'AAAAAAAAAAA'}}, player, responder: (u) => fakeResponse({body: JSON3([[0, 'Bonne vidéo']]), url: u})});
+    player.getPlayerResponse = () => pr;
+    const d = (await h.run('export_youtube_transcript', {tabId: 1})).data;
+    assert.equal(d.text, 'Bonne vidéo');
+    assert.equal(d.player_source, 'player');
+});
+
+test('youtube : piste vide (jeton pot exigé) -> sous-titres activés un instant, URL signée du lecteur, puis remis', async () => {
+    const entries = [];
+    const options = [];
+    const player = {
+        getPlayerResponse: null, getOption: () => ({}), loadModule: (m) => options.push(['load', m]),
+        unloadModule: (m) => options.push(['unload', m]),
+        setOption: (mod, key, value) => {
+            options.push(['set', value.languageCode]);
+            entries.push(`https://www.youtube.com/api/timedtext?v=${VIDEO}&lang=fr&fmt=srv3&pot=TOKEN123&c=WEB`);
+        }
+    };
+    const {h, fetches, pr} = youtubeHarness({player, entries, responder: (u) => fakeResponse({body: /pot=TOKEN123/.test(u) ? JSON3([[0, 'Avec jeton']]) : '', url: u})});
+    player.getPlayerResponse = () => pr;
+    const d = (await h.run('export_youtube_transcript', {tabId: 1, lang: 'fr'})).data;
+    assert.equal(d.text, 'Avec jeton');
+    assert.equal(d.method, 'player_token');
+    assert.equal(d.captions_toggled, true);
+    assert.match(fetches[1], /pot=TOKEN123/);
+    assert.match(fetches[1], /fmt=json3/);
+    assert.ok(!/fmt=srv3/.test(fetches[1]));
+    assert.deepEqual(plain(options), [['load', 'captions'], ['set', 'fr'], ['unload', 'captions']]);
+    const off = youtubeHarness({responder: (u) => fakeResponse({body: '', url: u})});
+    assert.match((await off.h.run('export_youtube_transcript', {tabId: 1, enableCaptions: false})).error, /illisible \(réponse vide\)/);
+});
+
+test('youtube : onglet hors YouTube refusé sans rien lire', async () => {
+    const {h} = exportHarness();
+    assert.match((await h.run('export_youtube_transcript', {tabId: 1})).error, /n'est pas une page YouTube/);
+});
+
+test('exports annoncés par ping (contrôle préalable de la validation réelle)', async () => {
+    const h = harness();
+    const pong = await h.run('ping', {});
+    for (const f of ['content-export', 'gsuite-export', 'youtube-transcript']) assert.ok(pong.data.features.includes(f), f);
+});

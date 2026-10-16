@@ -1,6 +1,6 @@
 # antigravity-chrome-sidepanel
 
-**Antigravity Browser Bridge 2.3.0**: a Chrome (Manifest V3) extension and a small local bridge server that let an AI
+**Antigravity Browser Bridge 2.4.0**: a Chrome (Manifest V3) extension and a small local bridge server that let an AI
 agent, such as Google Antigravity, drive the user's real Chrome **in a background tab**, with real (trusted) mouse
 and keyboard events sent through the Chrome DevTools Protocol, while the user keeps working in their own tabs.
 
@@ -65,6 +65,19 @@ or regex, method, status, type. `Cookie`, `Set-Cookie`, `Authorization`, `Proxy-
 `X-Auth-Token`, `X-CSRF-Token` and `X-XSRF-Token` headers are always masked. `network_response` returns a body
 (truncated, binary flagged). `wait_download` waits for a download started from the agent's tab and returns its path.
 
+### Content exports
+
+- `export`: the page's main content as Markdown, plain text or cleaned HTML (a Readability-style extractor written for
+  this project: menus, ads, cookie banners, sidebars, forms and footers are dropped), with metadata (URL, title, author,
+  dates, language, site, canonical URL). A `selector` or a strict `locator` limits the export to one area; the size is
+  bounded (100,000 characters by default) and truncation is reported. Field values are never exported.
+- `export_gsuite`: a Google Docs, Sheets or Slides document open in the tab, through Google's official export URLs,
+  fetched from the page with the user's session (cookies are never read). Text formats come back in the response;
+  binary formats (docx, xlsx, pdf, pptx) are written under `%USERPROFILE%\.nexusagy\exports` and only their path is
+  returned. Clear errors for a non-Google page, missing rights or a sign-in page.
+- `export_youtube_transcript`: the transcript of the open YouTube video (manual track first, then auto-generated,
+  then YouTube translation), as timed and plain text. YouTube only serves caption files through a URL signed by the
+  player, so the tool reuses one already seen or briefly turns captions on and restores the previous state.
 ### Dialogs
 
 JavaScript dialogs (`alert`, `confirm`, `prompt`) are never accepted automatically. The open dialog is
@@ -132,7 +145,7 @@ native-host/
   auth_host.py        native messaging host: computes the extension's proofs, so the token never reaches Chrome
   install-native-host.ps1  registers the native host for the current user (HKCU)
 tests/
-  browser.test.cjs    94 Node tests against simulated Chrome APIs, CDP input and DOM (no browser needed)
+  browser.test.cjs    108 Node tests against simulated Chrome APIs, CDP input and DOM (no browser needed)
 ```
 
 The bridge HTTP API:
@@ -207,7 +220,8 @@ background:
 - Version 2.3.0 (October 16, 2026), same real Chrome: `--mouse` 11/11 and `--full-live` 26/26 with the authenticated
   bridge, the out-of-process iframe click passing 6 runs out of 6 (a first click whose probe proves that no event at
   all reached the element is resent once).
-- Offline: 94/94 Node tests (`test.ps1`, October 16, 2026).
+- Version 2.4.0 (October 16, 2026): `--full-live` 29/29 including a noisy article exported without its noise, and a real YouTube transcript exported from a background agent tab. Google Docs export is covered by offline tests only.
+- Offline: 108/108 Node tests (`test.ps1`, October 16, 2026).
 
 The two real-browser validation scripts are not part of this repository (they depend on the private agent client).
 

@@ -5,13 +5,16 @@
 
 // Moteur de localisation par rôle et libellé (agyLocatorKit), partagé avec les scripts de page.
 if (typeof importScripts === "function") importScripts("locator_kit.js");
+// Exports de contenu (agyExportKit) : Markdown de la page, Google Docs/Sheets/Slides, transcriptions YouTube.
+if (typeof importScripts === "function") importScripts("export_kit.js");
 
 // Fonctions du code RÉELLEMENT chargé, annoncées par ping : la validation réelle les compare à cette même liste lue
 // dans le fichier du dépôt (mesuré le 15/10 : un rechargement peut garder l'ancien service worker avec le nouveau
 // numéro de version). Ajouter ici chaque nouvelle capacité visible.
 const AGY_FEATURES = [
     "cdp-mouse", "focus-emulation", "focus-emulation-child-settle", "locator", "trusted-typing", "oopif",
-    "network-log", "wait-download", "dialogs", "bridge-auth", "sidepanel-requests"
+    "network-log", "wait-download", "dialogs", "bridge-auth", "sidepanel-requests",
+    "content-export", "gsuite-export", "youtube-transcript"
 ];
 
 let attachedDebuggers = new Set();
@@ -751,6 +754,18 @@ async function routeCommand(req) {
 
             case "form_fields":
                 return await getFormFields(params);
+
+            case "export_content":
+            case "content_export":
+                return await exportContent(params);
+
+            case "export_gsuite":
+            case "gsuite_export":
+                return await exportGsuite(params);
+
+            case "export_youtube_transcript":
+            case "youtube_transcript":
+                return await exportYoutubeTranscript(params);
 
             case "reload_extension":
                 setTimeout(() => { try { chrome.runtime.reload(); } catch(e) {} }, 100);
@@ -4529,6 +4544,104 @@ async function getFormFields(params = {}) {
             return { count: total, fields, truncated: total > fields.length };
         })()`
     });
+}
+
+// -----------------------------------------------------------------------------
+// Exports de contenu (export_kit.js) : tout est lu dans la page de l'onglet visé (jamais mis au premier plan), avec
+// la session de Julien ; aucun cookie ni valeur de champ ne sort de la page.
+// -----------------------------------------------------------------------------
+const EXPORT_KIT_SOURCE = agyExportKit.toString();
+const EK = agyExportKit();
+// Fichier binaire transporté en base64 par le pont (messages de 16 Mo au plus) : 8 Mo au plus.
+const EXPORT_MAX_BYTES = 8 * 1024 * 1024;
+const EXPORT_FETCH_TIMEOUT_MS = 40000;
+
+function exportError(res) {
+    if (res?.data?.dialogOpened) return res;
+    if (res?.data && typeof res.data === "object" && res.data.error) return { error: res.data.error };
+    if (!res?.data) return { error: "La page n'a rien renvoyé (onglet en cours de chargement ou protégé ?)" };
+    return null;
+}
+
+/** Contenu principal de la page (ou d'une zone : selector, locator) en markdown, text ou html, borné. */
+async function exportContent(params = {}) {
+    const tabId = await resolveTargetTab(params);
+    if (!tabId) throw new Error("No active tab");
+    const locator = parseLocator(params.locator);
+    const spec = {
+        format: params.format || "markdown",
+        selector: params.selector || null,
+        locator,
+        maxChars: params.maxChars !== undefined ? params.maxChars : params.max_chars
+    };
+    const code = `(${EXPORT_KIT_SOURCE})().pageExport(${JSON.stringify(spec)}, ${locator ? `(${LOCATOR_KIT_SOURCE})()` : "null"})`;
+    const res = await evaluateScript({ tabId, code });
+    return exportError(res) || res;
+}
+
+/**
+ * Google Docs, Sheets ou Slides ouvert dans l'onglet : URL d'export officielle, fetch depuis la page avec les
+ * cookies de la session (credentials: "include"). Repli : même fetch depuis le service worker (droits d'hôte de
+ * l'extension) si la page le refuse (CORS d'une redirection). Texte ou base64 renvoyé ; le serveur MCP écrit les
+ * binaires sur disque. Aucun cookie n'est lu ni renvoyé.
+ */
+async function exportGsuite(params = {}) {
+    const tabId = await resolveTargetTab(params);
+    if (!tabId) throw new Error("No active tab");
+    const tab = await chrome.tabs.get(tabId);
+    const plan = EK.gsuitePlan(tab?.url || tab?.pendingUrl || "", params.format, params.gid);
+    if (plan.error) return { error: plan.error };
+    const opts = { binary: plan.binary, maxBytes: EXPORT_MAX_BYTES, timeoutMs: EXPORT_FETCH_TIMEOUT_MS };
+    const res = await evaluateScript({ tabId, code: `(${EXPORT_KIT_SOURCE})().fetchResource(${JSON.stringify(plan.url)}, ${JSON.stringify(opts)})` });
+    if (res?.data?.dialogOpened) return res;
+    let fetched = res?.data || null;
+    let via = "page";
+    if (fetched?.networkError && typeof fetch === "function") {
+        const pageError = fetched.networkError;
+        fetched = await EK.fetchResource(plan.url, opts);
+        via = "extension";
+        if (fetched?.networkError) fetched.networkError = `page : ${pageError} ; extension : ${fetched.networkError}`;
+    }
+    const verdict = EK.gsuiteVerdict(plan, fetched);
+    if (verdict.error) return { error: verdict.error };
+    const data = {
+        kind: plan.kind,
+        label: plan.label,
+        document_id: plan.document_id,
+        title: String(tab?.title || "").replace(/\s+-\s+Google (Docs|Sheets|Slides|Drive)$/i, "") || null,
+        format: plan.format,
+        extension: plan.extension,
+        binary: plan.binary,
+        mime: String(fetched.type || "").split(";")[0].trim() || plan.mime,
+        bytes: fetched.bytes,
+        filename: fetched.filename || null,
+        export_url: plan.url,
+        via
+    };
+    if (plan.kind === "spreadsheets") {
+        data.gid = plan.gid;
+        if ((plan.format === "csv" || plan.format === "tsv") && plan.gid === null) data.note = "Sans gid : première feuille du classeur seulement (préciser gid, ou ouvrir la feuille voulue).";
+    }
+    if (plan.binary) data.base64 = fetched.base64;
+    else data.text = fetched.text;
+    return { data };
+}
+
+/** Transcription de la vidéo YouTube ouverte dans l'onglet (piste choisie par langue, json3 ou vtt). */
+async function exportYoutubeTranscript(params = {}) {
+    const tabId = await resolveTargetTab(params);
+    if (!tabId) throw new Error("No active tab");
+    const tab = await chrome.tabs.get(tabId);
+    if (!EK.isYoutubeUrl(tab?.url || "")) return { error: `L'onglet n'est pas une page YouTube (${String(tab?.url || "?").slice(0, 120)}).` };
+    const spec = {
+        lang: params.lang || null,
+        format: params.format || "json3",
+        maxChars: params.maxChars !== undefined ? params.maxChars : params.max_chars,
+        enableCaptions: params.enableCaptions !== false,
+        timeoutMs: EXPORT_FETCH_TIMEOUT_MS / 2
+    };
+    const res = await evaluateScript({ tabId, code: `(${EXPORT_KIT_SOURCE})().youtubeTranscript(${JSON.stringify(spec)})` });
+    return exportError(res) || res;
 }
 
 /**
