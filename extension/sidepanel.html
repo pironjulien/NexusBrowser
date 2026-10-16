@@ -15,7 +15,7 @@
                     <path d="M12 2C12 7.52 7.52 12 2 12C7.52 12 12 16.48 12 22C12 16.48 16.48 12 22 12C16.48 12 12 7.52 12 2Z" fill="url(#gemini-sparkle-grad)"/>
                 </svg>
                 <span class="gemini-brand-name">Antigravity</span>
-                <span id="bridge-status-indicator" class="gemini-status-dot online" title="Pont local connecté"></span>
+                <span id="bridge-status-indicator" class="gemini-status-dot offline" title="État du pont local en cours de lecture"></span>
             </div>
             <div class="gemini-top-actions">
                 <button id="btn-options" class="gemini-icon-btn" title="Options">
@@ -28,7 +28,7 @@
                 <button id="btn-close-panel" class="gemini-icon-btn" title="Fermer le panneau">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="6"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
                     </svg>
                 </button>
             </div>
@@ -37,10 +37,10 @@
         <!-- Menu déroulant des options -->
         <div id="options-dropdown-menu" class="gemini-floating-menu" style="display:none;">
             <div class="menu-item" id="opt-reload-tab">🔄 Recharger l'onglet actif</div>
-            <div class="menu-item" id="opt-ping-bridge">⚡ Tester le pont local (127.0.0.1)</div>
+            <div class="menu-item" id="opt-ping-bridge">⚡ État du pont local (127.0.0.1:9224)</div>
             <div class="menu-item" id="opt-open-extensions">🧩 Gérer les extensions</div>
             <div class="menu-divider"></div>
-            <div class="menu-item" id="opt-clear-chat">🗑️ Effacer la conversation</div>
+            <div class="menu-item" id="opt-clear-chat">🗑️ Effacer le fil du panneau</div>
         </div>
 
         <!-- Définition commune du dégradé Gemini -->
@@ -64,7 +64,8 @@
                         <path d="M12 2C12 7.52 7.52 12 2 12C7.52 12 12 16.48 12 22C12 16.48 16.48 12 22 12C16.48 12 12 7.52 12 2Z" fill="url(#gemini-sparkle-grad)"/>
                     </svg>
                 </div>
-                <h1 class="gemini-hero-title">Posez vos questions, Julien !</h1>
+                <h1 class="gemini-hero-title">Antigravity</h1>
+                <p class="gemini-hero-subtitle">Les boutons agissent tout de suite sur l'onglet visé. Une demande écrite est transmise à Antigravity par le pont local ; sa réponse s'affiche ici.</p>
             </div>
 
             <!-- Messages de conversation -->
@@ -81,18 +82,10 @@
                 <button class="gemini-pill-btn" data-action="screenshot">Capturer la vue actuelle</button>
             </div>
 
-            <!-- Menu flottant de sélection d'onglets (quand on clique sur + ou tape @) -->
+            <!-- Menu flottant : onglet visé par les boutons et joint aux demandes (+ ou @) -->
             <div id="tabs-dropdown-menu" class="gemini-floating-menu" style="display:none;">
-                <div class="menu-header">Ajouter un onglet au contexte</div>
+                <div class="menu-header">Viser un autre onglet</div>
                 <div id="tabs-dropdown-list" class="tabs-list-wrapper"></div>
-            </div>
-
-            <!-- Menu flottant de sélection de modèle -->
-            <div id="model-dropdown-menu" class="gemini-floating-menu" style="display:none;">
-                <div class="menu-item active" data-model="auto">✓ AGY 2.0 • Auto (Routage Intelligent)</div>
-                <div class="menu-item" data-model="flash">AGY 2.0 • Flash Extended (Rapide)</div>
-                <div class="menu-item" data-model="pro">AGY 2.0 • Pro Reasoning (Raisonnement poussé)</div>
-                <div class="menu-item" data-model="direct">AGY 2.0 • SOTA Direct (CDP + Actions directes)</div>
             </div>
 
             <!-- Boîte de saisie Gemini Card -->
@@ -102,38 +95,27 @@
                     <div class="gemini-tab-chip" id="tab-context-chip">
                         <span class="tab-chip-icon">ⓘ</span>
                         <span class="tab-chip-title" id="tab-chip-title">Chargement...</span>
-                        <button class="tab-chip-close" id="btn-detach-tab" title="Détacher l'onglet">✕</button>
+                        <button class="tab-chip-close" id="btn-detach-tab" title="Revenir à l'onglet actif" style="display:none;">✕</button>
                     </div>
                 </div>
 
                 <!-- Ligne 2 : Zone de saisie texte (Pleine largeur sans coupure) -->
                 <div class="gemini-input-row">
-                    <button id="btn-add-context" class="gemini-add-btn" title="Ajouter des onglets (@)">
+                    <button id="btn-add-context" class="gemini-add-btn" title="Viser un autre onglet (@)">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="12" y1="5" x2="12" y2="19"></line>
                             <line x1="5" y1="12" x2="19" y2="12"></line>
                         </svg>
                     </button>
-                    <textarea id="prompt-input" rows="1" placeholder="Saisissez @ pour ajouter des onglets ou une instruction..."></textarea>
+                    <textarea id="prompt-input" rows="1" maxlength="4000" placeholder="Demande pour Antigravity (@ pour viser un autre onglet)..."></textarea>
                 </div>
 
-                <!-- Ligne 3 : Contrôles inférieurs (Sélecteur de modèle + Micro/Envoi) -->
+                <!-- Ligne 3 : destination + envoi -->
                 <div class="gemini-bottom-controls-row">
-                    <div class="gemini-controls-spacer"></div>
+                    <span class="gemini-destination" id="destination-label">Transmis à Antigravity par le pont local</span>
                     <div class="gemini-controls-right">
-                        <div class="gemini-model-badge" id="btn-model-selector" title="Changer de modèle">
-                            <span id="model-name-label">AGY 2.0 • Auto</span>
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="6 9 12 15 18 9"></polyline>
-                            </svg>
-                        </div>
-                        <button id="btn-send" class="gemini-action-btn" title="Dicter ou Envoyer">
-                            <!-- Icône micro/audio par défaut, flèche bleue à la saisie -->
-                            <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-                                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-                            </svg>
-                            <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display:none;">
+                        <button id="btn-send" class="gemini-action-btn" title="Transmettre à Antigravity" disabled>
+                            <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
                             </svg>
                         </button>
@@ -146,6 +128,7 @@
         <div id="gemini-toast" class="gemini-toast"></div>
     </div>
 
+    <script src="sidepanel_view.js"></script>
     <script src="sidepanel.js"></script>
 </body>
 </html>

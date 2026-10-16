@@ -1,6 +1,26 @@
+// Liaison offscreen au pont local : garde une connexion quand le service worker est suspendu et relaie les commandes
+// authentifiées au service worker. Même protocole que le service worker (bridge_link.js) ; la poignée de main est
+// prouvée par l'hôte natif via le service worker (un document offscreen n'a pas accès à la messagerie native).
 const BRIDGE_WS_URL = "ws://127.0.0.1:9224";
-let ws = null;
+let link = null;
 let reconnectTimeout = null;
+
+function toBackground(message) {
+    return new Promise((resolve) => {
+        try {
+            chrome.runtime.sendMessage({ target: "background", ...message }, (response) => {
+                const lastErr = chrome.runtime.lastError;
+                resolve(lastErr ? { error: lastErr.message } : response);
+            });
+        } catch (error) {
+            resolve({ error: error.message || String(error) });
+        }
+    });
+}
+
+function reportState(current) {
+    toBackground({ bridgeState: current.describe() });
+}
 
 function scheduleReconnect(delayMs = 2000) {
     if (reconnectTimeout) clearTimeout(reconnectTimeout);
@@ -8,64 +28,53 @@ function scheduleReconnect(delayMs = 2000) {
 }
 
 function connectWS() {
-    if (ws) {
-        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-            return;
-        }
-        try { ws.close(); } catch (_) {}
-        ws = null;
+    if (link && link.alive) return;
+    if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
     }
-
     try {
-        ws = new WebSocket(BRIDGE_WS_URL);
-
-        ws.onopen = () => {
-            console.log("[Antigravity Offscreen] Connected to " + BRIDGE_WS_URL);
-            if (reconnectTimeout) {
-                clearTimeout(reconnectTimeout);
-                reconnectTimeout = null;
+        link = new globalThis.AgyBridgeLink({
+            url: BRIDGE_WS_URL,
+            role: "offscreen",
+            extensionId: chrome.runtime.id,
+            prove: async (args) => (await toBackground({ bridgeProve: args })) || { ok: false, error: "service worker injoignable" },
+            onRequest: async (request) => {
+                const response = await toBackground({ request });
+                return response && (response.data !== undefined || response.error)
+                    ? response
+                    : { error: (response && response.error) || "No response from background" };
+            },
+            onStateChange: (current) => {
+                if (current === link) reportState(current);
+                if (current.state === "ready") current.send({ event: "bridge_connected", timestamp: Date.now() });
+            },
+            onClose: (current) => {
+                if (current !== link) return;
+                link = null;
+                scheduleReconnect(current.error ? 5000 : 2000);
             }
-            ws.send(JSON.stringify({ event: "bridge_connected", timestamp: Date.now() }));
-        };
-
-        ws.onmessage = async (event) => {
-            try {
-                const request = JSON.parse(event.data);
-                chrome.runtime.sendMessage({ target: "background", request }, (response) => {
-                    const lastErr = chrome.runtime.lastError;
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        const errMsg = response ? response.error : (lastErr ? lastErr.message : "No response from background");
-                        ws.send(JSON.stringify({
-                            requestId: request.requestId || request.id,
-                            success: response ? !response.error : false,
-                            data: response ? response.data : null,
-                            error: errMsg
-                        }));
-                    }
-                });
-            } catch (err) {
-                console.error("[Antigravity Offscreen] Error handling message:", err);
-            }
-        };
-
-        ws.onclose = () => {
-            ws = null;
-            scheduleReconnect(2000);
-        };
-
-        ws.onerror = () => {
-            // onclose will follow and trigger scheduleReconnect
-        };
+        });
     } catch (e) {
-        ws = null;
+        link = null;
         scheduleReconnect(3000);
     }
 }
 
+// Événement à signer pour le service worker quand sa propre liaison n'est pas prête (demande du panneau latéral).
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (!message || message.target !== "offscreen" || !message.bridgeEvent) return;
+    if (sender.id !== chrome.runtime.id || sender.tab) return;
+    sendResponse({ sent: !!(link && link.send(message.bridgeEvent)) });
+    return true;
+});
+
 connectWS();
 // Health check guard every 10s to recover from suspended PC sleep states
 setInterval(() => {
-    if (!ws || ws.readyState === WebSocket.CLOSED) {
+    if (!link || !link.alive) {
         connectWS();
+    } else {
+        reportState(link);  // le service worker a pu redémarrer et oublier l'état de cette liaison
     }
 }, 10000);

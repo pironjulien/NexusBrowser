@@ -152,13 +152,6 @@ body {
     overflow-y: auto;
 }
 
-#model-dropdown-menu {
-    bottom: 50px;
-    right: 12px;
-    min-width: 260px;
-    max-width: 300px;
-}
-
 .menu-header {
     font-size: 11px;
     font-weight: 500;
@@ -295,7 +288,8 @@ body {
 
 .gemini-suggestions-stack {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    flex-wrap: wrap;
     align-items: flex-start;
     gap: 8px;
     padding-left: 4px;
@@ -443,7 +437,7 @@ body {
     color: var(--gemini-text-muted);
 }
 
-/* Row 3: Bottom controls (Model Badge on Right + Mic/Send Button) */
+/* Row 3: Bottom controls (destination + Send Button) */
 .gemini-bottom-controls-row {
     display: flex;
     align-items: center;
@@ -460,24 +454,6 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
-}
-
-.gemini-model-badge {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    color: var(--gemini-text-muted);
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 6px;
-    transition: background-color 0.15s ease, color 0.15s ease;
-    user-select: none;
-}
-
-.gemini-model-badge:hover {
-    background-color: rgba(255, 255, 255, 0.06);
-    color: var(--gemini-text-secondary);
 }
 
 .gemini-action-btn {
@@ -506,18 +482,6 @@ body {
 
 .gemini-action-btn.has-text:hover {
     background: #5094fa;
-}
-
-.gemini-action-btn.recording {
-    background: #ea4335 !important;
-    color: #ffffff !important;
-    animation: pulse-recording 1.2s infinite;
-}
-
-@keyframes pulse-recording {
-    0% { box-shadow: 0 0 0 0 rgba(234, 67, 53, 0.6); }
-    70% { box-shadow: 0 0 0 8px rgba(234, 67, 53, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(234, 67, 53, 0); }
 }
 
 /* --------------------------------------------------------------------------
@@ -681,3 +645,76 @@ body {
     40% { transform: scale(1); opacity: 1; }
 }
 
+
+/* --------------------------------------------------------------------------
+   Demandes transmises à Antigravity, réponses, cookies (noms seulement)
+   -------------------------------------------------------------------------- */
+.gemini-destination {
+    font-size: 11px;
+    color: var(--gemini-text-muted);
+}
+
+.gemini-action-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.request-status {
+    font-size: 11px;
+    color: var(--gemini-text-muted);
+}
+
+.request-status.not_sent {
+    color: #f28b82;
+}
+
+.request-status.answered,
+.request-status.read {
+    color: #81c995;
+}
+
+.result-body .muted {
+    font-size: 11px;
+    color: var(--gemini-text-muted);
+    margin-top: 4px;
+}
+
+.result-body .error {
+    color: #f28b82;
+}
+
+.cookie-domain {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--gemini-text-secondary);
+}
+
+.cookie-names {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--gemini-text-muted);
+    word-break: break-all;
+}
+
+.field-row {
+    font-size: 11px;
+    color: var(--gemini-text-secondary);
+    background: rgba(255, 255, 255, 0.03);
+    padding: 3px 6px;
+    border-radius: 4px;
+    margin-top: 3px;
+}
+
+.capture-image {
+    width: 100%;
+    border-radius: 8px;
+    margin-top: 6px;
+}
+
+.gemini-hero-subtitle {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--gemini-text-muted);
+    text-align: center;
+    max-width: 300px;
+}

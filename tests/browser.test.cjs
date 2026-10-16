@@ -150,6 +150,51 @@ function simulateMouse(page, state, params, log) {
     }
 }
 
+/**
+ * Horloge simulée d'un harnais : Date.now et les minuteries du service worker (sauf les 30 s d'inactivité, déclenchées
+ * à la main) suivent un temps virtuel. Dès que plus rien d'autre n'est à faire (tâches et microtâches écoulées),
+ * le temps saute à la prochaine minuterie et la déclenche : une attente de 50 ms dure toujours 50 ms, quelle que soit
+ * la charge du poste. Sans elle, une attente réelle bornée (wait_network_idle 400 ms, wait_download) dépassait sa
+ * borne quand le poste était chargé (mesuré : 2 échecs sur 60 passages sous charge).
+ */
+function virtualClock() {
+    const RealDate = Date;
+    let now = RealDate.now();
+    let order = 0;
+    let pumping = false;
+    const timers = new Set();
+    const pump = () => {
+        pumping = false;
+        for (const timer of timers) if (timer.cleared) timers.delete(timer);
+        if (!timers.size) return;
+        const next = [...timers].sort((a, b) => a.at - b.at || a.order - b.order)[0];
+        timers.delete(next);
+        now = Math.max(now, next.at);
+        next.fn(...next.args);
+        schedule();
+    };
+    const schedule = () => {
+        if (!pumping && timers.size) {
+            pumping = true;
+            setImmediate(pump);
+        }
+    };
+    class VirtualDate extends RealDate {
+        constructor(...args) { super(...(args.length ? args : [now])); }
+        static now() { return now; }
+    }
+    return {
+        Date: VirtualDate,
+        setTimeout(fn, ms = 0, ...args) {
+            const timer = {fn, args, at: now + Math.max(0, Number(ms) || 0), order: order++, cleared: false};
+            timers.add(timer);
+            schedule();
+            return timer;  // clearTimeout du harnais le marque « cleared » : il n'est alors jamais déclenché
+        },
+        get now() { return now; }
+    };
+}
+
 function harness(pageOverrides = {}, chromeOverrides = {}) {
     let clicks = 0;
     let found = true;
@@ -184,7 +229,7 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
     const event = {addListener() {}};
     const messageEvent = {addListener(fn) { onMessage = fn; }};
     const chrome = {
-        runtime: {onStartup: event, onInstalled: event, onMessage: messageEvent},
+        runtime: {onStartup: event, onInstalled: event, onMessage: messageEvent, ...(chromeOverrides.runtime || {})},
         offscreen: {hasDocument: async () => true}, alarms: {create() {}, onAlarm: event},
         sidePanel: {
             setPanelBehavior: async (opts) => { sidePanelBehavior = opts; },
@@ -254,7 +299,9 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
             }
         }
     };
-    const MockWebSocket = class { constructor() { this.readyState = 3; } close() {} send() {} };
+    const MockWebSocket = chromeOverrides.WebSocket || class { constructor() { this.readyState = 3; } close() {} send() {} };
+    // virtualTime : horloge simulée (Date.now et minuteries du service worker), voir virtualClock.
+    const clock = chromeOverrides.virtualTime ? virtualClock() : null;
     // Minuteries d'inactivité du débogueur (30 s) capturées pour être déclenchées à la main.
     const fakeSetTimeout = (fn, ms, ...args) => {
         if (ms === 30000) {
@@ -262,13 +309,17 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
             idleTimers.push(timer);
             return timer;
         }
-        return setTimeout(fn, ms, ...args);
+        return clock ? clock.setTimeout(fn, ms, ...args) : setTimeout(fn, ms, ...args);
     };
     const fakeClearTimeout = (timer) => {
         if (timer && typeof timer === 'object' && 'cleared' in timer) timer.cleared = true;
         else clearTimeout(timer);
     };
-    const ctx = vm.createContext({chrome, console, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout, setInterval, clearInterval, WebSocket: MockWebSocket, URL, atob, TextDecoder, Uint8Array});
+    const ctx = vm.createContext({
+        chrome, console, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout, setInterval, clearInterval,
+        WebSocket: MockWebSocket, URL, atob, btoa, TextDecoder, TextEncoder, Uint8Array, crypto: globalThis.crypto,
+        ...(clock ? {Date: clock.Date} : {})
+    });
     // importScripts du service worker : fichiers de l'extension chargés dans le même contexte.
     ctx.importScripts = (...files) => {
         for (const file of files) vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension', file), 'utf8'), ctx);
@@ -276,11 +327,14 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/background.js'), 'utf8'), ctx);
     return {
         run: (action, params) => ctx.handleCommand({action, params}),
-        sendMessage: (msg) => new Promise((resolve) => {
+        // Expéditeur par défaut : une page de l'extension (panneau, offscreen) ; {tab} = script de contenu.
+        sendMessage: (msg, sender = {id: chrome.runtime.id}) => new Promise((resolve) => {
             if (!onMessage) return resolve(undefined);
-            const keepOpen = onMessage(msg, {}, resolve);
+            const keepOpen = onMessage(msg, sender, resolve);
             if (!keepOpen) resolve(undefined);
         }),
+        // Code exécuté dans le contexte du service worker (accès à ses variables de script).
+        evalInContext: (code) => vm.runInContext(code, ctx),
         getSidePanelBehavior: () => sidePanelBehavior,
         event: (tabId) => onEvent({tabId}, 'Page.fileChooserOpened', {backendNodeId: 9}),
         emit: (tabId, method, params = {}) => onEvent({tabId}, method, params),
@@ -946,7 +1000,7 @@ test('un clic qui ouvre une boîte de dialogue rend la main et la signale', asyn
 });
 
 test('Network.enable dès l\'attachement et compteur remis à zéro à la navigation', async () => {
-    const h = harness();
+    const h = harness({}, {virtualTime: true});
     await h.run('evaluate', {tabId: 1, code: '1'});
     const methods = h.calls.map(c => c.method);
     assert.ok(methods.indexOf('Network.enable') >= 0 && methods.indexOf('Network.enable') < methods.indexOf('Runtime.evaluate'));
@@ -1990,7 +2044,7 @@ test('wait_download : attend la fin du téléchargement venu de l\'onglet et ren
     const item = {id: 7, url: 'http://127.0.0.1:5/download/f.txt', referrer: 'http://127.0.0.1:5/full', filename: 'C:\\Users\\x\\Downloads\\f.txt', mime: 'text/plain', startTime: now, danger: 'safe', totalBytes: 12, bytesReceived: 12, fileSize: 12};
     const other = {...item, id: 8, url: 'https://autre.invalid/x.zip', referrer: 'https://autre.invalid/', filename: 'C:\\x.zip', state: 'complete'};
     const dl = downloadsMock([[other], [other, {...item, state: 'in_progress', bytesReceived: 3}], [other, {...item, state: 'complete'}]]);
-    const h = harness({}, {downloads: dl.api, tabs: {get: async (id) => ({id, url: 'http://127.0.0.1:5/full', windowId: 10})}});
+    const h = harness({}, {virtualTime: true, downloads: dl.api, tabs: {get: async (id) => ({id, url: 'http://127.0.0.1:5/full', windowId: 10})}});
     await h.run('click', {tabId: 1, selector: 'button'});
     const res = await h.run('wait_download', {tabId: 1, timeoutMs: 3000});
     assert.equal(res.data.path, item.filename);
@@ -2004,10 +2058,361 @@ test('wait_download : interruption, danger et délai rapportés clairement', asy
     const now = new Date().toISOString();
     const base = {id: 3, url: 'http://127.0.0.1:5/f.exe', referrer: 'http://127.0.0.1:5/', filename: 'C:\\f.exe', startTime: now, totalBytes: 10, bytesReceived: 0};
     const tabs = {get: async (id) => ({id, url: 'http://127.0.0.1:5/', windowId: 10})};
-    let h = harness({}, {tabs, downloads: downloadsMock([[{...base, state: 'interrupted', error: 'NETWORK_FAILED'}]]).api});
+    let h = harness({}, {tabs, virtualTime: true, downloads: downloadsMock([[{...base, state: 'interrupted', error: 'NETWORK_FAILED'}]]).api});
     assert.match((await h.run('wait_download', {tabId: 1, timeoutMs: 500})).error, /interrompu \(NETWORK_FAILED\)/);
-    h = harness({}, {tabs, downloads: downloadsMock([[{...base, state: 'in_progress', danger: 'dangerousFile'}]]).api});
+    h = harness({}, {tabs, virtualTime: true, downloads: downloadsMock([[{...base, state: 'in_progress', danger: 'dangerousFile'}]]).api});
     assert.match((await h.run('wait_download', {tabId: 1, timeoutMs: 300})).error, /dangerousFile.*jamais acceptée/);
-    h = harness({}, {tabs, downloads: downloadsMock([[]]).api});
+    h = harness({}, {tabs, virtualTime: true, downloads: downloadsMock([[]]).api});
     assert.match((await h.run('wait_download', {tabId: 1, timeoutMs: 300})).error, /Aucun téléchargement venant de http:\/\/127\.0\.0\.1:5/);
+});
+
+
+// -----------------------------------------------------------------------------
+// Pont local authentifié (bridge_link.js) : l'extension n'exécute rien d'un serveur qui ne prouve pas le jeton.
+// Serveur et hôte natif simulés avec node:crypto, même protocole que native-host/bridge_auth.py.
+// -----------------------------------------------------------------------------
+const nodeCrypto = require('node:crypto');
+const BRIDGE_PROTOCOL = 'nexusagy-bridge/1';
+const TEST_TOKEN = 'jeton-de-test-'.padEnd(64, 'x');
+const EXT_ID = 'ljgneacjmkmiopjfacahdpcigiofnngo';
+const hmacRaw = (key, ...parts) => nodeCrypto.createHmac('sha256', key).update([BRIDGE_PROTOCOL, ...parts].join('\n')).digest();
+const hmac64 = (key, ...parts) => hmacRaw(key, ...parts).toString('base64url');
+const testNonce = () => nodeCrypto.randomBytes(32).toString('base64url');
+
+function controlledSockets() {
+    const instances = [];
+    class ControlledWebSocket {
+        constructor(url) { this.url = url; this.readyState = 0; this.sent = []; this.closeCode = null; instances.push(this); }
+        send(data) { if (this.readyState !== 1) throw new Error('socket fermée'); this.sent.push(JSON.parse(data)); }
+        close(code) {
+            if (this.readyState === 3) return;
+            this.readyState = 3;
+            this.closeCode = code ?? 1000;
+            if (this.onclose) this.onclose({code: this.closeCode});
+        }
+        open() { this.readyState = 1; if (this.onopen) this.onopen(); }
+        deliver(message) { if (this.onmessage) this.onmessage({data: typeof message === 'string' ? message : JSON.stringify(message)}); }
+    }
+    return {ControlledWebSocket, instances};
+}
+
+// Hôte natif simulé : même règle que auth_host.py (preuve du serveur vérifiée avant toute preuve du client).
+function nativeHostMock(token = TEST_TOKEN) {
+    const calls = [];
+    return {
+        calls,
+        answer(msg) {
+            calls.push(msg);
+            const parts = [msg.client_nonce, msg.server_nonce, msg.role, msg.extension_id];
+            if (msg.server_proof !== hmac64(token, 'server', ...parts)) return {ok: false, error: 'le serveur ne prouve pas qu\'il connaît le jeton'};
+            return {ok: true, client_proof: hmac64(token, 'client', ...parts), session_key: hmacRaw(token, 'session', ...parts).toString('base64url')};
+        },
+        sendNativeMessage(name, msg, callback) { setImmediate(() => callback(this.answer(msg))); }
+    };
+}
+
+// Serveur du port 9224 simulé : poignée de main puis messages signés (s2c), lecture des réponses signées (c2s).
+function fakeServer(ws, {token = TEST_TOKEN} = {}) {
+    const state = {seq: 0, sessionKey: null};
+    return {
+        challenge(serverToken = token) {
+            const hello = ws.sent.find(m => m.type === 'auth_hello');
+            state.serverNonce = testNonce();
+            const parts = [hello.client_nonce, state.serverNonce, hello.role, hello.extension_id];
+            state.sessionKey = hmacRaw(token, 'session', ...parts);
+            state.expectedProof = hmac64(token, 'client', ...parts);
+            ws.deliver({type: 'auth_challenge', server_nonce: state.serverNonce, server_proof: hmac64(serverToken, 'server', ...parts)});
+        },
+        proof: () => ws.sent.find(m => m.type === 'auth_proof'),
+        expectedProof: () => state.expectedProof,
+        frame(payload, seq = ++state.seq) {
+            const body = JSON.stringify(payload);
+            return {seq, body, mac: hmac64(state.sessionKey, 's2c', String(seq), body)};
+        },
+        send(payload) { const frame = this.frame(payload); ws.deliver(frame); return frame; },
+        replies() {
+            return ws.sent.filter(m => 'seq' in m).map(m => {
+                assert.equal(m.mac, hmac64(state.sessionKey, 'c2s', String(m.seq), m.body), 'réponse mal signée');
+                return JSON.parse(m.body);
+            });
+        }
+    };
+}
+
+async function until(condition, what, ms = 3000) {
+    const end = Date.now() + ms;
+    while (!condition()) {
+        if (Date.now() > end) throw new Error(`attente dépassée : ${what}`);
+        await new Promise(r => setTimeout(r, 2));
+    }
+}
+
+const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r)); };
+
+function bridgeHarness({token} = {}) {
+    const sockets = controlledSockets();
+    const host = nativeHostMock(token);
+    const h = harness({}, {
+        WebSocket: sockets.ControlledWebSocket,
+        runtime: {id: EXT_ID, sendNativeMessage: (name, msg, cb) => host.sendNativeMessage(name, msg, cb), lastError: undefined}
+    });
+    h.evalInContext('connectBridgeWS()');
+    const ws = sockets.instances.at(-1);
+    ws.open();
+    const server = fakeServer(ws, {token});
+    const evaluations = () => h.calls.filter(c => c.method === 'Runtime.evaluate').length;
+    // Fin de test : liaison fermée, aucune minuterie de reconnexion ni de keepalive laissée derrière.
+    const stop = () => h.evalInContext('if (bridgeLink) bridgeLink.close(); clearTimeout(reconnectTimer); clearInterval(keepaliveInterval);');
+    return {h, ws, host, server, evaluations, stop};
+}
+
+async function authenticated(bridge) {
+    bridge.server.challenge();
+    await until(() => bridge.server.proof(), 'preuve du client');
+    bridge.server.send({type: 'auth_ok'});
+    await until(() => bridge.server.replies().some(r => r.event === 'bridge_connected'), 'liaison prête');
+}
+
+test('pont : un serveur qui envoie une commande sans poignée de main n\'obtient rien et la liaison est fermée', async () => {
+    const {h, ws, host, evaluations, stop} = bridgeHarness();
+    try {
+        const hello = ws.sent[0];
+        assert.equal(hello.type, 'auth_hello');
+        assert.equal(hello.role, 'service_worker');
+        assert.equal(hello.extension_id, EXT_ID);
+        assert.match(hello.client_nonce, /^[A-Za-z0-9_-]{43}$/);
+        ws.deliver({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1 + 1'}});
+        await until(() => ws.readyState === 3, 'fermeture');
+        await settle();
+        assert.equal(ws.closeCode, 1008);
+        assert.equal(evaluations(), 0);
+        assert.equal(host.calls.length, 0);
+        assert.deepEqual(ws.sent.map(m => m.type), ['auth_hello']);  // ni preuve, ni réponse
+        assert.equal((await h.sendMessage({target: 'background', getStatus: true})).connected, false);
+    } finally { stop(); }
+});
+
+test('pont : preuve du serveur fausse -> aucune preuve du client, aucune commande exécutée', async () => {
+    const {h, ws, host, server, evaluations, stop} = bridgeHarness();
+    try {
+        server.challenge('autre-jeton-'.padEnd(64, 'y'));
+        await until(() => ws.readyState === 3, 'fermeture');
+        assert.equal(host.calls.length, 1);
+        assert.equal(server.proof(), undefined);
+        // Liaison fermée : même un message signé avec la clé de session n'est plus lu.
+        ws.deliver(server.frame({type: 'auth_ok'}));
+        ws.deliver(server.frame({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1'}}));
+        await settle();
+        assert.equal(evaluations(), 0);
+        const status = await h.sendMessage({target: 'background', getStatus: true});
+        assert.equal(status.connected, false);
+        assert.match(status.authError, /ne prouve pas/);
+    } finally { stop(); }
+});
+
+const ATTACKS = ['before_auth_ok', 'unsigned', 'bad_mac', 'replay'];
+
+test('pont : commande signée avant auth_ok, non signée, mal signée ou rejouée -> jamais exécutée', async () => {
+    for (const attack of ATTACKS) {
+        const {ws, server, evaluations, stop} = bridgeHarness();
+        try {
+            server.challenge();
+            await until(() => server.proof(), 'preuve du client');
+            assert.equal(server.proof().client_proof, server.expectedProof());
+            const command = {requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1 + 1'}};
+            if (attack === 'before_auth_ok') {
+                ws.deliver(server.frame(command));
+            } else {
+                server.send({type: 'auth_ok'});
+                if (attack === 'unsigned') ws.deliver(command);
+                if (attack === 'bad_mac') ws.deliver({...server.frame(command), body: JSON.stringify({...command, params: {tabId: 1, code: '2'}})});
+                if (attack === 'replay') {
+                    const frame = server.send(command);
+                    await until(() => server.replies().some(r => r.requestId === 'r1'), 'première réponse');
+                    ws.deliver(frame);
+                }
+            }
+            await until(() => ws.readyState === 3, `fermeture (${attack})`);
+            await settle();
+            assert.equal(evaluations(), attack === 'replay' ? 1 : 0, attack);
+        } finally { stop(); }
+    }
+});
+
+test('pont : serveur authentifié -> commande exécutée et réponse signée, liaison prête', async () => {
+    const bridge = bridgeHarness();
+    const {h, ws, server, evaluations, stop} = bridge;
+    try {
+        await authenticated(bridge);
+        server.send({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1 + 1'}});
+        await until(() => server.replies().some(r => r.requestId === 'r1'), 'réponse');
+        const reply = server.replies().find(r => r.requestId === 'r1');
+        assert.deepEqual(plain(reply), {requestId: 'r1', success: true, data: 2});
+        assert.equal(evaluations(), 1);
+        const status = await h.sendMessage({target: 'background', getStatus: true});
+        assert.equal(status.connected, true);
+        assert.equal(status.links.service_worker.state, 'ready');
+        assert.equal(ws.readyState, 1);
+    } finally { stop(); }
+});
+
+test('panneau : demande transmise par la liaison authentifiée, réponse et lecture rattachées, jamais sans pont', async () => {
+    const bridge = bridgeHarness();
+    const {h, server, stop} = bridge;
+    const tab = {id: 1, title: 'Ex', url: 'https://example.invalid'};
+    try {
+        // Pont non authentifié : rien n'est transmis, et le panneau le dit.
+        const refused = await h.sendMessage({target: 'background', sidepanelSubmit: {text: 'Résume la page', tab}});
+        assert.equal(refused.data.status, 'not_sent');
+        assert.match(refused.error, /non authentifié/);
+        await authenticated(bridge);
+        const sent = await h.sendMessage({target: 'background', sidepanelSubmit: {text: 'Résume la page', tab}});
+        assert.equal(sent.data.status, 'sent');
+        await until(() => server.replies().some(r => r.event === 'sidepanel_request'), 'événement');
+        const event = server.replies().find(r => r.event === 'sidepanel_request');
+        assert.equal(event.request.id, sent.data.id);
+        assert.equal(event.request.text, 'Résume la page');
+        assert.deepEqual(plain(event.request.tab), tab);
+        // Le pont signale la lecture, puis l'agent répond.
+        server.send({requestId: 'm1', action: 'sidepanel_mark_read', params: {ids: [sent.data.id]}});
+        await until(() => server.replies().some(r => r.requestId === 'm1'), 'accusé de lecture');
+        let thread = h.sessionData.nexusagySidepanelThread;
+        assert.equal(thread.find(e => e.id === sent.data.id).status, 'read');
+        server.send({requestId: 'a1', action: 'sidepanel_reply', params: {request_id: sent.data.id, text: 'Voici le résumé.'}});
+        await until(() => server.replies().some(r => r.requestId === 'a1'), 'réponse affichée');
+        thread = h.sessionData.nexusagySidepanelThread;
+        assert.equal(thread.find(e => e.id === sent.data.id).status, 'answered');
+        assert.deepEqual(plain(thread.filter(e => e.kind === 'reply').map(e => [e.text, e.request_id])), [['Voici le résumé.', sent.data.id]]);
+        assert.equal(thread.find(e => e.id === refused.data.id).status, 'not_sent');
+    } finally { stop(); }
+});
+
+test('panneau : un script de contenu ne peut ni exécuter d\'action ni obtenir de preuve du pont', async () => {
+    const {h, host, evaluations, stop} = bridgeHarness();
+    try {
+        const fromPage = {id: EXT_ID, tab: {id: 1}};
+        assert.equal(await h.sendMessage({target: 'background', executeAction: true, action: 'evaluate', params: {tabId: 1, code: '1'}}, fromPage), undefined);
+        assert.equal(await h.sendMessage({target: 'background', bridgeProve: {op: 'handshake'}}, fromPage), undefined);
+        assert.equal(await h.sendMessage({target: 'background', sidepanelSubmit: {text: 'x'}}, fromPage), undefined);
+        assert.equal(evaluations(), 0);
+        assert.equal(host.calls.length, 0);
+        assert.equal((await h.sendMessage({target: 'background', ping: true}, fromPage)).pong, true);  // seul permis
+    } finally { stop(); }
+});
+
+test('document offscreen : serveur sans preuve -> rien relayé au service worker', async () => {
+    const sockets = controlledSockets();
+    const toBackground = [];
+    let listener = null;
+    const host = nativeHostMock();
+    const chromeMock = {
+        runtime: {
+            id: EXT_ID,
+            lastError: undefined,
+            onMessage: {addListener(fn) { listener = fn; }},
+            sendMessage(message, callback) {
+                toBackground.push(message);
+                if (message.bridgeProve) setImmediate(() => callback(host.answer(message.bridgeProve)));
+                else setImmediate(() => callback({data: 'exécuté'}));
+            }
+        }
+    };
+    const ctx = vm.createContext({
+        chrome: chromeMock, console, WebSocket: sockets.ControlledWebSocket, atob, btoa, TextEncoder, crypto: globalThis.crypto,
+        // Minuteries jamais déclenchées : reconnexion et garde de 10 s n'ont pas à tourner dans ce test.
+        setTimeout: () => ({}), clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {}
+    });
+    for (const file of ['bridge_link.js', 'offscreen.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension', file), 'utf8'), ctx);
+    const ws = sockets.instances.at(-1);
+    ws.open();
+    assert.equal(ws.sent[0].role, 'offscreen');
+    ws.deliver({requestId: 'r1', action: 'evaluate', params: {code: '1'}});
+    await until(() => ws.readyState === 3, 'fermeture');
+    await settle();
+    assert.equal(toBackground.filter(m => m.request).length, 0);
+    // Serveur authentique : la commande signée est relayée au service worker et la réponse revient signée.
+    vm.runInContext('connectWS()', ctx);
+    const ws2 = sockets.instances.at(-1);
+    ws2.open();
+    const server = fakeServer(ws2);
+    server.challenge();
+    await until(() => server.proof(), 'preuve de l\'offscreen');
+    assert.equal(toBackground.filter(m => m.bridgeProve).length, 1);
+    server.send({type: 'auth_ok'});
+    server.send({requestId: 'r2', action: 'ping', params: {}});
+    await until(() => server.replies().some(r => r.requestId === 'r2'), 'réponse relayée');
+    assert.deepEqual(plain(toBackground.filter(m => m.request).map(m => m.request.requestId)), ['r2']);
+    assert.equal(server.replies().find(r => r.requestId === 'r2').data, 'exécuté');
+    // Événement à signer pour le service worker (demande du panneau) : seulement depuis une page de l'extension.
+    let reply = null;
+    listener({target: 'offscreen', bridgeEvent: {event: 'sidepanel_request', request: {id: 'x', text: 't'}}}, {id: EXT_ID}, (r) => { reply = r; });
+    assert.deepEqual(plain(reply), {sent: true});
+    reply = null;
+    listener({target: 'offscreen', bridgeEvent: {event: 'sidepanel_request'}}, {id: EXT_ID, tab: {id: 3}}, (r) => { reply = r; });
+    assert.equal(reply, null);
+    vm.runInContext('if (link) link.close();', ctx);
+});
+
+// -----------------------------------------------------------------------------
+// Panneau latéral : cookies sans valeur, champs sans valeur, éléments cliquables seulement
+// -----------------------------------------------------------------------------
+function sidepanelView() {
+    const ctx = vm.createContext({});
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/sidepanel_view.js'), 'utf8'), ctx);
+    return ctx.AgySidepanelView;
+}
+
+test('cookies du panneau : jamais de valeur (service worker includeValues false, résumé noms et domaines)', async () => {
+    const jar = [{name: 'SID', value: 'secret-session-123', domain: '.example.invalid'}, {name: 'pref', value: 'v2', domain: 'example.invalid'}];
+    const h = harness({}, {debuggerSendCommand: async (target, method) => method === 'Network.getCookies' ? {cookies: jar} : undefined});
+    const res = await h.run('get_cookies', {tabId: 1, includeValues: false});
+    assert.equal(res.data.cookieCount, 2);
+    assert.equal(res.data.valuesIncluded, false);
+    assert.ok(!JSON.stringify(res).includes('secret-session-123'));
+    assert.ok(res.data.cookies.every(c => !('value' in c)));
+    // Le chemin de l'agent (outil MCP browser_get_cookies) garde les valeurs.
+    assert.equal((await h.run('get_cookies', {tabId: 1})).data.cookies[0].value, 'secret-session-123');
+    const summary = plain(sidepanelView().summarizeCookies(jar));
+    assert.deepEqual(summary, {count: 2, domains: [{domain: '.example.invalid', count: 1, names: ['SID']}, {domain: 'example.invalid', count: 1, names: ['pref']}]});
+    assert.ok(!JSON.stringify(summary).includes('secret'));
+});
+
+test('champs du formulaire : libellé, type, requis et rempli, jamais la valeur saisie', async () => {
+    const field = (props) => ({
+        getBoundingClientRect: () => ({width: 100, height: 20}),
+        getAttribute: (name) => (props.attrs || {})[name] ?? null,
+        labels: props.label ? [{textContent: props.label}] : [],
+        ...props
+    });
+    const fields = [
+        field({tagName: 'INPUT', type: 'email', id: 'mail', value: 'julien@example.invalid', label: 'Adresse  e-mail', required: true, attrs: {name: 'email'}}),
+        field({tagName: 'INPUT', type: 'password', value: 'MotDePasse!', attrs: {'aria-label': 'Mot de passe'}}),
+        field({tagName: 'INPUT', type: 'hidden', value: 'csrf'}),
+        field({tagName: 'TEXTAREA', type: 'textarea', value: '', attrs: {placeholder: 'Message'}})
+    ];
+    const h = harness({document: {querySelectorAll: (sel) => sel.startsWith('input') ? fields : [], getElementById: () => null}});
+    const res = await h.run('form_fields', {tabId: 1});
+    assert.equal(res.data.count, 3);
+    assert.deepEqual(plain(res.data.fields.map(f => [f.label, f.type, f.filled, f.required])), [
+        ['Adresse e-mail', 'email', true, true], ['Mot de passe', 'password', true, false], ['Message', 'textarea', false, false]
+    ]);
+    assert.ok(!JSON.stringify(res).includes('MotDePasse!') && !JSON.stringify(res).includes('julien@example.invalid'));
+    assert.match(sidepanelView().describeField(res.data.fields[1]), /Mot de passe — <input password> \(rempli\)/);
+});
+
+test('carte du panneau : boutons et liens seulement ; jamais la valeur d\'un champ comme libellé', async () => {
+    const view = sidepanelView();
+    const elements = [{mark: 1, tag: 'button'}, {mark: 2, tag: 'input', type: 'text'}, {mark: 3, tag: 'a'}, {mark: 4, tag: 'input', type: 'submit'}, {mark: 5, tag: 'div', role: 'tab'}, {mark: 6, tag: 'select'}];
+    assert.deepEqual(plain(view.clickableElements(elements).map(e => e.mark)), [1, 3, 4, 5]);
+    const style = () => ({display: 'block', visibility: 'visible', opacity: '1'});
+    const password = {tagName: 'INPUT', type: 'password', value: 'MotDePasse!', innerText: '', placeholder: '', getAttribute: () => null,
+        getBoundingClientRect: () => ({x: 1, y: 1, width: 50, height: 20, top: 1, bottom: 21, left: 1, right: 51})};
+    const h = harness({
+        document: {querySelectorAll: (sel) => (sel === '*' || sel === 'iframe') ? [] : [password], title: 'T'},
+        window: {innerWidth: 800, innerHeight: 600, getComputedStyle: style, location: {href: 'https://example.invalid'}},
+        getComputedStyle: style
+    });
+    const res = await h.run('interactive_map', {tabId: 1});
+    assert.equal(res.data.elements.length, 1);
+    assert.ok(!JSON.stringify(res).includes('MotDePasse!'));
 });

@@ -2,16 +2,21 @@
 Antigravity Chrome Bridge - Local Server & Native Gateway
 Provides WebSocket (ws://127.0.0.1:9224) and HTTP REST (http://127.0.0.1:9225/api/command)
 to bridge Antigravity AI agent with the Chrome extension.
+
+WebSocket : authentification mutuelle nexusagy-bridge/1 (bridge_auth.py) ; seule une connexion qui a prouvé le jeton
+devient un client actif, et chaque message est signé. HTTP : en-tête X-NexusAGY-Token, aucune origine de navigateur.
 """
 
 import argparse
 import asyncio
+import collections
 import hashlib
 import hmac
 import json
 import logging
 import math
 import os
+import socket
 import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -21,14 +26,34 @@ try:
 except ImportError:
     from websockets.server import serve
 
+from bridge_auth import (
+    PROTOCOL,
+    AuthError,
+    Channel,
+    check_extension_id,
+    check_nonce,
+    check_role,
+    client_proof,
+    new_nonce,
+    same,
+    server_proof,
+    session_key,
+)
 from bridge_security import TOKEN_HEADER, VERSION, load_or_create_token, token_path
 
 PORT = 9224
 HTTP_READ_TIMEOUT = 10.0
 MAX_HEADER_BYTES = 64 * 1024
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
-active_connections = []
-pending_requests = {}
+HANDSHAKE_TIMEOUT = 10.0
+MAX_HANDSHAKE_BYTES = 2048
+MAX_SIDEPANEL_TEXT = 4000
+ROLE_PRIORITY = {"service_worker": 0, "offscreen": 1}
+active_connections: list = []  # BridgeClient authentifiés seulement
+pending_requests: dict = {}  # requestId -> (BridgeClient, Future) : seule la connexion visée peut répondre
+sidepanel_requests: collections.deque = collections.deque(maxlen=50)
+_background_tasks: set = set()
+_auth_order = 0
 BRIDGE_TOKEN_PATH: Path | None = None
 LOGGER = logging.getLogger("nexusagy.bridge")
 
@@ -68,6 +93,78 @@ def load_allowed_extension_origins() -> list[str]:
 ALLOWED_EXTENSION_ORIGINS = load_allowed_extension_origins()
 
 
+class BridgeClient:
+    """Connexion authentifiée de l'extension (rôle, ordre d'authentification, canal signé)."""
+
+    def __init__(self, websocket, role: str, extension_id: str, key: bytes, order: int) -> None:
+        self.websocket, self.role, self.extension_id, self.order = websocket, role, extension_id, order
+        self.channel = Channel(key, "s2c", "c2s")
+        self.lock = asyncio.Lock()
+
+    async def send(self, payload: dict) -> None:
+        # Numéro d'ordre attribué et message envoyé sous le même verrou : l'ordre reçu est l'ordre signé.
+        async with self.lock:
+            await self.websocket.send(json.dumps(self.channel.seal(json.dumps(payload, ensure_ascii=False))))
+
+    def describe(self) -> dict:
+        return {"role": self.role, "extension_id": self.extension_id, "order": self.order}
+
+
+def select_target() -> BridgeClient | None:
+    """Cible déterministe parmi les connexions authentifiées : le service worker (il exécute lui-même les commandes)
+    avant le document offscreen (relais vers le service worker), puis la plus récemment authentifiée du même rôle
+    (après une reconnexion, l'ancienne socket peut n'être pas encore fermée)."""
+    if not active_connections:
+        return None
+    return min(active_connections, key=lambda client: (ROLE_PRIORITY.get(client.role, 99), -client.order))
+
+
+async def authenticate(websocket) -> BridgeClient:
+    """Poignée de main nexusagy-bridge/1 (bridge_auth) ; AuthError si l'extension ne prouve pas le jeton."""
+    global _auth_order
+
+    async def receive() -> dict:
+        raw = await asyncio.wait_for(websocket.recv(), HANDSHAKE_TIMEOUT)
+        if not isinstance(raw, str) or len(raw) > MAX_HANDSHAKE_BYTES:
+            raise AuthError("message de poignée de main invalide")
+        try:
+            message = json.loads(raw)
+        except json.JSONDecodeError:
+            raise AuthError("message de poignée de main illisible") from None
+        if not isinstance(message, dict):
+            raise AuthError("message de poignée de main invalide")
+        return message
+
+    hello = await receive()
+    if hello.get("type") != "auth_hello" or hello.get("protocol") != PROTOCOL:
+        raise AuthError("poignée de main attendue")
+    client_nonce = check_nonce(hello.get("client_nonce"), "client_nonce")
+    role = check_role(hello.get("role"))
+    extension_id = check_extension_id(hello.get("extension_id"))
+    token = read_bridge_token(BRIDGE_TOKEN_PATH)
+    server_nonce = new_nonce()
+    await websocket.send(
+        json.dumps(
+            {
+                "type": "auth_challenge",
+                "server_nonce": server_nonce,
+                "server_proof": server_proof(token, client_nonce, server_nonce, role, extension_id),
+            }
+        )
+    )
+    reply = await receive()
+    if reply.get("type") != "auth_proof" or not same(
+        reply.get("client_proof"), client_proof(token, client_nonce, server_nonce, role, extension_id)
+    ):
+        raise AuthError("preuve du client fausse")
+    _auth_order += 1
+    client = BridgeClient(
+        websocket, role, extension_id, session_key(token, client_nonce, server_nonce, role, extension_id), _auth_order
+    )
+    await client.send({"type": "auth_ok"})
+    return client
+
+
 async def ws_handler(websocket):
     request = getattr(websocket, "request", None)
     request_headers = request.headers if request else getattr(websocket, "request_headers", {})
@@ -76,34 +173,99 @@ async def ws_handler(websocket):
         LOGGER.warning("WebSocket connection rejected: origin '%s' not allowed", origin)
         await websocket.close(code=1008, reason="Extension origin not allowed")
         return
+    # L'en-tête Origin se falsifie : seule la preuve du jeton fait d'une connexion un client actif.
+    try:
+        client = await authenticate(websocket)
+    except (AuthError, asyncio.TimeoutError) as error:
+        reason = str(error) if isinstance(error, AuthError) else "poignée de main trop lente"
+        LOGGER.warning("WebSocket authentication rejected: %s", reason)
+        await websocket.close(code=1008, reason="Authentication failed")
+        return
+    except Exception as exc:
+        LOGGER.info("WebSocket connection ended during authentication: %s", exc)
+        return
 
-    if websocket not in active_connections:
-        active_connections.append(websocket)
-    LOGGER.info("Chrome Extension connected: origin=%s. Active clients: %d", origin, len(active_connections))
+    active_connections.append(client)
+    LOGGER.info(
+        "Chrome Extension authenticated: role=%s extension=%s. Active clients: %d",
+        client.role,
+        client.extension_id,
+        len(active_connections),
+    )
     try:
         async for message in websocket:
             try:
-                data = json.loads(message)
-                req_id = data.get("requestId")
-                if req_id and req_id in pending_requests:
-                    future = pending_requests.pop(req_id)
-                    if not future.done():
-                        future.set_result(data)
-                elif "event" in data:
-                    LOGGER.info("Event received: %s", data.get("event"))
-            except Exception as e:
-                LOGGER.error("Error decoding message: %s", e)
+                data = json.loads(client.channel.open(json.loads(message)))
+            except (AuthError, json.JSONDecodeError, TypeError) as error:
+                LOGGER.warning("Unauthenticated WebSocket message, connection closed: %s", error)
+                await websocket.close(code=1008, reason="Invalid signed message")
+                break
+            if not isinstance(data, dict):
+                continue
+            req_id = data.get("requestId")
+            pending = pending_requests.get(req_id) if isinstance(req_id, str) else None
+            if pending and pending[0] is client:
+                pending_requests.pop(req_id)
+                if not pending[1].done():
+                    pending[1].set_result(data)
+            elif data.get("event") == "sidepanel_request":
+                queue_sidepanel_request(data.get("request"), client)
+            elif "event" in data:
+                LOGGER.info("Event received: %s", data.get("event"))
     except Exception as exc:
         LOGGER.info("WebSocket connection ended: %s", exc)
     finally:
-        if websocket in active_connections:
-            active_connections.remove(websocket)
+        if client in active_connections:
+            active_connections.remove(client)
         LOGGER.info("Chrome Extension disconnected. Active clients: %d", len(active_connections))
-        if not active_connections and pending_requests:
-            for req_id, future in list(pending_requests.items()):
+        # Les commandes envoyées à CETTE connexion n'auront jamais de réponse.
+        for req_id, (owner, future) in list(pending_requests.items()):
+            if owner is client:
+                pending_requests.pop(req_id, None)
                 if not future.done():
                     future.set_exception(ConnectionResetError("Chrome Extension disconnected while processing request"))
-            pending_requests.clear()
+
+
+def queue_sidepanel_request(request: object, client: BridgeClient) -> None:
+    """Demande saisie dans le panneau latéral : gardée pour Antigravity (browser_sidepanel_requests)."""
+    if not isinstance(request, dict):
+        return
+    request_id, text = request.get("id"), request.get("text")
+    if not isinstance(request_id, str) or not 0 < len(request_id) <= 64:
+        return
+    if not isinstance(text, str) or not text.strip() or len(text) > MAX_SIDEPANEL_TEXT:
+        return
+    if any(item["id"] == request_id for item in sidepanel_requests):
+        return
+    tab = request.get("tab") if isinstance(request.get("tab"), dict) else None
+    sidepanel_requests.append(
+        {
+            "id": request_id,
+            "text": text.strip(),
+            "tab": {key: tab.get(key) for key in ("id", "title", "url")} if tab else None,
+            "created_at": request.get("created_at") if isinstance(request.get("created_at"), (int, float)) else None,
+            "extension_id": client.extension_id,
+        }
+    )
+    LOGGER.info("Side panel request queued: %s", request_id)
+
+
+async def take_sidepanel_requests(consume: bool) -> dict:
+    """File des demandes du panneau ; consume les retire et prévient le panneau qu'elles ont été lues."""
+    items = list(sidepanel_requests)
+    if consume and items:
+        sidepanel_requests.clear()
+
+        async def mark_read() -> None:
+            try:
+                await send_command_to_chrome("sidepanel_mark_read", {"ids": [item["id"] for item in items]}, 5.0)
+            except Exception as error:  # le panneau garde seulement l'état « transmise »
+                LOGGER.info("Side panel read receipt not delivered: %s", error)
+
+        task = asyncio.create_task(mark_read())
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+    return {"requests": items, "consumed": consume, "remaining": len(sidepanel_requests)}
 
 
 ACTION_ALIASES = {
@@ -142,29 +304,23 @@ ACTION_ALIASES = {
 
 
 async def send_command_to_chrome(action, params=None, timeout=15.0):
-    future = None
-    req_id = None
     normalized_action = ACTION_ALIASES.get(action, (action or "").lower().replace("-", "_"))
-    while active_connections:
-        target_ws = active_connections[-1]
+    while True:
+        target = select_target()
+        if target is None:
+            raise RuntimeError(
+                "No Chrome browser extension connected to Antigravity Bridge. Make sure the extension is active in Chrome."
+            )
         req_id = str(uuid.uuid4())
-        payload = {"requestId": req_id, "action": normalized_action, "params": params or {}}
-
-        loop = asyncio.get_running_loop()
-        future = loop.create_future()
-        pending_requests[req_id] = future
-
+        future = asyncio.get_running_loop().create_future()
+        pending_requests[req_id] = (target, future)
         try:
-            await target_ws.send(json.dumps(payload))
+            await target.send({"requestId": req_id, "action": normalized_action, "params": params or {}})
             break
         except Exception:
             pending_requests.pop(req_id, None)
-            if target_ws in active_connections:
-                active_connections.remove(target_ws)
-    else:
-        raise RuntimeError(
-            "No Chrome browser extension connected to Antigravity Bridge. Make sure the extension is active in Chrome."
-        )
+            if target in active_connections:
+                active_connections.remove(target)
 
     try:
         response = await asyncio.wait_for(future, timeout=timeout)
@@ -172,10 +328,9 @@ async def send_command_to_chrome(action, params=None, timeout=15.0):
             raise RuntimeError(response.get("error", "Unknown error from Chrome extension"))
         return response.get("data")
     except asyncio.TimeoutError:
-        raise TimeoutError(f"Command '{action}' timed out after {timeout}s.")
+        raise TimeoutError(f"Command '{action}' timed out after {timeout}s.") from None
     finally:
-        if req_id:
-            pending_requests.pop(req_id, None)
+        pending_requests.pop(req_id, None)
 
 
 async def handle_http(reader, writer):
@@ -245,6 +400,9 @@ async def handle_http(reader, writer):
                     "status": "online",
                     "version": VERSION,
                     "connected_clients": len(active_connections),
+                    "clients": [client.describe() for client in active_connections],
+                    "target": target.describe() if (target := select_target()) else None,
+                    "sidepanel_requests": len(sidepanel_requests),
                     "port": PORT,
                 },
             )
@@ -284,7 +442,11 @@ async def handle_http(reader, writer):
                 return
 
             try:
-                result = await send_command_to_chrome(action, params, timeout=timeout)
+                if action.strip().lower().replace("_", "-") == "sidepanel-requests":
+                    # Servie par le pont lui-même : la file des demandes du panneau latéral.
+                    result = await take_sidepanel_requests(params.get("consume", True) is not False)
+                else:
+                    result = await send_command_to_chrome(action, params, timeout=timeout)
                 await send_json_response(writer, 200, {"success": True, "data": result})
             except Exception as exc:
                 await send_json_response(writer, 400, {"success": False, "error": str(exc)})
@@ -341,6 +503,20 @@ async def send_json_response(writer, status: int, payload: dict, extra_headers: 
             pass
 
 
+def exclusive_listener(port: int) -> socket.socket:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        listener.bind(("127.0.0.1", port))
+        listener.listen(128)
+        listener.setblocking(False)
+    except OSError:
+        listener.close()
+        raise
+    return listener
+
+
 async def main(token_file: Path | None = None, log_file: Path | None = None):
     global BRIDGE_TOKEN_PATH
     configure_logging(log_file)
@@ -359,18 +535,16 @@ async def main(token_file: Path | None = None, log_file: Path | None = None):
     print(f"  HTTP REST: http://127.0.0.1:{PORT + 1}/api/command")
     print("==================================================")
 
-    # Start WebSocket server
+    # Ports pris en exclusivité : sous Windows, sans SO_EXCLUSIVEADDRUSE, un autre programme peut lier le même port
+    # avec SO_REUSEADDR et capter les connexions (la signature des messages l'empêcherait d'agir, pas d'écouter).
     ws_server = await serve(
         ws_handler,
-        "127.0.0.1",
-        PORT,
+        sock=exclusive_listener(PORT),
         max_size=MAX_REQUEST_BYTES,
         ping_interval=20,
         ping_timeout=20,
     )
-
-    # Start HTTP REST server
-    http_server = await asyncio.start_server(handle_http, "127.0.0.1", PORT + 1, limit=MAX_HEADER_BYTES + 4)
+    http_server = await asyncio.start_server(handle_http, sock=exclusive_listener(PORT + 1), limit=MAX_HEADER_BYTES + 4)
     print(f"  HTTP API available at http://127.0.0.1:{PORT + 1}/api/command")
 
     await asyncio.gather(ws_server.wait_closed(), http_server.serve_forever())

@@ -11,7 +11,7 @@ if (typeof importScripts === "function") importScripts("locator_kit.js");
 // numéro de version). Ajouter ici chaque nouvelle capacité visible.
 const AGY_FEATURES = [
     "cdp-mouse", "focus-emulation", "focus-emulation-child-settle", "locator", "trusted-typing", "oopif",
-    "network-log", "wait-download", "dialogs"
+    "network-log", "wait-download", "dialogs", "bridge-auth", "sidepanel-requests"
 ];
 
 let attachedDebuggers = new Set();
@@ -32,75 +32,94 @@ let commandsInFlight = 0;
 console.log("[NexusAGY] Background Service Worker (v2.0.0) active.");
 
 // -----------------------------------------------------------------------------
-// Direct WebSocket Bridge & Chrome 116+ Keepalive
+// Pont local authentifié (bridge_link.js) & keepalive Chrome 116+
+// Deux liaisons : celle du service worker (ici, elle exécute les commandes elle-même) et celle du document
+// offscreen (relais, garde une connexion quand le service worker est suspendu). Les deux prouvent le jeton par
+// l'hôte natif com.nexusagy.bridge_auth ; le pont choisit le service worker en priorité.
 // -----------------------------------------------------------------------------
+if (typeof importScripts === "function") importScripts("bridge_link.js");
+
 const BRIDGE_WS_URL = "ws://127.0.0.1:9224";
-let bridgeWs = null;
+const NATIVE_AUTH_HOST = "com.nexusagy.bridge_auth";
+let bridgeLink = null;
+let offscreenLinkState = null;
+let lastBridgeAuthError = null;
 let reconnectTimer = null;
 let keepaliveInterval = null;
 let reconnectAttempts = 0;
 
-function connectBridgeWS() {
-    if (typeof WebSocket === "undefined") return;
-    if (bridgeWs) {
-        if (bridgeWs.readyState === WebSocket.OPEN || bridgeWs.readyState === WebSocket.CONNECTING) {
+/** Preuves de la poignée de main calculées par l'hôte natif (il lit le jeton ; l'extension ne le voit jamais). */
+function proveWithNativeHost(args) {
+    return new Promise((resolve) => {
+        if (!chrome.runtime?.sendNativeMessage) {
+            resolve({ ok: false, error: "messagerie native indisponible (permission nativeMessaging)" });
             return;
         }
-        try { bridgeWs.close(); } catch (_) {}
-        bridgeWs = null;
+        try {
+            chrome.runtime.sendNativeMessage(NATIVE_AUTH_HOST, args, (reply) => {
+                const error = chrome.runtime.lastError;
+                if (error || !reply) {
+                    resolve({ ok: false, error: `hôte natif ${NATIVE_AUTH_HOST} injoignable (${error?.message || "aucune réponse"}) : lancer install.ps1 de NexusAGY` });
+                } else {
+                    resolve(reply);
+                }
+            });
+        } catch (error) {
+            resolve({ ok: false, error: `hôte natif ${NATIVE_AUTH_HOST} injoignable (${error.message || error})` });
+        }
+    });
+}
+
+// État de la liaison offscreen, rapporté par elle à chaque changement et toutes les 10 s : au-delà, inconnu.
+const OFFSCREEN_STATE_TTL_MS = 25000;
+
+function offscreenReady() {
+    return !!(offscreenLinkState && offscreenLinkState.ready && Date.now() - offscreenLinkState.at < OFFSCREEN_STATE_TTL_MS);
+}
+
+function bridgeReady() {
+    return !!(bridgeLink && bridgeLink.ready) || offscreenReady();
+}
+
+function connectBridgeWS() {
+    if (typeof WebSocket === "undefined" || typeof globalThis.AgyBridgeLink !== "function") return;
+    if (bridgeLink && bridgeLink.alive) return;
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
     }
-
     try {
-        bridgeWs = new WebSocket(BRIDGE_WS_URL);
-
-        bridgeWs.onopen = () => {
-            console.log("[NexusAGY] Service Worker connected directly to " + BRIDGE_WS_URL);
-            reconnectAttempts = 0;
-            if (reconnectTimer) {
-                clearTimeout(reconnectTimer);
-                reconnectTimer = null;
-            }
-            try { bridgeWs.send(JSON.stringify({ event: "bridge_connected", timestamp: Date.now() })); } catch(_) {}
-
-            if (keepaliveInterval) clearInterval(keepaliveInterval);
-            keepaliveInterval = setInterval(() => {
-                if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
-                    try { bridgeWs.send(JSON.stringify({ event: "keepalive", timestamp: Date.now() })); } catch(_) {}
+        bridgeLink = new globalThis.AgyBridgeLink({
+            url: BRIDGE_WS_URL,
+            role: "service_worker",
+            extensionId: chrome.runtime?.id,
+            prove: proveWithNativeHost,
+            onRequest: (request) => handleCommand(request),
+            onStateChange: (link) => {
+                if (link.error) lastBridgeAuthError = link.error;
+                if (link.state !== "ready") return;
+                lastBridgeAuthError = null;
+                reconnectAttempts = 0;
+                console.log("[NexusAGY] Service worker authentifié auprès du pont " + BRIDGE_WS_URL);
+                link.send({ event: "bridge_connected", timestamp: Date.now() });
+                if (keepaliveInterval) clearInterval(keepaliveInterval);
+                keepaliveInterval = setInterval(() => {
+                    if (bridgeLink && bridgeLink.ready) bridgeLink.send({ event: "keepalive", timestamp: Date.now() });
+                }, 20000);
+            },
+            onClose: (link) => {
+                if (link !== bridgeLink) return;
+                if (link.error) lastBridgeAuthError = link.error;
+                bridgeLink = null;
+                if (keepaliveInterval) {
+                    clearInterval(keepaliveInterval);
+                    keepaliveInterval = null;
                 }
-            }, 20000);
-        };
-
-        bridgeWs.onmessage = async (event) => {
-            try {
-                const request = JSON.parse(event.data);
-                const response = await handleCommand(request);
-                if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
-                    bridgeWs.send(JSON.stringify({
-                        requestId: request.requestId || request.id,
-                        success: response ? !response.error : false,
-                        data: response ? response.data : null,
-                        error: response ? response.error : "Unknown error in background handler"
-                    }));
-                }
-            } catch (err) {
-                console.error("[NexusAGY] Error processing command:", err);
+                scheduleBridgeReconnect();
             }
-        };
-
-        bridgeWs.onclose = () => {
-            bridgeWs = null;
-            if (keepaliveInterval) {
-                clearInterval(keepaliveInterval);
-                keepaliveInterval = null;
-            }
-            scheduleBridgeReconnect();
-        };
-
-        bridgeWs.onerror = () => {
-            // onclose will follow
-        };
+        });
     } catch (e) {
-        bridgeWs = null;
+        bridgeLink = null;
         scheduleBridgeReconnect();
     }
 }
@@ -112,6 +131,33 @@ function scheduleBridgeReconnect(overrideDelayMs = null) {
         : Math.min(30000, Math.round(1500 * Math.pow(1.618, Math.min(reconnectAttempts, 6))));
     reconnectAttempts++;
     reconnectTimer = setTimeout(connectBridgeWS, delayMs);
+}
+
+/** Événement signé vers le pont par la liaison authentifiée disponible (service worker, sinon offscreen). */
+async function sendBridgeEvent(payload) {
+    if (bridgeLink && bridgeLink.ready && bridgeLink.send(payload)) return true;
+    if (!offscreenReady() || !chrome.runtime?.sendMessage) return false;
+    try {
+        const reply = await chrome.runtime.sendMessage({ target: "offscreen", bridgeEvent: payload });
+        return !!(reply && reply.sent);
+    } catch (_) {
+        return false;
+    }
+}
+
+function bridgeStatus() {
+    return {
+        connected: bridgeReady(),
+        wsUrl: BRIDGE_WS_URL,
+        links: {
+            service_worker: bridgeLink ? bridgeLink.describe() : { role: "service_worker", state: "closed", ready: false, error: lastBridgeAuthError },
+            offscreen: offscreenLinkState
+                ? { ...offscreenLinkState, ready: offscreenReady() }
+                : { role: "offscreen", state: "unknown", ready: false, error: null }
+        },
+        authError: (bridgeReady() ? null : (lastBridgeAuthError || offscreenLinkState?.error || null)),
+        activeDebuggers: attachedDebuggers.size
+    };
 }
 
 async function ensureOffscreenDocument() {
@@ -130,6 +176,12 @@ async function ensureOffscreenDocument() {
         });
         console.log("[NexusAGY] Offscreen keepalive document created.");
     } catch (_) {}
+}
+
+/** Message venu d'une page de l'extension (panneau, offscreen), jamais d'un script de contenu ni d'une page web. */
+function fromExtensionPage(sender) {
+    if (!sender || sender.id !== chrome.runtime?.id || sender.tab) return false;
+    return !sender.url || String(sender.url).startsWith(`chrome-extension://${chrome.runtime.id}/`);
 }
 
 if (typeof chrome !== "undefined") {
@@ -170,37 +222,51 @@ if (typeof chrome !== "undefined") {
         chrome.alarms.create("bridge_keepalive_alarm", { periodInMinutes: 1 });
         chrome.alarms.onAlarm.addListener(() => {
             ensureOffscreenDocument();
-            if (!bridgeWs || bridgeWs.readyState !== WebSocket.OPEN) {
+            if (!bridgeLink || !bridgeLink.alive) {
                 connectBridgeWS();
             }
         });
     }
     if (chrome.runtime?.onMessage) {
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-            if (message.target === "background" && message.getStatus) {
-                const isConnected = !!(bridgeWs && bridgeWs.readyState === WebSocket.OPEN);
-                sendResponse({
-                    connected: isConnected,
-                    wsUrl: BRIDGE_WS_URL,
-                    activeDebuggers: attachedDebuggers.size
-                });
+            if (!message || message.target !== "background") return;
+            if (message.ping) {
+                // Seul message permis aux scripts de contenu : réveille le service worker et sa liaison.
+                connectBridgeWS();
+                sendResponse({ pong: true, connected: bridgeReady() });
                 return true;
             }
-            if (message.target === "background" && message.getActiveTab) {
+            if (!fromExtensionPage(sender)) return;
+            if (message.getStatus) {
+                sendResponse(bridgeStatus());
+                return true;
+            }
+            if (message.getActiveTab) {
                 getActiveTab().then(sendResponse);
                 return true;
             }
-            if (message.target === "background" && message.executeAction) {
+            if (message.executeAction) {
                 handleCommand({ action: message.action, params: message.params || {} }).then(sendResponse);
                 return true;
             }
-            if (message.target === "background" && message.request) {
-                handleCommand(message.request).then(sendResponse);
+            if (message.bridgeProve) {
+                // Poignée de main de la liaison offscreen (qui n'a pas accès à la messagerie native).
+                proveWithNativeHost(message.bridgeProve).then(sendResponse);
                 return true;
             }
-            if (message.target === "background" && message.ping) {
-                connectBridgeWS();
-                sendResponse({ pong: true, connected: !!(bridgeWs && bridgeWs.readyState === WebSocket.OPEN) });
+            if (message.bridgeState) {
+                offscreenLinkState = { ...message.bridgeState, at: Date.now() };
+                if (offscreenLinkState.error) lastBridgeAuthError = offscreenLinkState.error;
+                sendResponse({ ok: true });
+                return true;
+            }
+            if (message.sidepanelSubmit) {
+                submitSidepanelRequest(message.sidepanelSubmit).then(sendResponse);
+                return true;
+            }
+            if (message.request) {
+                // Commande reçue par la liaison offscreen, déjà authentifiée et vérifiée par elle.
+                handleCommand(message.request).then(sendResponse);
                 return true;
             }
         });
@@ -208,6 +274,78 @@ if (typeof chrome !== "undefined") {
 }
 
 setTimeout(connectBridgeWS, 300);
+
+// -----------------------------------------------------------------------------
+// Panneau latéral : demandes transmises à Antigravity par le pont, réponses de l'agent
+// Fil unique dans chrome.storage.session (mémoire, effacé à la fermeture de Chrome), lu par le panneau.
+// -----------------------------------------------------------------------------
+const SIDEPANEL_THREAD_KEY = "nexusagySidepanelThread";
+const SIDEPANEL_THREAD_MAX = 50;
+const SIDEPANEL_TEXT_MAX = 4000;
+let sidepanelThreadChain = Promise.resolve();
+
+function updateSidepanelThread(mutate) {
+    const run = sidepanelThreadChain.then(async () => {
+        const stored = await chrome.storage.session.get(SIDEPANEL_THREAD_KEY);
+        const thread = Array.isArray(stored?.[SIDEPANEL_THREAD_KEY]) ? stored[SIDEPANEL_THREAD_KEY] : [];
+        const result = mutate(thread);
+        await chrome.storage.session.set({ [SIDEPANEL_THREAD_KEY]: thread.slice(-SIDEPANEL_THREAD_MAX) });
+        return result;
+    });
+    sidepanelThreadChain = run.catch(() => {});
+    return run;
+}
+
+function newSidepanelId() {
+    if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+    return `sp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function submitSidepanelRequest(input = {}) {
+    const text = String(input.text || "").trim();
+    if (!text) return { error: "Demande vide" };
+    if (text.length > SIDEPANEL_TEXT_MAX) return { error: `Demande trop longue (${SIDEPANEL_TEXT_MAX} caractères au plus)` };
+    const tab = input.tab && typeof input.tab === "object"
+        ? { id: input.tab.id ?? null, title: String(input.tab.title || "").slice(0, 200), url: String(input.tab.url || "").slice(0, 500) }
+        : null;
+    const request = { id: newSidepanelId(), text, tab, created_at: Date.now() };
+    const sent = await sendBridgeEvent({ event: "sidepanel_request", request });
+    const entry = { ...request, kind: "request", status: sent ? "sent" : "not_sent" };
+    await updateSidepanelThread((thread) => { thread.push(entry); });
+    return {
+        data: { id: request.id, status: entry.status },
+        ...(sent ? {} : { error: "Pont local non authentifié : demande non transmise à Antigravity" })
+    };
+}
+
+async function replyToSidepanel(params = {}) {
+    const text = String(params.text || "").trim();
+    if (!text) return { error: "Missing 'text' for the side panel reply" };
+    if (text.length > SIDEPANEL_TEXT_MAX * 4) return { error: "Reply too long" };
+    const requestId = params.request_id || params.requestId || null;
+    const entry = { id: newSidepanelId(), kind: "reply", text, request_id: requestId, created_at: Date.now() };
+    await updateSidepanelThread((thread) => {
+        thread.push(entry);
+        const asked = requestId && thread.find(item => item.kind === "request" && item.id === requestId);
+        if (asked) asked.status = "answered";
+    });
+    return { data: { id: entry.id, shown: true } };
+}
+
+async function markSidepanelRead(params = {}) {
+    const ids = new Set(Array.isArray(params.ids) ? params.ids : []);
+    const marked = await updateSidepanelThread((thread) => {
+        let count = 0;
+        for (const item of thread) {
+            if (item.kind === "request" && ids.has(item.id) && item.status === "sent") {
+                item.status = "read";
+                count++;
+            }
+        }
+        return count;
+    });
+    return { data: { marked } };
+}
 
 // -----------------------------------------------------------------------------
 // CDP Event Monitor (Console logs, Dialogs, FileChooser & Network In-flight)
@@ -604,6 +742,15 @@ async function routeCommand(req) {
             case "drag_and_drop":
             case "drag":
                 return await dragAndDrop(params);
+
+            case "sidepanel_reply":
+                return await replyToSidepanel(params);
+
+            case "sidepanel_mark_read":
+                return await markSidepanelRead(params);
+
+            case "form_fields":
+                return await getFormFields(params);
 
             case "reload_extension":
                 setTimeout(() => { try { chrome.runtime.reload(); } catch(e) {} }, 100);
@@ -2261,7 +2408,9 @@ async function performMouseAction(params, options) {
     let prep;
     try {
         prep = await prepareAnywhere(target, locate, {
-            probe: mouseProbeTypes(kind, button, clickCount),
+            // pointerdown en plus : prouve qu'AUCUN événement n'a atteint l'élément (condition de la relance unique).
+            probe: kind === "hover" ? mouseProbeTypes(kind, button, clickCount)
+                : [...mouseProbeTypes(kind, button, clickCount), "pointerdown"],
             visual: kind !== "hover",
             timeoutMs
         });
@@ -2304,12 +2453,28 @@ async function performMouseAction(params, options) {
         return { data: { ...dialogInterruption(run.dialog), ...report, trusted_click: null } };
     }
 
-    const probe = await readMouseProbe(root, prep.probeId);
+    let probe = await readMouseProbe(root, prep.probeId, kind === "hover");
+    if (kind !== "hover" && root.key !== "top" && root.sessionId && probe && probe.seen.length === 0) {
+        // Iframe hors processus : son processus de rendu prend parfois l'émulation du focus après le premier clic
+        // (mesuré le 16/10 : environ 1 premier clic sur 5 perdu). La sonde prouve qu'AUCUN événement (pas même
+        // pointerdown) n'a atteint l'élément, dont le point a été vérifié : une seule relance, sans doublon possible.
+        await sleepMs(FOCUS_EMULATION_CHILD_SETTLE_MS);
+        try {
+            run = await runMouseSequence(target, sequence);
+        } finally {
+            scheduleDebuggerDetach(tabId);
+        }
+        if (run.dialog) return { data: { ...dialogInterruption(run.dialog), ...report, trusted_click: null, resent: true } };
+        report.resent = true;
+        probe = await readMouseProbe(root, prep.probeId);
+    } else if (kind !== "hover") {
+        await releaseMouseProbes(root, [prep.probeId]);
+    }
     if (kind === "hover") {
         report.trusted_hover = probe ? probe.trusted > 0 : null;
     } else {
         report.trusted_click = probe ? probe.seen.includes(MOUSE_PROOF_EVENT[button]) : null;
-        report.trusted_events = probe ? probe.seen : null;
+        report.trusted_events = probe ? probe.seen.filter(type => type !== "pointerdown") : null;
         if (report.trusted_click === false) {
             report.warning = "Aucun événement de confiance n'a atteint l'élément (re-rendu pendant le clic ?) : vérifier l'effet.";
         } else if (report.trusted_click === null) {
@@ -4295,12 +4460,15 @@ async function getCookies(params = {}) {
     }
 
     const result = await chrome.debugger.sendCommand(target, "Network.getCookies", commandParams);
+    // includeValues: false (panneau latéral) : les valeurs ne quittent jamais le service worker.
+    const withValues = params.includeValues !== false;
     return {
         data: {
             cookieCount: (result.cookies || []).length,
+            valuesIncluded: withValues,
             cookies: (result.cookies || []).map(c => ({
                 name: c.name,
-                value: c.value,
+                ...(withValues ? { value: c.value } : {}),
                 domain: c.domain,
                 path: c.path,
                 expires: c.expires,
@@ -4310,6 +4478,57 @@ async function getCookies(params = {}) {
             }))
         }
     };
+}
+
+/**
+ * Champs de formulaire visibles du document principal et de ses cadres same-origin : balise, type, nom, id, libellé
+ * (label associé, aria-label, aria-labelledby, placeholder, title), requis, rempli ou non. Aucune valeur n'est lue
+ * hors du booléen « rempli ».
+ */
+async function getFormFields(params = {}) {
+    const tabId = await resolveTargetTab(params);
+    if (!tabId) throw new Error("No active tab");
+    const limit = Math.max(1, Math.min(200, parseInt(params.limit, 10) || 60));
+    return await evaluateScript({
+        tabId,
+        code: `(() => {
+            const limit = ${limit};
+            const fields = [];
+            let total = 0;
+            const text = (v) => String(v || "").replace(/\\s+/g, " ").trim().slice(0, 80);
+            function labelOf(doc, el) {
+                const ids = (el.getAttribute("aria-labelledby") || "").split(/\\s+/).filter(Boolean);
+                const byIds = ids.map(id => doc.getElementById(id)).filter(Boolean).map(n => n.textContent).join(" ");
+                const labels = el.labels ? Array.from(el.labels).map(l => l.textContent).join(" ") : "";
+                return text(byIds) || text(labels) || text(el.getAttribute("aria-label")) || text(el.getAttribute("placeholder")) || text(el.getAttribute("title"));
+            }
+            function scan(doc, frame) {
+                if (!doc || !doc.querySelectorAll) return;
+                for (const el of doc.querySelectorAll("input, textarea, select, [contenteditable=''], [contenteditable='true']")) {
+                    const type = String(el.type || (el.isContentEditable ? "contenteditable" : "")).toLowerCase();
+                    if (["hidden", "submit", "button", "reset", "image"].includes(type)) continue;
+                    const r = el.getBoundingClientRect();
+                    if (r.width <= 0 || r.height <= 0) continue;
+                    total++;
+                    if (fields.length >= limit) continue;
+                    const filled = el.isContentEditable ? !!text(el.textContent)
+                        : (type === "checkbox" || type === "radio") ? !!el.checked
+                        : String(el.value || "").length > 0;
+                    fields.push({
+                        tag: String(el.tagName || "").toLowerCase(), type: type || null,
+                        name: el.getAttribute("name") || null, id: el.id || null,
+                        label: labelOf(doc, el) || null, required: !!el.required, disabled: !!el.disabled,
+                        filled, frame
+                    });
+                }
+                for (const f of doc.querySelectorAll("iframe")) {
+                    try { if (f.contentDocument) scan(f.contentDocument, frame === "top" ? (f.src || "iframe") : frame); } catch (_) {}
+                }
+            }
+            scan(document, "top");
+            return { count: total, fields, truncated: total > fields.length };
+        })()`
+    });
 }
 
 /**
@@ -4387,7 +4606,9 @@ async function getInteractiveMap(params = {}) {
             const tag = el.tagName ? el.tagName.toLowerCase() : "element";
             const role = el.getAttribute ? el.getAttribute("role") : null;
             const type = el.type || null;
-            const textRaw = el.innerText || el.value || el.placeholder || (el.getAttribute ? el.getAttribute("aria-label") : "") || el.title || el.name || "";
+            // Jamais la valeur d'un champ mot de passe ; celle d'un champ de saisie n'est pas un libellé non plus.
+            const fieldValue = (tag === "input" && ["button", "submit", "reset"].includes(String(type).toLowerCase())) ? el.value : "";
+            const textRaw = el.innerText || fieldValue || el.placeholder || (el.getAttribute ? el.getAttribute("aria-label") : "") || el.title || el.name || "";
             const label = String(textRaw).trim().slice(0, 60);
 
             let selectorHint = tag;

@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow the extension's `manifest.json`.
 
+## [2.3.0] - 2026-10-16
+
+### Security
+- WebSocket between the bridge and the extension authenticated in both directions (protocol `nexusagy-bridge/1`):
+  challenge-response HMAC-SHA256 proofs of the token (never sent), then every message signed with a per-connection key
+  and a strict sequence number. Before, only the forgeable `Origin` header protected port 9224, and the extension
+  executed commands for any program listening there.
+- The token never reaches Chrome: the native messaging host `auth_host.py` computes the extension's proofs
+  (`native-host/install-native-host.ps1` registers it). Deterministic target (service worker before offscreen);
+  ports 9224 and 9225 bound exclusively.
+
+### Changed
+- Side panel: cosmetic model selector, fake summary and echo reply removed; the four buttons act on the targeted tab;
+  text typed in the panel is sent to the agent through the authenticated bridge (`sidepanel_requests`,
+  `sidepanel_reply`); cookies and form fields shown without values.
+
+### Fixed
+- Out-of-process iframe: a first click whose probe proves that no event reached the element is resent once (about one
+  first click in five was lost).
+- Flaky offline tests: simulated clock instead of real timers.
 ## [2.2.0] - 2026-10-16
 
 ### Added

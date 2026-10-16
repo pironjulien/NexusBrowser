@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Antigravity Browser Bridge",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "minimum_chrome_version": "116",
   "description": "Pilotez Chrome et vos onglets actifs directement avec Antigravity.",
   "permissions": [
@@ -13,7 +13,8 @@
     "downloads",
     "offscreen",
     "sidePanel",
-    "storage"
+    "storage",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "<all_urls>"

@@ -1,6 +1,6 @@
 # antigravity-chrome-sidepanel
 
-**Antigravity Browser Bridge 2.2.0**: a Chrome (Manifest V3) extension and a small local bridge server that let an AI
+**Antigravity Browser Bridge 2.3.0**: a Chrome (Manifest V3) extension and a small local bridge server that let an AI
 agent, such as Google Antigravity, drive the user's real Chrome **in a background tab**, with real (trusted) mouse
 and keyboard events sent through the Chrome DevTools Protocol, while the user keeps working in their own tabs.
 
@@ -88,18 +88,27 @@ reading (`get_dom`, `get_accessibility_tree`, `interactive_map` with Set-of-Mark
 
 ### Side panel
 
-`Ctrl+Shift+A` opens a side panel styled after Gemini. It shows the bridge status and the active tab, and accepts quick
-commands (`map`, `screenshot`, `inspect`, `cookies`, `reload`, `click #N`, `go <url>`, scrolling) that it runs through
-the same engine. It does not call any language model: the model selector is cosmetic and a "summary" card shows the
-beginning of the page text. The agent itself drives Chrome through the bridge.
+`Ctrl+Shift+A` opens a side panel. It shows the real state of both bridge connections and the targeted tab, and every
+control does what it says:
+
+- **Map clickable elements**: only clickable elements; each number is a real click.
+- **Inspect form fields**: label, type, required, filled or empty; never the value typed.
+- **Session cookies**: count, domains and names only; cookie values never leave the service worker.
+- **Capture**: an image of the targeted tab.
+
+The panel has no language model of its own. Text typed in it is **sent to the agent through the authenticated bridge**
+(`sidepanel_requests` to read pending requests, `sidepanel_reply` to answer in the panel's thread); without an
+authenticated bridge nothing is sent and the panel says so. The queue lives in the bridge's memory (50 requests).
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     Agent["AI agent or MCP client"] -->|"HTTP POST api command with token"| Server["bridge_server.py"]
-    Server -->|"WebSocket 127.0.0.1 9224"| Offscreen["offscreen document keepalive"]
-    Offscreen --> SW["background.js service worker"]
+    Server <-->|"WebSocket 127.0.0.1 9224, mutual HMAC proof, signed messages"| SW["background.js service worker"]
+    Server <-->|"same protocol"| Offscreen["offscreen document keepalive"]
+    SW -->|"native messaging"| Auth["auth_host.py computes proofs, holds the token"]
+    Offscreen --> SW
     SW -->|"chrome.debugger CDP"| Tab["agent background tab"]
     SW --> Content["content_script.js and locator_kit.js"]
     Content --> Tab
@@ -108,7 +117,7 @@ flowchart LR
 
 ```
 extension/
-  manifest.json       MV3 manifest: debugger, tabs, tabGroups, scripting, downloads, offscreen, sidePanel, storage
+  manifest.json       MV3 manifest: debugger, tabs, tabGroups, scripting, downloads, offscreen, sidePanel, storage, nativeMessaging
   background.js       service worker: command dispatch, CDP input, locators, frames, network log, dialogs, downloads
   locator_kit.js      role/label/text locator engine shared with page scripts
   content_script.js   page side: status pill, Set-of-Marks badges
@@ -119,8 +128,11 @@ native-host/
   bridge_server.py    local server: WebSocket 127.0.0.1:9224 (extension), HTTP 127.0.0.1:9225 (agent)
   bridge_security.py  per-user token (created on first start, restricted file permissions)
   bridge_config.json  explicit list of extension origins allowed on the WebSocket
+  bridge_auth.py      protocol nexusagy-bridge/1: challenge-response proofs and per-connection message signing
+  auth_host.py        native messaging host: computes the extension's proofs, so the token never reaches Chrome
+  install-native-host.ps1  registers the native host for the current user (HKCU)
 tests/
-  browser.test.cjs    84 Node tests against simulated Chrome APIs, CDP input and DOM (no browser needed)
+  browser.test.cjs    94 Node tests against simulated Chrome APIs, CDP input and DOM (no browser needed)
 ```
 
 The bridge HTTP API:
@@ -151,7 +163,15 @@ The bridge HTTP API:
    `native-host/bridge_config.json` and restart the bridge. An unpacked extension's ID depends on its folder, so the IDs
    already listed will not match yours.
 
-4. **Agent side**: call the HTTP API from your agent or wrap it in MCP tools. Example from PowerShell:
+4. **Register the native host** that computes the extension's authentication proofs, then reload the extension in
+   `chrome://extensions` (a manifest change, such as the `nativeMessaging` permission, is only picked up by a reload
+   there):
+
+   ```powershell
+   pwsh -NoProfile -File native-host\install-native-host.ps1      # -Python <path> if python.exe is not on PATH
+   ```
+
+5. **Agent side**: call the HTTP API from your agent or wrap it in MCP tools. Example from PowerShell:
 
    ```powershell
    $token = Get-Content "$env:USERPROFILE\.nexusagy\bridge-token" -Raw
@@ -184,7 +204,10 @@ background:
   placeholder fields, a field that rejects untrusted input, `contenteditable`, check box, `<select>`, an out-of-process
   and a same-process cross-origin iframe, masked `Authorization` header with body read back, a download), two runs in
   a row.
-- Offline: 84/84 Node tests (`test.ps1`, October 16, 2026).
+- Version 2.3.0 (October 16, 2026), same real Chrome: `--mouse` 11/11 and `--full-live` 26/26 with the authenticated
+  bridge, the out-of-process iframe click passing 6 runs out of 6 (a first click whose probe proves that no event at
+  all reached the element is resent once).
+- Offline: 94/94 Node tests (`test.ps1`, October 16, 2026).
 
 The two real-browser validation scripts are not part of this repository (they depend on the private agent client).
 
@@ -192,9 +215,15 @@ The two real-browser validation scripts are not part of this repository (they de
 
 - The bridge listens on 127.0.0.1 only. The agent-facing HTTP API requires the per-user token and refuses any request
   with an `Origin` header, so web pages cannot call it.
-- The WebSocket accepts only the extension origins listed in `bridge_config.json`. This is a check of the `Origin`
-  header, which a local non-browser process can forge: it stops web pages, not other programs running as the same
-  user.
+- The WebSocket is **authenticated in both directions** (protocol `nexusagy-bridge/1`, version 2.3.0). The extension
+  sends a nonce; the bridge answers with its own nonce and an HMAC-SHA256 proof of the token over both nonces, the role
+  and the extension ID; only if that proof is right does the extension prove the token in turn. The token is never
+  sent, and two fresh nonces per connection make a recorded proof useless. A derived session key then signs every
+  message both ways with a strict sequence number: an unsigned, badly signed, replayed or out-of-order message closes
+  the connection without being executed, and nothing runs before the bridge's signed `auth_ok`. A program that forges
+  the `Origin` header or listens on 9224 in the bridge's place gets no command executed.
+- The extension never holds the token: a native messaging host (`auth_host.py`, allowed only for the extension IDs in
+  `bridge_config.json`) reads it and computes the proofs. Ports 9224 and 9225 are bound exclusively.
 - Sensitive network headers are masked in the network log.
 - JavaScript dialogs are never accepted automatically. Mouse commands never activate the tab or the window.
 - The extension requests broad permissions (`debugger` and `<all_urls>`, with commands such as
