@@ -6,6 +6,9 @@ Versions follow the extension's `manifest.json`.
 
 ## [2.4.0] - 2026-10-16
 
+### Fixed
+- `export_gsuite` on a real Chrome: export URLs redirect to googleusercontent.com (opaque for fetch); fallback to a Chrome download that follows the redirect with the session, then read and filed or deleted.
+
 ### Added
 - `export`: main page content as Markdown, text or cleaned HTML, with metadata, optional area and bounded size.
 - `export_gsuite`: Google Docs, Sheets and Slides through Google's official export URLs with the user's session;

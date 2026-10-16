@@ -72,7 +72,7 @@ or regex, method, status, type. `Cookie`, `Set-Cookie`, `Authorization`, `Proxy-
   dates, language, site, canonical URL). A `selector` or a strict `locator` limits the export to one area; the size is
   bounded (100,000 characters by default) and truncation is reported. Field values are never exported.
 - `export_gsuite`: a Google Docs, Sheets or Slides document open in the tab, through Google's official export URLs,
-  fetched from the page with the user's session (cookies are never read). Text formats come back in the response;
+  fetched with the user's session (cookies are never read). Google redirects export URLs to googleusercontent.com, which a fetch only sees as an opaque redirect, so the extension falls back to a regular Chrome download (no Save As dialog) that follows the redirect like File > Download; the file is then read and filed or deleted, and its entry removed from the download history. Text formats come back in the response;
   binary formats (docx, xlsx, pdf, pptx) are written under `%USERPROFILE%\.nexusagy\exports` and only their path is
   returned. Clear errors for a non-Google page, missing rights or a sign-in page.
 - `export_youtube_transcript`: the transcript of the open YouTube video (manual track first, then auto-generated,
@@ -220,7 +220,7 @@ background:
 - Version 2.3.0 (October 16, 2026), same real Chrome: `--mouse` 11/11 and `--full-live` 26/26 with the authenticated
   bridge, the out-of-process iframe click passing 6 runs out of 6 (a first click whose probe proves that no event at
   all reached the element is resent once).
-- Version 2.4.0 (October 16, 2026): `--full-live` 29/29 including a noisy article exported without its noise, and a real YouTube transcript exported from a background agent tab. Google Docs export is covered by offline tests only.
+- Version 2.4.0 (October 16, 2026): `--full-live` 29/29 including a noisy article exported without its noise, and a real YouTube transcript exported from a background agent tab. A real Google Doc was exported to Markdown and PDF from a background agent tab.
 - Offline: 108/108 Node tests (`test.ps1`, October 16, 2026).
 
 The two real-browser validation scripts are not part of this repository (they depend on the private agent client).

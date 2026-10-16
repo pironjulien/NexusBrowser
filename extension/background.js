@@ -4602,8 +4602,24 @@ async function exportGsuite(params = {}) {
         via = "extension";
         if (fetched?.networkError) fetched.networkError = `page : ${pageError} ; extension : ${fetched.networkError}`;
     }
+    if (fetched?.networkError && chrome.downloads?.download) {
+        // Mesuré le 16/10 sur le vrai Chrome : l'URL d'export redirige vers *.googleusercontent.com, réponse opaque pour
+        // fetch (page comme extension : « Failed to fetch »). Un téléchargement par Chrome suit la redirection avec la
+        // session, comme Fichier > Télécharger : le fichier est lu par le client puis rangé ou supprimé.
+        const fetchError = fetched.networkError;
+        fetched = await downloadViaBrowser(plan.url, `nexusagy-exports/${plan.document_id}.${plan.extension}`, EXPORT_FETCH_TIMEOUT_MS);
+        via = "download";
+        if (fetched?.networkError) fetched.networkError = `${fetchError} ; téléchargement : ${fetched.networkError}`;
+    }
     const verdict = EK.gsuiteVerdict(plan, fetched);
-    if (verdict.error) return { error: verdict.error };
+    if (verdict.error) {
+        if (fetched?.downloadId !== undefined) await discardDownload(fetched.downloadId);
+        return { error: verdict.error };
+    }
+    if (fetched?.downloadId !== undefined) {
+        // Fichier gardé pour le client ; seule l'entrée de l'historique des téléchargements de Julien est retirée.
+        try { await chrome.downloads.erase({ id: fetched.downloadId }); } catch (_) {}
+    }
     const data = {
         kind: plan.kind,
         label: plan.label,
@@ -4622,9 +4638,65 @@ async function exportGsuite(params = {}) {
         data.gid = plan.gid;
         if ((plan.format === "csv" || plan.format === "tsv") && plan.gid === null) data.note = "Sans gid : première feuille du classeur seulement (préciser gid, ou ouvrir la feuille voulue).";
     }
-    if (plan.binary) data.base64 = fetched.base64;
+    if (via === "download") data.download_path = fetched.path;
+    else if (plan.binary) data.base64 = fetched.base64;
     else data.text = fetched.text;
     return { data };
+}
+
+/**
+ * Téléchargement par Chrome (cookies de la session, redirections suivies), sans boîte « Enregistrer sous », dans
+ * Téléchargements\nexusagy-exports\. Rend { ok, status, path, bytes, type, finalUrl, filename, downloadId } ou
+ * { networkError }. L'entrée est retirée de l'historique des téléchargements de Julien (le fichier reste, lu par le
+ * client qui le range ou le supprime).
+ */
+async function downloadViaBrowser(url, filename, timeoutMs) {
+    let id;
+    try {
+        id = await chrome.downloads.download({ url, filename, saveAs: false, conflictAction: "uniquify" });
+    } catch (error) {
+        return { networkError: String(error?.message || error) };
+    }
+    return await new Promise((resolve) => {
+        let done = false;
+        const finish = (value) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            chrome.downloads.onChanged.removeListener(onChanged);
+            resolve(value);
+        };
+        const timer = setTimeout(async () => {
+            await discardDownload(id);
+            finish({ networkError: `téléchargement non terminé en ${timeoutMs} ms` });
+        }, timeoutMs);
+        async function check() {
+            const [item] = await chrome.downloads.search({ id });
+            if (!item || done) return;
+            if (item.state === "complete") {
+                finish({
+                    ok: true, status: 200, path: item.filename, downloadId: id,
+                    bytes: item.fileSize || item.totalBytes || item.bytesReceived || 0,
+                    type: item.mime || "", finalUrl: item.finalUrl || item.url,
+                    filename: String(item.filename || "").split(/[\\/]/).pop() || null
+                });
+            } else if (item.state === "interrupted") {
+                await discardDownload(id);
+                finish({ networkError: `téléchargement interrompu (${item.error || "raison inconnue"})` });
+            }
+        }
+        function onChanged(delta) {
+            if (delta.id === id && (delta.state || delta.error)) check();
+        }
+        chrome.downloads.onChanged.addListener(onChanged);
+        check();
+    });
+}
+
+/** Fichier d'un téléchargement refusé ou inachevé supprimé, et entrée retirée de l'historique. */
+async function discardDownload(id) {
+    try { await chrome.downloads.removeFile(id); } catch (_) {}
+    try { await chrome.downloads.erase({ id }); } catch (_) {}
 }
 
 /** Transcription de la vidéo YouTube ouverte dans l'onglet (piste choisie par langue, json3 ou vtt). */
