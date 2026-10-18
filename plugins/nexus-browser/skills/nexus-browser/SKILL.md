@@ -3,7 +3,7 @@ name: nexus-browser
 description: Piloter les onglets Chrome de Julien via les outils MCP du pont NexusBrowser (CDP direct, navigation, formulaires, captures, fichiers, exports), commun à Antigravity, Claude et Codex.
 ---
 
-# Pont Chrome NexusBrowser (v2.8.1)
+# Pont Chrome NexusBrowser (v2.9.0)
 
 Pilotage du vrai Chrome de Julien (ses sessions : Google Cloud, Play Store, GitHub, Firebase...) par un agent
 (Antigravity, Claude ou Codex) via le pont local (`ws://127.0.0.1:9224`, `http://127.0.0.1:9225/api/command`,

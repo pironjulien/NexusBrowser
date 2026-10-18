@@ -767,11 +767,12 @@ def run_live_validation():
     return results
 
 
-def _tab_ids(response) -> set[int]:
+def _tab_ids(response, julien_only: bool = False) -> set[int]:
+    """Onglets listés ; julien_only : ceux de Julien seulement (un autre agent peut fermer les siens pendant le test)."""
     tabs = parse_response(response).get("data", [])
     if isinstance(tabs, str):
         tabs = json.loads(tabs)
-    return {t["id"] for t in tabs}
+    return {t["id"] for t in tabs if not julien_only or t.get("state") == "julien"}
 
 
 def _live(tab_id: int) -> dict:
@@ -792,7 +793,7 @@ def run_mouse_validation() -> dict[str, bool]:
         print(f"[{'OK' if condition else 'ÉCHEC'}] {name} : {detail}")
 
     try:
-        initial_ids = _tab_ids(mcp.browser_list_tabs())
+        initial_ids = _tab_ids(mcp.browser_list_tabs(), julien_only=True)
         active_before = parse_response(mcp.browser_active_tab()).get("data", {}) or {}
         print(f"[*] Onglets de Julien préservés : {len(initial_ids)} ; onglet actif : {active_before.get('id')}")
 
@@ -953,6 +954,10 @@ FULL_TEST_PAGE = """<!DOCTYPE html>
     <section aria-label="Connexion">
         <p><label for="pw">Mot de passe</label> <input id="pw" type="password" value="MotDePasse-Live-1"></p>
         <p><label for="card">Numéro de carte</label> <input id="card" autocomplete="cc-number" value="4970101234567890"></p>
+        <p><label for="shown">Secret affiché</label>
+            <input id="shown" name="password" type="text" value="AfficheLive3" style="font: 16px monospace; width: 220px"></p>
+        <p><label for="cardname">Carte (nom seul)</label>
+            <input id="cardname" name="cardNumber" value="5131420000001111" style="font: 16px monospace; width: 220px"></p>
     </section>
     <div class="spacer"></div>
     <iframe id="frame-a" title="Cadre A" src="http://localhost:__P2__/frame?name=A"></iframe>
@@ -990,9 +995,16 @@ FRAME_PAGE = """<!DOCTYPE html>
     <button id="act">Action __NAME__</button>
     <button id="common">Action commune</button>
     <p><label for="f">Saisie cadre __NAME__</label> <input id="f"></p>
+    <p><label for="fcard">Carte du cadre __NAME__</label>
+        <input id="fcard" name="cardNumber" value="6011000990139424" style="font: 16px monospace; width: 220px"></p>
     <script>
-        const S = { agyFrame: '__NAME__', clicks: 0, common: 0, untrusted: 0, value: '', trustedInput: 0 };
-        const report = () => parent.postMessage(S, '*');
+        const S = { agyFrame: '__NAME__', clicks: 0, common: 0, untrusted: 0, value: '', trustedInput: 0, card: '' };
+        const report = () => { const c = document.getElementById('fcard'); S.card = c.name + ':' + c.value.length + ':' + c.value.slice(0, 2); parent.postMessage(S, '*'); };
+        // Réglage du champ de carte par le parent (test du masquage dans les captures d'un cadre d'une autre origine).
+        window.addEventListener('message', e => {
+            const c = document.getElementById('fcard');
+            if (e.data && e.data.setCard !== undefined) { c.value = e.data.setCard; c.name = e.data.name || 'cardNumber'; report(); }
+        });
         document.getElementById('act').addEventListener('click', e => { if (e.isTrusted) S.clicks++; else S.untrusted++; report(); });
         document.getElementById('common').addEventListener('click', e => { if (e.isTrusted) S.common++; report(); });
         const f = document.getElementById('f');
@@ -1204,7 +1216,7 @@ def run_full_validation() -> dict[str, bool]:
 
     initial_ids: set[int] = set()
     try:
-        initial_ids = _tab_ids(mcp.browser_list_tabs())
+        initial_ids = _tab_ids(mcp.browser_list_tabs(), julien_only=True)
         active_before = parse_response(mcp.browser_active_tab()).get("data", {}) or {}
         print(f"[*] Onglets de Julien préservés : {len(initial_ids)} ; onglet actif : {active_before.get('id')}")
         created = parse_response(mcp.browser_new_tab(fixture.url, background=True))
@@ -1519,6 +1531,7 @@ def run_full_validation() -> dict[str, bool]:
             parse_response(axtree).get("status") == "success" and not [x for x in secrets_live if x in axtree],
             [x for x in secrets_live if x in axtree] or "aucune valeur",
         )
+        capture_masking_checks(check, tab_id, value_of)
         reload_refused = _error(
             mcp.browser_cdp_send("Page.reload", {"scriptToEvaluateOnLoad": "window.__injecte = 1"}, tab_id=tab_id)
         )
@@ -1604,7 +1617,15 @@ def run_full_validation() -> dict[str, bool]:
 
     time.sleep(0.3)
     remaining = _tab_ids(mcp.browser_list_tabs())
-    check("onglets_de_julien_intacts", initial_ids.issubset(remaining) and tab_id not in remaining, len(remaining))
+    check(
+        "onglets_de_julien_intacts",
+        initial_ids.issubset(remaining) and tab_id not in remaining,
+        {
+            "restants": len(remaining),
+            "disparus": sorted(initial_ids - remaining),
+            "test_encore_ouvert": tab_id in remaining,
+        },
+    )
     check("fichier_telecharge_supprime", not download_path or not Path(download_path).exists(), download_path or "")
     print("\n" + "=" * 60)
     print(f"VALIDATION COMPLÈTE : {sum(results.values())}/{len(results)} vérifications réussies")
@@ -1625,6 +1646,122 @@ import bridge_client
 bridge_client.set_identity(sys.argv[2])
 print(json.dumps(bridge_client.call_bridge("create-tab", {"url": sys.argv[3], "background": True, "active": False}, 20.0)))
 """
+
+
+def _shot(tab_id: int, selector: str) -> bytes:
+    """Capture PNG d'un élément (outil réel, fichier temporaire supprimé), en octets."""
+    with tempfile.TemporaryDirectory() as folder:
+        out = Path(folder) / "capture.png"
+        res = parse_response(mcp.browser_screenshot(tab_id=tab_id, selector=selector, output_path=str(out)))
+        if res.get("status") != "success" or not out.is_file():
+            raise AssertionError(f"Capture {selector} impossible : {res}")
+        return out.read_bytes()
+
+
+def _pdf(tab_id: int) -> bytes:
+    """PDF réel de la page, sans les métadonnées qui changent d'un export à l'autre (dates, identifiant)."""
+    with tempfile.TemporaryDirectory() as folder:
+        out = Path(folder) / "page.pdf"
+        res = parse_response(mcp.browser_pdf(str(out), tab_id=tab_id))
+        if res.get("status") != "success" or not out.is_file():
+            raise AssertionError(f"PDF impossible : {res}")
+        data = out.read_bytes()
+    return re.sub(rb"/(CreationDate|ModDate) *\([^)]*\)|/ID *\[[^\]]*\]", b"", data)
+
+
+def capture_masking_checks(check, tab_id: int, value_of) -> None:
+    """2.9 (audit du 18/10) : un mot de passe affiché, une carte ou un code n'apparaît dans aucune image.
+
+    Sans OCR : deux valeurs différentes de même longueur donnent la MÊME image si le champ est rendu en disques ;
+    témoin : le même champ rendu ordinaire (nom changé) donne une image différente, preuve que la comparaison voit
+    bien le texte. Même chose dans un cadre d'une autre origine, et pour le PDF.
+    """
+
+    def set_field(field_id: str, value: str, name: str) -> None:
+        value_of(
+            f"(() => {{ const e = document.getElementById({json.dumps(field_id)}); e.value = {json.dumps(value)}; "
+            f"e.name = {json.dumps(name)}; e.blur(); return 1; }})()"
+        )
+
+    def inline_style(field_id: str) -> str:
+        return value_of(f"document.getElementById({json.dumps(field_id)}).style.cssText")
+
+    original_style = {field_id: inline_style(field_id) for field_id in ("shown", "cardname")}
+
+    for field_id, name, first, second in (
+        ("shown", "password", "AfficheLive3", "ZzzzzzzLive9"),
+        ("cardname", "cardNumber", "5131420000001111", "4000056655665556"),
+    ):
+        set_field(field_id, first, name)
+        a = _shot(tab_id, f"#{field_id}")
+        set_field(field_id, second, name)
+        b = _shot(tab_id, f"#{field_id}")
+        set_field(field_id, second, "note")
+        control = _shot(tab_id, f"#{field_id}")
+        set_field(field_id, first, name)
+        check(
+            f"capture_{field_id}_en_disques",
+            a == b and control != b and inline_style(field_id) == original_style[field_id],
+            {"identiques": a == b, "temoin_different": control != b, "style_apres": inline_style(field_id)},
+        )
+
+    # PDF : mêmes valeurs, même document ; témoin ordinaire : document différent. La pastille d'état de l'agent
+    # (« Nexus · ... », animée) est retirée avant chaque export : elle seule changeait d'un PDF à l'autre.
+    def pdf_without_pill() -> bytes:
+        value_of("(() => { const p = document.getElementById('__nexus_status_pill'); if (p) p.remove(); return 1; })()")
+        return _pdf(tab_id)
+
+    set_field("cardname", "5131420000001111", "cardNumber")
+    pdf_a = pdf_without_pill()
+    set_field("cardname", "4000056655665556", "cardNumber")
+    pdf_b = pdf_without_pill()
+    set_field("cardname", "4000056655665556", "note")
+    pdf_control = pdf_without_pill()
+    set_field("cardname", "5131420000001111", "cardNumber")
+    check(
+        "pdf_carte_en_disques",
+        pdf_a == pdf_b and pdf_control != pdf_b and inline_style("cardname") == original_style["cardname"],
+        {"identiques": pdf_a == pdf_b, "temoin_different": pdf_control != pdf_b, "tailles": [len(pdf_a), len(pdf_b)]},
+    )
+
+    # Cadre d'une autre origine (localhost dans une page 127.0.0.1) : lectures et capture.
+    def set_frame_card(value: str, name: str) -> None:
+        expected = f"{name}:{len(value)}:{value[:2]}"
+        value_of(
+            "document.getElementById('frame-a').contentWindow.postMessage("
+            f"{{setCard: {json.dumps(value)}, name: {json.dumps(name)}}}, '*'); 1"
+        )
+        for _ in range(25):
+            if value_of("(window.__agyFull.frames.A || {}).card") == expected:
+                return
+            time.sleep(0.1)
+        raise AssertionError(f"Cadre A non réglé ({expected})")
+
+    frame_secrets = ("6011000990139424", "3530111333300000")
+    set_frame_card(frame_secrets[0], "cardNumber")
+    reads = {
+        "content": mcp.browser_content(tab_id=tab_id),
+        "find": mcp.browser_find({"label": "Carte du cadre A"}, tab_id=tab_id),
+    }
+    found = _data(reads["find"])
+    check(
+        "cadre_autre_origine_lecture_masquee",
+        not [x for raw in reads.values() for x in frame_secrets if x in raw]
+        and "[valeur masquée]" in reads["find"]
+        and found.get("count") == 1,
+        {"fuites": {k: [x for x in frame_secrets if x in v] for k, v in reads.items()}, "find": found},
+    )
+    a = _shot(tab_id, "#frame-a")
+    set_frame_card(frame_secrets[1], "cardNumber")
+    b = _shot(tab_id, "#frame-a")
+    set_frame_card(frame_secrets[1], "note")
+    control = _shot(tab_id, "#frame-a")
+    set_frame_card(frame_secrets[0], "cardNumber")
+    check(
+        "cadre_autre_origine_capture_en_disques",
+        a == b and control != b,
+        {"identiques": a == b, "temoin_different": control != b},
+    )
 
 
 def orphan_check(check, url: str) -> None:
@@ -1666,7 +1803,7 @@ def run_exports_validation() -> tuple[dict[str, bool], list[str]]:
 
     def in_agent_tab(url: str, work) -> None:
         tab_id = None
-        initial = _tab_ids(mcp.browser_list_tabs())
+        initial = _tab_ids(mcp.browser_list_tabs(), julien_only=True)
         active_before = (parse_response(mcp.browser_active_tab()).get("data") or {}).get("id")
         try:
             created = parse_response(mcp.browser_new_tab(url, background=True))

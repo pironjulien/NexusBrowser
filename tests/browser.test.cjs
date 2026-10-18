@@ -798,7 +798,7 @@ test('capture : flux refusé par Chrome -> capture directe ; capture en échec -
         if (method === 'Page.captureScreenshot') throw new Error('Capture impossible');
     }});
     await failing.run('screenshot', {tabId: 1}).catch(() => {});
-    assert.equal(failing.calls.at(-1).method, 'Page.stopScreencast');
+    assert.equal(failing.calls.filter(c => /Screencast|captureScreenshot/.test(c.method)).at(-1).method, 'Page.stopScreencast');
 });
 
 test('about:blank tabs can be created and debugged without protected URL rejection', async () => {
@@ -3240,6 +3240,12 @@ test('capture d\'élément : zone en repère de la PAGE (défilement ajouté), a
     const shot = h.calls.find(c => c.method === 'Page.captureScreenshot');
     assert.deepEqual(plain(shot.params.clip), {x: 40, y: 1520, width: 200, height: 100, scale: 1});
     assert.equal(shot.params.captureBeyondViewport, true);
+    // Chrome zoomé à 90 % (vu chez Julien le 18/10) : zone en pixels non zoomés, sinon image blanche.
+    const zoomed = harness({document: {querySelectorAll: (sel) => sel === '#card' ? [el] : []}}, {
+        debuggerSendCommand: (target, method) => method === 'Page.getLayoutMetrics' ? {cssVisualViewport: {pageX: 30, pageY: 1500, zoom: 0.9}} : undefined
+    });
+    assert.equal((await zoomed.run('screenshot', {tabId: 1, selector: '#card'})).error, undefined);
+    assert.deepEqual(plain(zoomed.calls.find(c => c.method === 'Page.captureScreenshot').params.clip), {x: 36, y: 1368, width: 180, height: 90, scale: 1});
 });
 
 test('service worker redémarré, onglet encore attaché : session reprise et iframes de nouveau suivies', async () => {
@@ -3762,4 +3768,102 @@ test('2.8 revue d\'Antigravity : texte rendu d\'un champ sensible, bouton « aff
         querySelectorAll: (sel) => (sel === '[value]' ? [comp] : []), get outerHTML() { return `<x-card value="${comp.attrs.value}">`; }
     })}}});
     assert.equal((await h3.run('get_content', {tabId: 1, mode: 'html'})).data, '<x-card value="[valeur masquée]">');
+});
+
+// =============================================================================
+// 2.9 : audit du 18/10 (images, noms de champs, console, journal réseau).
+// =============================================================================
+const kit = vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'extension', 'locator_kit.js'), 'utf8') + ';agyLocatorKit()');
+
+for (const name of ['cardNumber', 'card_number', 'card-number', 'cc_number', 'ccNumber', 'cc-num', 'creditCardNumber',
+    'cardCvc', 'cvc', 'CVV', 'cvv2', 'billing_csc', 'otp', 'otpCode', 'totp', 'pin', 'userPIN', 'pinCode', 'pincode',
+    'securityCode', 'security_code', 'iban', 'ibanField', 'password', 'mdp', 'motDePasse', 'passcode']) {
+    test(`2.9 champ sensible reconnu par son nom : ${name}`, () => {
+        assert.equal(kit.sensitiveName(name), true, name);
+        assert.equal(kit.sensitiveField({tagName: 'INPUT', type: 'text', getAttribute: (n) => (n === 'name' ? name : null)}), true);
+        assert.equal(kit.sensitiveField({tagName: 'INPUT', type: 'text', getAttribute: (n) => (n === 'id' ? name : null)}), true);
+    });
+}
+
+test('2.9 noms ordinaires jamais pris pour un secret (cc d\'un courriel, spinner, option, passager...)', () => {
+    for (const name of ['cc', 'email_cc', 'ccRecipients', 'spinner', 'shipping', 'option', 'footprint', 'opinion',
+        'passenger', 'cardHolder', 'card_name', 'pinned', 'pinterest', 'description', 'zipCode', 'codePostal', 'search']) {
+        assert.equal(kit.sensitiveName(name), false, name);
+    }
+});
+
+test('2.9 capture, PDF, vision et cdp_send : champs sensibles en disques pendant l\'image, style d\'origine remis', async () => {
+    const page = (h) => [
+        h('input', {id: 'shown', name: 'password', type: 'text', value: 'Affiche!5'}),
+        h('input', {id: 'card', name: 'cardNumber', value: '4970101234567890'}),
+        h('input', {id: 'otp', name: 'otp', value: '482913'}),
+        h('input', {id: 'pw', type: 'password', value: 'MotDePasse!1'}),
+        h('input', {id: 'user', name: 'username', value: 'julien'})
+    ];
+    const style = (init = {}) => {
+        const props = {...init};
+        return {props, getPropertyValue: (p) => (props[p] ? props[p][0] : ''), getPropertyPriority: (p) => (props[p] ? props[p][1] : ''),
+            setProperty(p, v, prio = '') { props[p] = [v, prio]; }, removeProperty(p) { delete props[p]; }};
+    };
+    let seen = [];
+    let dom;
+    const ids = ['shown', 'card', 'otp', 'pw', 'user'];
+    const snapshot = () => Object.fromEntries(ids.map(id => [id, dom.byId(id).style.getPropertyValue('-webkit-text-security')]));
+    const r = richHarness(page, {debuggerSendCommand: async (target, method) => {
+        if (method === 'Page.captureScreenshot' || method === 'Page.printToPDF') { seen.push([method, snapshot()]); return {data: 'AAAA'}; }
+        return undefined;
+    }});
+    dom = r.dom;
+    dom.win.location = {href: 'https://boutique.example.invalid/paiement'};
+    for (const id of ['shown', 'otp', 'pw', 'user']) dom.byId(id).style = style();
+    dom.byId('card').style = style({'-webkit-text-security': ['circle', '']});
+    const masked = {shown: 'disc', card: 'disc', otp: 'disc', pw: '', user: ''};
+    const runs = [['screenshot', {}], ['screenshot', {selector: '#card'}], ['pdf', {}], ['vision_inspect', {}],
+        ['cdp_send', {method: 'Page.captureScreenshot', commandParams: {}}], ['cdp_send', {method: 'Page.printToPDF', commandParams: {}}]];
+    for (const [cmd, params] of runs) {
+        seen = [];
+        if (cmd === 'vision_inspect') { dom.doc.createElement = () => ({style: {}, remove() {}}); dom.html.appendChild = () => {}; }
+        const res = await r.h.run(cmd, {tabId: 1, ...params});
+        assert.equal(res.error, undefined, `${cmd} ${JSON.stringify(res.error)}`);
+        assert.equal(seen.length, 1, cmd);
+        assert.deepEqual(plain(seen[0][1]), masked, cmd);
+        assert.deepEqual(plain(snapshot()), {shown: '', card: 'circle', otp: '', pw: '', user: ''}, `${cmd} : style remis`);
+    }
+});
+
+test('2.9 browser_logs : console masquée (texte, aperçus d\'objets, jetons cités, cartes), messages ordinaires gardés', async () => {
+    const h = harness();
+    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.emit(1, 'Runtime.consoleAPICalled', {type: 'log', args: [
+        {type: 'string', value: 'Connexion avec Authorization: Bearer abcdefgh12345678 ok'},
+        {type: 'string', value: '{"access_token":"SECRETJSON1","user":"julien"}'},
+        {type: 'string', value: 'redirection /cb?code=SECRETURL2&state=ok'},
+        {type: 'object', preview: {properties: [{name: 'password', type: 'string', value: 'SECRETPW3'},
+            {name: 'cardNumber', type: 'string', value: '4970101234567890'}, {name: 'langue', type: 'string', value: 'fr'}]}},
+        {type: 'string', value: 'jeton ghp_ABCDEFGHIJKLMNOP1234 visible'}
+    ]});
+    await h.emit(1, 'Log.entryAdded', {entry: {level: 'info', text: 'Bonjour Julien', url: 'https://x.invalid/a?token=SECRETLOG4&page=2'}});
+    const res = await h.run('logs', {tabId: 1});
+    const raw = JSON.stringify(res);
+    for (const secret of ['abcdefgh12345678', 'SECRETJSON1', 'SECRETURL2', 'SECRETPW3', '4970101234567890', 'ghp_ABCDEFGHIJKLMNOP1234', 'SECRETLOG4']) {
+        assert.ok(!raw.includes(secret), secret);
+    }
+    for (const kept of ['julien', 'state=ok', 'langue', '"fr"', 'Bonjour Julien', 'page=2']) assert.ok(raw.includes(kept), kept);
+});
+
+test('2.9 journal réseau : carte, cryptogramme, code et IBAN masqués dans les corps et les URL', async () => {
+    const body = JSON.stringify({cardNumber: '4970101234567890', card_cvc: '737', securityCode: '123', otp: '482913',
+        iban: 'FR7630006000011234567890189', amount: 42, pin: 1234});
+    const h = harness({}, {debuggerSendCommand: (target, method) => method === 'Network.getResponseBody' ? {body, base64Encoded: false} : undefined});
+    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.emit(1, 'Network.requestWillBeSent', {requestId: 'pay', timestamp: 1,
+        request: {url: 'https://x.invalid/pay?cc_number=4970101234567890&lang=fr', method: 'POST', headers: {}}});
+    await h.emit(1, 'Network.responseReceived', {requestId: 'pay', response: {status: 200, mimeType: 'application/json', headers: {}}});
+    await h.emit(1, 'Network.loadingFinished', {requestId: 'pay', timestamp: 2, encodedDataLength: 10});
+    const read = (await h.run('network_response', {tabId: 1, request_id: 'pay'})).data;
+    const parsed = JSON.parse(read.body);
+    for (const key of ['cardNumber', 'card_cvc', 'securityCode', 'otp', 'iban', 'pin']) assert.match(String(parsed[key]), /^\[masqué/, key);
+    assert.equal(parsed.amount, 42);
+    const list = (await h.run('network_requests', {tabId: 1})).data.requests;
+    assert.equal(list[0].url, 'https://x.invalid/pay?cc_number=[masqué]&lang=fr');
 });

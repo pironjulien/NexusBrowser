@@ -7,6 +7,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `SECURITY.md`: private vulnerability reporting.
+
+## [2.9.0] - 2026-10-18 — Secrets masked in images and console logs
+
+Re-run `install.ps1`, then RELOAD the extension (capabilities `capture-field-masking` and `console-masking`
+advertised by ping).
+
+### Security
+- Screenshots, PDFs and Set-of-Mark captures no longer show a password revealed by a "show" button, a card number or
+  a code: before `Page.captureScreenshot` / `Page.printToPDF` (also through `browser_cdp_send`), sensitive fields of
+  every frame (shadow DOM, same-origin and cross-origin iframes) get `-webkit-text-security: disc`, and their own
+  inline style is put back right after. A capture whose page cannot be masked (dialog open) is refused. Checked in
+  the real Chrome (`test.ps1 -Full`): two values of the same length give the same image, the same field shown as an
+  ordinary field gives a different one (screenshot, PDF, cross-origin iframe).
+- Sensitive fields are also recognized by name or id, camelCase included: `cardNumber`, `cc_number`, `cardCvc`,
+  `otp`, `pin`, `securityCode`, `iban`... (`cc` alone, `spinner`, `passenger`, `option` are not secrets).
+- `browser_logs` masks console messages like network bodies: secret keys, URL parameters, object previews
+  (`{name, value}`), tokens quoted in a text (`Bearer …`, `ghp_…`, JWT).
+- Network log: card number, card code, one-time code, PIN and IBAN keys masked in bodies and URL parameters.
+- `NEXUS_CHROME_EXTRA_ARGS` is now an allowlist (`--lang`, `--accept-lang`, `--variations-override-country`,
+  `--disable-features` with `Glic*` features only, `--force-dark-mode`): the former blocklist let through flags that
+  weaken Chrome (`--disable-web-security`, `--disable-features=IsolateOrigins`...).
+
+### Fixed
+- Element screenshots (`selector`, `mark`) were blank when Chrome's page zoom is not 100% (seen at 90%): the clip is
+  now converted with the page zoom reported by `Page.getLayoutMetrics`.
+
+### Added
+- Real Chrome test of masking in a cross-origin iframe (reads and capture).
+- Real Chrome check that Julien's tabs are left intact now ignores tabs of other agents (they may close theirs during
+  the run).
+
 - Every MCP tool has a readable `title` in its annotations, next to its four hints.
 - Startup test: the MCP server answers `initialize` and `tools/list` with no Chrome, bridge or extension, on Windows
   and on Linux (as MCP directories such as Glama check it); outside Windows the emergency stop keeps watching its

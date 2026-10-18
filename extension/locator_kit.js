@@ -29,7 +29,19 @@ function agyLocatorKit(install) {
     // passe en type=text, souvent sans autocomplete ; revue d'Antigravity du 18/10).
     const SENSITIVE_AUTOCOMPLETE = new Set(["current-password", "new-password", "one-time-code", "cc-number", "cc-csc",
         "cc-exp", "cc-exp-month", "cc-exp-year"]);
-    const SENSITIVE_NAME = /passw|pwd|passcode|mot.?de.?passe|mdp|(^|[^a-z])(cvc|cvv|csc)([^a-z]|$)/i;
+    const SENSITIVE_NAME = /passw|pwd|passcode|mot.?de.?passe|mdp/i;
+    // Mots d'un nom (camelCase, _, -, espaces) : un mot seul (otp, pin, iban, cvc...) ou deux mots accolés
+    // (card + number, cc + number, security + code) ; « cc » seul (copie d'un courriel) n'est pas un secret.
+    const SENSITIVE_WORDS = new Set(["cvc", "cvv", "cvv2", "csc", "cvn", "ccv", "otp", "totp", "hotp", "pin", "iban",
+        "pincode", "otpcode", "cardnumber", "cardnum", "cardno", "ccnumber", "ccnum", "ccno", "creditcard",
+        "securitycode", "cardcode", "cardcvc", "cardcvv", "cardcsc", "cccsc", "cccvc", "cccvv"]);
+    function sensitiveName(text) {
+        const raw = String(text || "");
+        if (SENSITIVE_NAME.test(raw)) return true;
+        const words = raw.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+            .toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+        return words.some((w, i) => SENSITIVE_WORDS.has(w) || (i > 0 && SENSITIVE_WORDS.has(words[i - 1] + w)));
+    }
     const MASKED_VALUE = "[valeur masquée]";
     function sensitiveField(el) {
         if (!el || typeof el !== "object") return false;
@@ -41,7 +53,7 @@ function agyLocatorKit(install) {
         if (auto.toLowerCase().split(/\s+/).some(t => SENSITIVE_AUTOCOMPLETE.has(t))) return true;
         const tag = tagOf(el);
         if (tag && tag !== "INPUT" && tag !== "TEXTAREA") return false;
-        return SENSITIVE_NAME.test(String(attr(el, "name") || "") + " " + String(attr(el, "id") || ""));
+        return sensitiveName(String(attr(el, "name") || "") + " " + String(attr(el, "id") || ""));
     }
     function norm(value) {
         return String(value === undefined || value === null ? "" : value).replace(/[\s ]+/g, " ").trim();
@@ -565,7 +577,7 @@ function agyLocatorKit(install) {
     }
 
     const api = { norm, pattern, matches, isVisible, roleOf, implicitRole, accessibleName, labelTexts, checkedOf, disabledOf,
-        collect, query, describe, frameOfEl, walk, contentText, sensitiveField, MASKED_VALUE };
+        collect, query, describe, frameOfEl, walk, contentText, sensitiveField, sensitiveName, MASKED_VALUE };
     // install=true (repli chrome.scripting sans débogueur) : rangé dans la page, renvoie true (sérialisable).
     if (!install) return api;
     try { (typeof window !== "undefined" ? window : globalThis).__nexusBrowserLocatorKit = api; } catch (_) {}

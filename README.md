@@ -14,7 +14,7 @@ the user's own Chrome (their sessions, their extensions) through one shared loca
 `nexus-browser`. Each agent works in its own background tabs, grouped under its name, with real (trusted) mouse
 and keyboard events sent through the Chrome DevTools Protocol, while the user keeps working in their own tabs.
 
-Version 2.8.1 · Windows 10/11 · Chrome 116+ · Python 3.14 · MIT licence
+Version 2.9.0 · Windows 10/11 · Chrome 116+ · Python 3.14 · MIT licence
 
 Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
 ([Claude](https://github.com/pironjulien/claude-windows-computer-use) ·
@@ -82,7 +82,8 @@ pwsh -NoProfile -File install.ps1
 - MCP server `nexus-browser` registered for Claude Code, Codex and Antigravity when they are installed, each with
   `NEXUS_BROWSER_AGENT` set to its name (default tab group).
 - When the bridge has to relaunch Chrome, it uses the `Default` profile; extra Chrome flags (language...)
-  can be added with the `NEXUS_CHROME_EXTRA_ARGS` environment variable (flags only, code-loading flags ignored).
+  can be added with the `NEXUS_CHROME_EXTRA_ARGS` environment variable (allowlist: `--lang`, `--accept-lang`,
+  `--variations-override-country`, `--disable-features=Glic…`, `--force-dark-mode`; anything else is ignored).
 - Migration from the former "Antigravity Browser Bridge": its task (same ports) and native host
   `com.nexusagy.bridge_auth` are removed.
 
@@ -141,8 +142,9 @@ to the author or to any third party.
 
 - **What it reads**: in the tabs the agent opened (or a tab of yours you explicitly let it adopt): page text and
   accessibility tree, screenshots, console logs, network requests (headers and secret fields masked), cookies when
-  `browser_get_cookies` is called. Password, code and card values are masked in reads; `browser_eval` and
-  `browser_cdp_send` do have full access to the page.
+  `browser_get_cookies` is called. Password, code and card values are masked in reads and drawn as dots in
+  screenshots and PDFs (every frame, cross-origin ones included); console logs are masked like network bodies;
+  `browser_eval` and `Runtime.evaluate` through `browser_cdp_send` do have full access to the page.
 - **Network**: pages are loaded by your own Chrome with your own sessions, as if you browsed them. Exports (Google
   Docs, Sheets, Slides, YouTube transcripts) are fetched from those sites in your session.
 - **Where it goes**: tool results are returned to the AI client you connected (Antigravity, Claude, Codex…), which

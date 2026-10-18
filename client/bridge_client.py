@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -214,34 +215,33 @@ def get_chrome_executable() -> Path | None:
     return None
 
 
-# Relance de Chrome : profil par défaut seulement. Arguments en plus (langue...) : variable d'environnement
-# NEXUS_CHROME_EXTRA_ARGS, des drapeaux « --nom » ou « --nom=valeur » séparés par des espaces ; tout autre élément et
-# les drapeaux qui chargent ou exécutent du code sont ignorés.
+# Relance de Chrome : profil par défaut seulement. Arguments en plus : variable d'environnement
+# NEXUS_CHROME_EXTRA_ARGS, des drapeaux séparés par des espaces, pris dans une LISTE BLANCHE (langue, pays des
+# variations, thème sombre, fonctions Glic désactivées) ; tout autre élément est ignoré (une liste noire laissait passer
+# des drapeaux qui affaiblissent Chrome, comme --disable-web-security ; audit du 18/10).
 CHROME_BASE_ARGS: tuple[str, ...] = ("--profile-directory=Default",)
 EXTRA_ARGS_VARIABLE = "NEXUS_CHROME_EXTRA_ARGS"
-_REFUSED_FLAG_PREFIXES = (
-    "--load-extension",
-    "--disable-extensions-except",
-    "--remote-debugging",
-    "--renderer-cmd-prefix",
-    "--utility-cmd-prefix",
-    "--gpu-launcher",
-    "--browser-subprocess-path",
-    "--user-data-dir",
-    "--profile-directory",
-    "--no-sandbox",
-)
+_ALLOWED_FLAGS: dict[str, re.Pattern[str] | None] = {
+    "--lang": re.compile(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*"),
+    "--accept-lang": re.compile(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*(,[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*)*"),
+    "--variations-override-country": re.compile(r"[A-Za-z]{2}"),
+    "--disable-features": re.compile(r"Glic\w*(,Glic\w*)*"),
+    "--force-dark-mode": None,
+}
 
 
 def chrome_extra_args(value: str | None = None) -> list[str]:
-    """Drapeaux supplémentaires lus dans NEXUS_CHROME_EXTRA_ARGS (vide par défaut), filtrés."""
+    """Drapeaux supplémentaires lus dans NEXUS_CHROME_EXTRA_ARGS (vide par défaut), liste blanche seulement."""
     raw = os.environ.get(EXTRA_ARGS_VARIABLE, "") if value is None else value
     accepted: list[str] = []
     for item in raw.split():
-        name = item.split("=", 1)[0].lower()
-        if not item.startswith("--") or len(name) < 3 or name.startswith(_REFUSED_FLAG_PREFIXES):
+        name, sep, flag_value = item.partition("=")
+        if name not in _ALLOWED_FLAGS:
             continue
-        accepted.append(item)
+        expected = _ALLOWED_FLAGS[name]
+        valid = not sep if expected is None else bool(sep) and expected.fullmatch(flag_value) is not None
+        if valid:
+            accepted.append(item)
     return accepted
 
 

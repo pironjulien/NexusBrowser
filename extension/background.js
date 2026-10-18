@@ -18,7 +18,8 @@ const AGY_FEATURES = [
     "tab-ownership", "cdp-allowlist", "isolated-world", "body-masking", "cookie-names-only", "stop-cancel",
     "network-record", "control-panel", "page-coordinates-capture",
     "orphan-tabs", "cdp-page-world", "local-cookie-values", "body-masking-allowlist",
-    "sensitive-field-masking", "cdp-reload-no-script", "ax-value-masking", "capture-screencast"
+    "sensitive-field-masking", "cdp-reload-no-script", "ax-value-masking", "capture-screencast",
+    "capture-field-masking", "console-masking"
 ];
 
 let attachedDebuggers = new Set();
@@ -3481,7 +3482,9 @@ async function getAccessibilityTree(params = {}) {
 
 async function getConsoleLogs(params = {}) {
     let tabId = await resolveTargetTab(params);
-    return { data: tabConsoleLogs.get(tabId) || [] };
+    // Messages de la console : mêmes règles que les corps réseau (jetons, mots de passe, cartes), à toute profondeur
+    // (texte, arguments, aperçus d'objets { name, value }).
+    return { data: (tabConsoleLogs.get(tabId) || []).map(entry => maskLogValue(entry)) };
 }
 
 async function getPageContent(params = {}) {
@@ -4109,27 +4112,94 @@ const SCREENSHOT_FORMATS = { png: "image/png", jpeg: "image/jpeg", jpg: "image/j
 /**
  * Boîte d'un élément (repère de la vue, getBoundingClientRect) -> zone de Page.captureScreenshot, en repère de la
  * PAGE : défilement ajouté (Page.getLayoutMetrics, comme Puppeteer), sinon la capture d'une page défilée rognait
- * à côté de l'élément. Partie hors du document (x ou y négatif) retirée.
+ * à côté de l'élément, puis zoom de la page appliqué. Partie hors du document (x ou y négatif) retirée.
  */
 async function pageClip(target, rect) {
     let pageX = 0;
     let pageY = 0;
+    let zoom = 1;
     try {
         const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
         const view = metrics?.cssVisualViewport || metrics?.visualViewport || metrics?.cssLayoutViewport || metrics?.layoutViewport || {};
         pageX = Number(view.pageX) || 0;
         pageY = Number(view.pageY) || 0;
+        // Zoom de la page (Ctrl + molette, zoom par défaut de Chrome) : la zone de capture est en pixels non zoomés.
+        // Sans lui, Chrome à 90 % rognait à côté de l'élément (image blanche ; mesuré le 18/10).
+        zoom = Number(metrics?.cssVisualViewport?.zoom) > 0 ? Number(metrics.cssVisualViewport.zoom) : 1;
     } catch (_) {}
-    let x = Number(rect.x) + pageX;
-    let y = Number(rect.y) + pageY;
-    let width = Number(rect.width);
-    let height = Number(rect.height);
+    let x = (Number(rect.x) + pageX) * zoom;
+    let y = (Number(rect.y) + pageY) * zoom;
+    let width = Number(rect.width) * zoom;
+    let height = Number(rect.height) * zoom;
     if (x < 0) { width += x; x = 0; }
     if (y < 0) { height += y; y = 0; }
     return {
         x: Math.round(x), y: Math.round(y),
         width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)), scale: 1
     };
+}
+
+/**
+ * Champs sensibles (mot de passe affiché par un bouton « afficher », carte, code) rendus en disques le temps d'une
+ * capture ou d'un PDF : -webkit-text-security posé en style en ligne dans tous les cadres (composants et cadres
+ * same-origin compris, cadres d'une autre origine par leur propre contexte), puis l'ancien style remis. État gardé
+ * dans le monde isolé de l'extension : la page ne le voit pas. Renvoie le nombre de champs masqués (on) ou rendus.
+ */
+function captureMaskScript(on) {
+    return `(() => {
+        const lk = ${SENSITIVE_FIELD_EXPR};
+        const saved = globalThis.__nexusCaptureMask || (globalThis.__nexusCaptureMask = []);
+        const P = "-webkit-text-security";
+        if (!${on ? "true" : "false"}) {
+            const n = saved.length;
+            for (const [el, value, priority] of saved.splice(0)) {
+                try { if (value) el.style.setProperty(P, value, priority); else el.style.removeProperty(P); } catch (_) {}
+            }
+            return n;
+        }
+        const seen = new Set(saved.map(s => s[0]));
+        const visit = (root) => {
+            if (!root || !root.querySelectorAll) return;
+            for (const el of root.querySelectorAll("*")) {
+                if (el.shadowRoot) visit(el.shadowRoot);
+                if (String(el.tagName).toUpperCase() === "IFRAME") {
+                    let doc = null;
+                    try { doc = el.contentDocument; } catch (_) {}
+                    visit(doc);
+                }
+                if (seen.has(el) || !el.style || String(el.type || "").toLowerCase() === "password") continue;
+                if (!lk.sensitiveField(el)) continue;
+                saved.push([el, el.style.getPropertyValue(P), el.style.getPropertyPriority(P)]);
+                seen.add(el);
+                el.style.setProperty(P, "disc", "important");
+            }
+        };
+        visit(document);
+        return saved.length;
+    })()`;
+}
+
+async function maskSensitiveFields(tabId, on) {
+    const code = captureMaskScript(on);
+    const top = await evaluateIsolated({ tabId, code });
+    if (on && typeof top?.data !== "number") {
+        // Boîte de dialogue ou script refusé : aucune image d'une page dont les champs n'ont pas pu être masqués.
+        throw new Error("Capture refusée : champs sensibles impossibles à masquer dans la page " +
+            "(boîte de dialogue ouverte ? browser_handle_dialog)");
+    }
+    let count = Number(top?.data) || 0;
+    for (const { value } of await crossOriginFrameEvaluations(tabId, code)) count += Number(value) || 0;
+    return count;
+}
+
+/** work() (capture, PDF) exécuté avec les champs sensibles masqués dans l'image, puis remis comme avant. */
+async function withSensitiveFieldsMasked(tabId, work) {
+    await maskSensitiveFields(tabId, true);
+    try {
+        return await work();
+    } finally {
+        await maskSensitiveFields(tabId, false).catch(() => {});
+    }
 }
 
 /**
@@ -4203,18 +4273,18 @@ async function takeScreenshot(params = {}) {
         });
         if (elRect?.data) {
             const clip = await pageClip(target, elRect.data);
-            const shot = await captureScreenshot(target, {
+            const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, {
                 format: cdpFormat,
                 clip,
                 captureBeyondViewport: true
-            });
+            }));
             return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip } };
         } else {
             return { error: "Element not found for screenshot selector: " + params.selector };
         }
     }
 
-    const shot = await captureScreenshot(target, { format: cdpFormat });
+    const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, { format: cdpFormat }));
     return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType } };
 }
 
@@ -4225,14 +4295,14 @@ async function printToPdf(params = {}) {
     let tabId = await resolveTargetTab(params);
 
     const target = await ensureDebugger(tabId);
-    const pdfData = await chrome.debugger.sendCommand(target, "Page.printToPDF", {
+    const pdfData = await withSensitiveFieldsMasked(tabId, () => chrome.debugger.sendCommand(target, "Page.printToPDF", {
         landscape: params.landscape || false,
         displayHeaderFooter: params.displayHeaderFooter || false,
         printBackground: true,
         scale: params.scale !== undefined ? Number(params.scale) : 1.0,
         paperWidth: params.paperWidth !== undefined ? Number(params.paperWidth) : 8.27,
         paperHeight: params.paperHeight !== undefined ? Number(params.paperHeight) : 11.69
-    });
+    }));
 
     return { data: { pdfBase64: pdfData.data, mimeType: "application/pdf" } };
 }
@@ -4309,6 +4379,7 @@ function cdpRefusal(method, commandParams) {
 }
 
 const CDP_WORLDS = new Set(["isolated", "page"]);
+const CDP_IMAGE_METHODS = new Set(["Page.captureScreenshot", "Page.printToPDF"]);
 
 async function sendCdpCommand(params) {
     const refusal = cdpRefusal(params.method, params.commandParams);
@@ -4336,7 +4407,9 @@ async function sendCdpCommand(params) {
         return { data: { ...result, world } };
     }
     if (method.startsWith("Input.")) assertNotStopped();
-    const result = await chrome.debugger.sendCommand(target, method, commandParams);
+    // Image brute (capture, PDF) : champs sensibles masqués comme dans browser_screenshot et browser_pdf.
+    const send = () => chrome.debugger.sendCommand(target, method, commandParams);
+    const result = CDP_IMAGE_METHODS.has(method) ? await withSensitiveFieldsMasked(tabId, send) : await send();
     return { data: result };
 }
 
@@ -4513,9 +4586,9 @@ async function visionInspect(params = {}) {
     await new Promise(r => setTimeout(r, 50));
 
     // 3. High-res visual screenshot
-    const shot = await captureScreenshot(target, {
+    const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, {
         format: "png"
-    });
+    }));
 
     // 4. Clean up visual marker badges from DOM (keeps window.__nexus_som_elements for clickMark)
     await evaluateIsolated({
@@ -4670,7 +4743,7 @@ function maskParams(text) {
         if (eq <= 0) return part;
         let name = part.slice(0, eq);
         try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch (_) {}
-        return SECRET_URL_PARAM.test(name) ? `${part.slice(0, eq)}=[masqué]` : part;
+        return SECRET_URL_PARAM.test(name) || LK.sensitiveName(name) ? `${part.slice(0, eq)}=[masqué]` : part;
     }).join("&");
 }
 
@@ -4959,6 +5032,9 @@ function secretLooking(value) {
 function secretBodyKey(name, value) {
     const key = String(name ?? "");
     if (SECRET_BODY_ALLOWED.test(key)) return typeof value === "string" && KNOWN_SECRET_VALUE.test(value.trim());
+    // Carte, cryptogramme, code à usage unique, PIN, IBAN (cardNumber, cc_number, securityCode...) : mêmes noms que les
+    // champs de formulaire masqués dans les lectures.
+    if (LK.sensitiveName(key)) return true;
     const counter = TOKEN_COUNTER_KEY.test(key);
     const numeric = value === null || typeof value === "number" || typeof value === "boolean"
         || (typeof value === "string" && /^\s*\d+(\.\d+)?\s*$/.test(value));
@@ -5040,6 +5116,30 @@ function maskSecretBody(text, mimeType = "") {
         return `${head}[masqué]`;
     });
     return { text: out, count: counter.count };
+}
+
+// Identifiants connus cités au milieu d'un texte (« Authorization: Bearer ... », jeton GitHub dans un message).
+const EMBEDDED_SECRET = /\b(Bearer|Basic)\s+[\w.~+\/=-]{8,}|\b(ya29\.|gh[pousr]_|github_pat_|glpat-|sk-|sk_(live|test)_|rk_(live|test)_|xox[abprs]-|AIza)[\w.-]{8,}|\b(AKIA|ASIA)[0-9A-Z]{12}\b|\beyJ[\w-]+\.[\w-]+\.[\w-]+/g;
+
+function maskLogText(text) {
+    return maskSecretBody(text).text.replace(EMBEDDED_SECRET, match => `[masqué, ${match.length} caractères]`);
+}
+
+/** Entrée de console masquée : textes, clés secrètes, et paires { name, value } des aperçus d'objets CDP. */
+function maskLogValue(value, depth = 0) {
+    if (typeof value === "string") return maskLogText(value);
+    if (depth > 32 || value === null || typeof value !== "object") return value;
+    if (Array.isArray(value)) return value.map(item => maskLogValue(item, depth + 1));
+    const pair = typeof value.name === "string" && Object.prototype.hasOwnProperty.call(value, "value")
+        && value.value !== null && value.value !== undefined && value.value !== "" && secretBodyKey(value.name, value.value);
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+        if (pair && key === "value") out[key] = maskedValue(item);
+        else if (item !== null && item !== undefined && item !== "" && typeof item !== "object" && secretBodyKey(key, item)) {
+            out[key] = maskedValue(item);
+        } else out[key] = maskLogValue(item, depth + 1);
+    }
+    return out;
 }
 
 // -----------------------------------------------------------------------------

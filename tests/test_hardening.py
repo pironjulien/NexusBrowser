@@ -181,6 +181,22 @@ def test_chrome_extra_args_are_opt_in_and_filtered(monkeypatch):
     assert bridge_client.chrome_launch_args() == ["--profile-directory=Default", "--lang=en-US"]
 
 
+def test_chrome_extra_args_whitelist_keeps_julien_flags_only():
+    julien = (
+        "--lang=fr-FR --accept-lang=fr-FR,fr,en-US,en --variations-override-country=us "
+        "--disable-features=GlicCountryFiltering,GlicLocaleFiltering,GlicUseSessionCountryForFiltering"
+    )
+    assert bridge_client.chrome_extra_args(julien) == julien.split()
+    assert bridge_client.chrome_extra_args("--force-dark-mode") == ["--force-dark-mode"]
+    refused = (
+        "--disable-web-security --disable-site-isolation-trials --allow-running-insecure-content "
+        "--disable-features=IsolateOrigins,site-per-process --disable-features=GlicX,IsolateOrigins "
+        "--lang=fr;calc --force-dark-mode=1 --lang --variations-override-country=usa --enable-features=Glic "
+        "--LANG=fr --proxy-server=http://x:1 --host-resolver-rules=MAP"
+    )
+    assert bridge_client.chrome_extra_args(refused) == []
+
+
 def test_extension_not_connected_is_reported_clearly(monkeypatch):
     body = json.dumps({"success": False, "error": "No Chrome browser extension connected to Nexus Browser Bridge."})
 

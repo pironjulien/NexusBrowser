@@ -1,6 +1,6 @@
 [project]
 name = "nexus-browser"
-version = "2.8.1"
+version = "2.9.0"
 description = "Pont Chrome commun à Antigravity, Claude et Codex : extension, pont local authentifié et serveur MCP nexus-browser"
 requires-python = ">=3.10"
 dependencies = [
