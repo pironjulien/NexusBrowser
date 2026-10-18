@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `SECURITY.md`: private vulnerability reporting.
 
+### Changed
+
+- Repository renamed to `pironjulien/NexusBrowser`; GitHub redirects the old address.
+
 ## [2.9.0] - 2026-10-18 — Secrets masked in images and console logs
 
 Re-run `install.ps1`, then RELOAD the extension (capabilities `capture-field-masking` and `console-masking`

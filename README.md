@@ -1,7 +1,7 @@
 # NexusBrowser
 
-[![Release](https://img.shields.io/github/v/release/pironjulien/chrome-computer-use)](https://github.com/pironjulien/chrome-computer-use/releases)
-[![Tests](https://github.com/pironjulien/chrome-computer-use/actions/workflows/tests.yml/badge.svg)](https://github.com/pironjulien/chrome-computer-use/actions/workflows/tests.yml)
+[![Release](https://img.shields.io/github/v/release/pironjulien/NexusBrowser)](https://github.com/pironjulien/NexusBrowser/releases)
+[![Tests](https://github.com/pironjulien/NexusBrowser/actions/workflows/tests.yml/badge.svg)](https://github.com/pironjulien/NexusBrowser/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](extension/manifest.json)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-blue?logo=python&logoColor=white)](pyproject.toml)
@@ -17,11 +17,11 @@ and keyboard events sent through the Chrome DevTools Protocol, while the user ke
 Version 2.9.0 · Windows 10/11 · Chrome 116+ · Python 3.14 · MIT licence
 
 Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
-([Claude](https://github.com/pironjulien/claude-windows-computer-use) ·
-[Codex](https://github.com/pironjulien/codex-windows-computer-use) ·
-[Antigravity](https://github.com/pironjulien/antigravity-windows-computer-use)),
-[NexusBrowser](https://julienpiron.fr/nexusbrowser/) ([repo](https://github.com/pironjulien/chrome-computer-use)),
-[NexusAndroid](https://julienpiron.fr/nexusandroid/) ([repo](https://github.com/pironjulien/android-computer-use)).
+([Claude](https://github.com/pironjulien/NexusWindows-Claude) ·
+[Codex](https://github.com/pironjulien/NexusWindows-Codex) ·
+[Antigravity](https://github.com/pironjulien/NexusWindows-Antigravity)),
+[NexusBrowser](https://julienpiron.fr/nexusbrowser/) ([repo](https://github.com/pironjulien/NexusBrowser)),
+[NexusAndroid](https://julienpiron.fr/nexusandroid/) ([repo](https://github.com/pironjulien/NexusAndroid)).
 Project page: [julienpiron.fr/nexusbrowser](https://julienpiron.fr/nexusbrowser/).
 
 ## Why
@@ -69,8 +69,8 @@ bridge shared by several agents.
 Requirements: Windows 10 or 11, Chrome, [uv](https://docs.astral.sh/uv/), Python 3.14.
 
 ```powershell
-git clone https://github.com/pironjulien/chrome-computer-use.git
-cd chrome-computer-use
+git clone https://github.com/pironjulien/NexusBrowser.git
+cd NexusBrowser
 pwsh -NoProfile -File install.ps1
 ```
 
