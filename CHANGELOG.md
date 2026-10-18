@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Every MCP tool has a readable `title` in its annotations, next to its four hints.
+- Startup test: the MCP server answers `initialize` and `tools/list` with no Chrome, bridge or extension, on Windows
+  and on Linux (as MCP directories such as Glama check it); outside Windows the emergency stop keeps watching its
+  file and skips the global hotkey.
+- GitHub Actions: `test.ps1` on Windows and the startup test on Linux, with a Tests badge; `glama.json`.
+- README: Privacy section.
+
 ### Changed
 - Published as NexusBrowser in the public repository `pironjulien/chrome-computer-use` (formerly
   `antigravity-chrome-sidepanel`, then `antigravity-browser-use`; GitHub redirects the old URLs). README rewritten in

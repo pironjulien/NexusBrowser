@@ -89,6 +89,11 @@ PAGE_ACTION = ToolAnnotations(read_only_hint=False, destructive_hint=True, idemp
 TAB_CLOSE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False)
 
 
+def _titled(hints: ToolAnnotations, title: str) -> ToolAnnotations:
+    """Mêmes indications, avec le titre lisible de l'outil (affiché par les clients et les annuaires MCP)."""
+    return hints.model_copy(update={"title": title})
+
+
 CAPTURE_KEYS = {"screenshot": "dataUrl", "pdf": "pdfBase64", "vision-inspect": "screenshotDataUrl"}
 SCREENSHOT_CACHE_MAX_FILES = 50
 SCREENSHOT_CACHE_MAX_AGE_S = 24 * 3600.0
@@ -197,7 +202,7 @@ def _call_bridge(
         return json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False)
 
 
-@browser_mcp.tool(annotations=LOCAL_READ)
+@browser_mcp.tool(annotations=_titled(LOCAL_READ, "List tabs"))
 def browser_list_tabs() -> str:
     """Liste les onglets ouverts dans Chrome (id, titre, URL) et, pour chacun, l'agent qui le pilote (owner), s'il est
     à CETTE session (mine) et son état (state) : "mine" (à cette session), "orphan" (orphelin de mon agent : session
@@ -206,20 +211,20 @@ def browser_list_tabs() -> str:
     return _call_bridge("list-tabs")
 
 
-@browser_mcp.tool(annotations=LOCAL_READ)
+@browser_mcp.tool(annotations=_titled(LOCAL_READ, "Active tab"))
 def browser_active_tab() -> str:
     """Identité (id, titre, URL) de l'onglet actif de Julien, en lecture seule : il reste à Julien (pour agir dessus
     à sa demande explicite : browser_adopt_tab)."""
     return _call_bridge("active-tab")
 
 
-@browser_mcp.tool(annotations=TAB_CHANGE)
+@browser_mcp.tool(annotations=_titled(TAB_CHANGE, "Select tab"))
 def browser_select_tab(tab_id: TabId) -> str:
     """Active et met au premier plan l'onglet de cette session (vole le focus de Julien : seulement à sa demande)."""
     return _call_bridge("select-tab", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_CHANGE)
+@browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "New background tab"))
 def browser_new_tab(
     url: str | None = None,
     background: bool = True,
@@ -240,7 +245,7 @@ def browser_new_tab(
     return _call_bridge("create-tab", params)
 
 
-@browser_mcp.tool(annotations=TAB_CHANGE)
+@browser_mcp.tool(annotations=_titled(TAB_CHANGE, "Adopt a user tab"))
 def browser_adopt_tab(tab_id: int, julien_asked: bool = False) -> str:
     """Prend la main sur un onglet de JULIEN (aucun agent ne le pilote) : refusé par défaut. julien_asked=True
     seulement quand Julien a demandé explicitement d'agir dans CET onglet. L'adoption est affichée dans le poste de
@@ -252,14 +257,14 @@ def browser_adopt_tab(tab_id: int, julien_asked: bool = False) -> str:
     return _call_bridge("adopt-tab", {"tab_id": tab_id, "julienAsked": bool(julien_asked)})
 
 
-@browser_mcp.tool(annotations=TAB_CHANGE)
+@browser_mcp.tool(annotations=_titled(TAB_CHANGE, "Release an adopted tab"))
 def browser_release_tab(tab_id: TabId) -> str:
     """Rend l'onglet à Julien sans le fermer (propriété retirée, débogueur détaché). Pour un onglet adopté, ou un
     onglet orphelin de mon agent."""
     return _call_bridge("release-tab", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=TAB_CHANGE)
+@browser_mcp.tool(annotations=_titled(TAB_CHANGE, "Group tabs"))
 def browser_group_tabs(
     tab_ids: list[int],
     title: str = AGENT_NAME,
@@ -275,32 +280,32 @@ def browser_group_tabs(
     return _call_bridge("group-tabs", {"tabIds": tab_ids, "title": title, "color": color, "collapsed": collapsed})
 
 
-@browser_mcp.tool(annotations=TAB_CLOSE)
+@browser_mcp.tool(annotations=_titled(TAB_CLOSE, "Close tab"))
 def browser_close_tab(tab_id: TabId) -> str:
     """Ferme l'onglet tab_id de cette session (ou un onglet orphelin de mon agent)."""
     return _call_bridge("close-tab", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_CHANGE)
+@browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "Reload page"))
 def browser_reload(tab_id: TabId, bypass_cache: bool = False) -> str:
     """Recharge la page de l'onglet tab_id."""
     return _call_bridge("reload", {"tab_id": tab_id, "bypassCache": bypass_cache})
 
 
-@browser_mcp.tool(annotations=PAGE_CHANGE)
+@browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "Navigate"))
 def browser_navigate(url: str, tab_id: TabId) -> str:
     """Navigue vers l'URL (http, https, data: ou about:blank ; jamais file:// ni chrome://) dans l'onglet tab_id."""
     return _call_bridge("navigate", {"url": url, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Wait for page load"))
 def browser_wait_load(tab_id: TabId, timeout_ms: int = 10000) -> str:
     """Attend la stabilisation et l'état complet du document (document.readyState === 'complete').
     timeout_ms : 115 000 au plus (limite du pont), la réponse est attendue timeout_ms + 5 s."""
     return _call_bridge("wait-load", {"timeout": timeout_ms, "tab_id": tab_id}, wait_ms=timeout_ms)
 
 
-@browser_mcp.tool(annotations=PAGE_CHANGE)
+@browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "Hover"))
 def browser_hover(
     selector: str | None = None,
     text: str | None = None,
@@ -332,7 +337,7 @@ def browser_hover(
     return _call_bridge("hover", params, wait_ms=timeout_ms)
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Click"))
 def browser_click(
     selector: str | None = None,
     text: str | None = None,
@@ -385,7 +390,7 @@ def browser_click(
     return _call_bridge("click", params, wait_ms=timeout_ms)
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Click by role and name"))
 def browser_semantic_click(
     role: str | None = None,
     name: str | None = None,
@@ -403,7 +408,7 @@ def browser_semantic_click(
     return _call_bridge("semantic-click", params)
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Fill a field"))
 def browser_fill(
     selector: str | None = None,
     value: str = "",
@@ -448,7 +453,7 @@ def browser_fill(
     return _call_bridge("fill", params, wait_ms=timeout_ms)
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Fill a field by label"))
 def browser_semantic_fill(
     label: str | None = None,
     value: str = "",
@@ -472,7 +477,7 @@ def browser_semantic_fill(
     return _call_bridge("semantic-fill", params)
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Select an option"))
 def browser_select_option(
     selector: str | None = None,
     text: str | None = None,
@@ -490,7 +495,7 @@ def browser_select_option(
     return _call_bridge("select-option", params)
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Check or uncheck"))
 def browser_check(
     locator: dict | None = None,
     checked: bool = True,
@@ -513,7 +518,7 @@ def browser_check(
     return _call_bridge("check", params, wait_ms=timeout_ms)
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Find elements"))
 def browser_find(locator: dict, limit: int = 20, *, tab_id: TabId) -> str:
     """Liste, sans agir, les éléments qui correspondent à un localisateur (voir browser_click) dans tous les cadres.
 
@@ -524,7 +529,7 @@ def browser_find(locator: dict, limit: int = 20, *, tab_id: TabId) -> str:
     return _call_bridge("find", {"locator": _locator(locator), "limit": limit, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Press a key"))
 def browser_press_key(key: str, *, tab_id: TabId) -> str:
     """Presse une touche ou un raccourci réel via CDP sur l'élément qui a le focus : Enter, Escape, Tab, Backspace,
     ArrowDown, F5, ou combinaison "Control+A", "Shift+Tab", "Control+Shift+K" (key, code, windowsVirtualKeyCode,
@@ -532,7 +537,7 @@ def browser_press_key(key: str, *, tab_id: TabId) -> str:
     return _call_bridge("press-key", {"key": key, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Type text"))
 def browser_type_keys(
     text: str,
     *,
@@ -555,7 +560,7 @@ def browser_type_keys(
     return _call_bridge("type-keys", params)
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Answer a dialog"))
 def browser_handle_dialog(accept: bool, prompt_text: str | None = None, *, tab_id: TabId) -> str:
     """Répond à la boîte de dialogue JavaScript (alert, confirm, prompt, beforeunload) ouverte dans l'onglet tab_id
     (jamais la boîte d'un autre onglet).
@@ -568,13 +573,13 @@ def browser_handle_dialog(accept: bool, prompt_text: str | None = None, *, tab_i
     return _call_bridge("handle-dialog", {"accept": accept, "promptText": prompt_text or "", "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=LOCAL_READ)
+@browser_mcp.tool(annotations=_titled(LOCAL_READ, "Download status"))
 def browser_download_status(limit: int = 5) -> str:
     """Liste les téléchargements Chrome récents (nom, état, octets reçus, danger) pour suivre un fichier téléchargé."""
     return _call_bridge("download-status", {"limit": limit})
 
 
-@browser_mcp.tool(annotations=LOCAL_READ)
+@browser_mcp.tool(annotations=_titled(LOCAL_READ, "Wait for a download"))
 def browser_wait_download(tab_id: TabId, timeout_ms: int = 30000, since_ms: int | None = None) -> str:
     """Attend la fin d'un téléchargement déclenché dans l'onglet (clic sur un lien...) et renvoie son chemin (path),
     sa taille (bytes) et son type (mime). Candidats : téléchargements commencés depuis la dernière action de l'agent
@@ -586,7 +591,7 @@ def browser_wait_download(tab_id: TabId, timeout_ms: int = 30000, since_ms: int 
     return _call_bridge("wait-download", params, wait_ms=timeout_ms)
 
 
-@browser_mcp.tool(annotations=TAB_CHANGE)
+@browser_mcp.tool(annotations=_titled(TAB_CHANGE, "Record network"))
 def browser_network_record(tab_id: TabId, duration_s: int = 120) -> str:
     """Démarre (ou prolonge) l'enregistrement réseau de l'onglet pour duration_s secondes (600 au plus) : le
     débogueur reste attaché jusque-là, même sans commande. Arrêter plus tôt avec browser_network_stop. Sans
@@ -594,13 +599,13 @@ def browser_network_record(tab_id: TabId, duration_s: int = 120) -> str:
     return _call_bridge("network-record", {"tab_id": tab_id, "durationS": duration_s})
 
 
-@browser_mcp.tool(annotations=TAB_CHANGE)
+@browser_mcp.tool(annotations=_titled(TAB_CHANGE, "Stop network recording"))
 def browser_network_stop(tab_id: TabId) -> str:
     """Arrête l'enregistrement réseau et détache le débogueur de l'onglet (le journal déjà lu reste consultable)."""
     return _call_bridge("network-stop", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "List network requests"))
 def browser_network_requests(
     tab_id: TabId,
     filter: str | None = None,
@@ -633,7 +638,7 @@ def browser_network_requests(
     return _call_bridge("network-requests", params)
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Network response body"))
 def browser_network_response(
     request_id: str,
     *,
@@ -650,7 +655,7 @@ def browser_network_response(
     return _call_bridge("network-response", params)
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Upload a file"))
 def browser_upload(files: list[str], selector: str | None = None, *, tab_id: TabId) -> str:
     """Téléverse un ou plusieurs fichiers (ex: .aab, .apk, .zip) sans ouvrir ni bloquer sur la boîte de dialogue native
     Windows. Refusé (par le pont lui-même) pour tout fichier d'un dossier de secrets : ~/.nexus, ~/.nexusagy, ~/.ssh,
@@ -659,7 +664,7 @@ def browser_upload(files: list[str], selector: str | None = None, *, tab_id: Tab
     return _call_bridge("upload", {"files": files, "selector": selector, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Marked screenshot"))
 def browser_vision_inspect(tab_id: TabId, output_path: str | None = None, inline: bool = False) -> str:
     """Pose des badges numérotés Set-of-Mark (SoM) sur les éléments interactifs et capture la vue pour une analyse
     visuelle ; les numéros servent ensuite à browser_click(mark=N).
@@ -673,19 +678,19 @@ def browser_vision_inspect(tab_id: TabId, output_path: str | None = None, inline
     return _call_bridge("vision-inspect", {"output": output, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Click a mark"))
 def browser_click_mark(mark: int, *, tab_id: TabId) -> str:
     """Clique (vrai clic de souris CDP) sur l'élément du badge Set-of-Mark (SoM), au centre ou au premier point dégagé."""
     return _call_bridge("click-mark", {"mark": mark, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Check a handoff"))
 def browser_check_handoff(tab_id: TabId) -> str:
     """Détecte proactivement la présence d'un écran 2FA (SMS, Google Authenticator), CAPTCHA ou Cloudflare Turnstile."""
     return _call_bridge("check-handoff", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Page content"))
 def browser_content(tab_id: TabId, mode: str = "interactive") -> str:
     """Extrait le contenu de la page web. Modes disponibles : interactive (éléments cliquables/inputs), text (texte brut),
     html (DOM). Valeur d'un mot de passe, d'un code à usage unique ou d'une carte bancaire jamais renvoyée :
@@ -693,20 +698,20 @@ def browser_content(tab_id: TabId, mode: str = "interactive") -> str:
     return _call_bridge("content", {"mode": mode, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Accessibility tree"))
 def browser_axtree(tab_id: TabId) -> str:
     """Extrait l'arbre d'accessibilité sémantique complet (AXTree) de la page via CDP. Valeur d'un mot de passe, d'un
     code à usage unique ou d'une carte bancaire : "[valeur masquée]"."""
     return _call_bridge("axtree", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Console logs"))
 def browser_logs(tab_id: TabId) -> str:
     """Récupère le flux d'erreurs et messages de la console DevTools de l'onglet."""
     return _call_bridge("logs", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Screenshot"))
 def browser_screenshot(
     tab_id: TabId,
     output_path: str | None = None,
@@ -733,13 +738,13 @@ def browser_screenshot(
     return _call_bridge("screenshot", params)
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Save page as PDF"))
 def browser_pdf(output_path: str, *, tab_id: TabId) -> str:
     """Génère un export PDF vectoriel A4 haute fidélité de la page de l'onglet."""
     return _call_bridge("pdf", {"output": output_path, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Run JavaScript"))
 def browser_eval(script: str, *, tab_id: TabId) -> str:
     """Exécute une expression JavaScript dans le MONDE DE LA PAGE (ses variables et fonctions, comme la console
     DevTools) et renvoie le résultat. Seul outil à y exécuter du code : la page peut voir et fausser ce qui s'y passe.
@@ -752,13 +757,13 @@ def browser_eval(script: str, *, tab_id: TabId) -> str:
     return _call_bridge("eval", {"script": script, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_CHANGE)
+@browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "Scroll"))
 def browser_scroll(direction: str = "down", y: int = 400, *, tab_id: TabId) -> str:
     """Fait défiler la page web de y pixels vers le bas (down) ou le haut (up)."""
     return _call_bridge("scroll", {"direction": direction, "y": y, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Wait for network idle"))
 def browser_wait_network_idle(tab_id: TabId, idle_ms: int = 300, timeout_ms: int = 8000) -> str:
     """Attend la stabilisation des flux réseau (0 requête Fetch/XHR active pendant idle_ms).
 
@@ -770,7 +775,7 @@ def browser_wait_network_idle(tab_id: TabId, idle_ms: int = 300, timeout_ms: int
     )
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Read cookies"))
 def browser_get_cookies(tab_id: TabId, urls: list[str] | None = None, include_values: bool = False) -> str:
     """Liste les cookies de l'onglet (ou des urls) via CDP Network.getCookies : nom, domaine, chemin, expiration,
     httpOnly, secure, sameSite. Jamais leurs valeurs par défaut (secrets de session).
@@ -787,7 +792,7 @@ def browser_get_cookies(tab_id: TabId, urls: list[str] | None = None, include_va
     return _call_bridge("get-cookies", params)
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Send a CDP command"))
 def browser_cdp_send(
     method: str, params: dict | None = None, *, tab_id: TabId, world: Literal["isolated", "page"] = "isolated"
 ) -> str:
@@ -811,7 +816,7 @@ def browser_cdp_send(
     return _call_bridge("cdp-send", payload)
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Interactive elements map"))
 def browser_interactive_map(tab_id: TabId, viewport_only: bool = True, max_elements: int = 60) -> str:
     """Extrait une carte condensée des éléments interactifs visibles ([#1] bouton, [#2] input...).
 
@@ -825,7 +830,7 @@ def browser_interactive_map(tab_id: TabId, viewport_only: bool = True, max_eleme
     )
 
 
-@browser_mcp.tool(annotations=PAGE_ACTION)
+@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Drag and drop"))
 def browser_drag_and_drop(
     from_selector: str | None = None,
     to_selector: str | None = None,
@@ -954,7 +959,7 @@ def _finish_gsuite_export(max_chars: int) -> Callable[[Any], Any]:
     return finish
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Export page"))
 def browser_export(
     tab_id: TabId,
     format: str = "markdown",
@@ -979,7 +984,7 @@ def browser_export(
     return _call_bridge("export-content", params, timeout=30.0)
 
 
-@browser_mcp.tool(annotations=PAGE_READ)
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Export Google Docs, Sheets or Slides"))
 def browser_export_gsuite(
     tab_id: TabId,
     format: str | None = None,
@@ -1003,7 +1008,7 @@ def browser_export_gsuite(
     return _call_bridge("export-gsuite", params, timeout=60.0, finish=_finish_gsuite_export(max_chars))
 
 
-@browser_mcp.tool(annotations=PAGE_CHANGE)
+@browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "YouTube transcript"))
 def browser_export_youtube_transcript(
     tab_id: TabId,
     lang: str | None = None,

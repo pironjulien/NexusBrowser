@@ -1,6 +1,7 @@
 # NexusBrowser
 
 [![Release](https://img.shields.io/github/v/release/pironjulien/chrome-computer-use)](https://github.com/pironjulien/chrome-computer-use/releases)
+[![Tests](https://github.com/pironjulien/chrome-computer-use/actions/workflows/tests.yml/badge.svg)](https://github.com/pironjulien/chrome-computer-use/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](extension/manifest.json)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-blue?logo=python&logoColor=white)](pyproject.toml)
@@ -131,6 +132,30 @@ pwsh -NoProfile -File verify.ps1 -Browser  # task, native host, bridge reached, 
 ```
 
 `test.ps1` uses the environment created by `install.ps1`.
+
+## Privacy
+
+NexusBrowser runs entirely on your PC: a Chrome extension, a local bridge bound to `127.0.0.1` (authenticated by a
+local token) and an MCP server. It has no account, no telemetry, no analytics and no remote server; nothing is sent
+to the author or to any third party.
+
+- **What it reads**: in the tabs the agent opened (or a tab of yours you explicitly let it adopt): page text and
+  accessibility tree, screenshots, console logs, network requests (headers and secret fields masked), cookies when
+  `browser_get_cookies` is called. Password, code and card values are masked in reads; `browser_eval` and
+  `browser_cdp_send` do have full access to the page.
+- **Network**: pages are loaded by your own Chrome with your own sessions, as if you browsed them. Exports (Google
+  Docs, Sheets, Slides, YouTube transcripts) are fetched from those sites in your session.
+- **Where it goes**: tool results are returned to the AI client you connected (Antigravity, Claude, Codex…), which
+  may send them to its model provider under its own privacy policy.
+- **What it stores**, under `~/.nexus/nexus-browser/`: the Python environment, the bridge token, `bridge.log`
+  (connection and emergency-stop events, rotated at 1 MB, three backups), `install.log`, screenshots (at most 50,
+  each kept under 24 hours) and the exports you ask for. The extension keeps tab ownership in Chrome's session
+  storage, cleared when Chrome closes.
+- **Removing it**: remove the extension from Chrome, delete the scheduled task `Nexus Browser Bridge` and the
+  registry key `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth`, then delete
+  `~/.nexus/nexus-browser/`.
+
+Questions or concerns: open an issue on this repository.
 
 ## Limits
 

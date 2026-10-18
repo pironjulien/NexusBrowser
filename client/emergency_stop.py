@@ -21,6 +21,7 @@ import ctypes
 import json
 import os
 import re
+import sys
 import threading
 import time
 from ctypes import wintypes
@@ -180,6 +181,9 @@ def _watch(until: threading.Event) -> None:
 
 def _loop() -> None:
     global _failure
+    if sys.platform != "win32":  # pas de raccourci global hors Windows : le fichier ~/.nexus/stop reste surveillé
+        _tried.set()
+        return
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     user32.RegisterHotKey.argtypes = (wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT)
     user32.RegisterHotKey.restype = wintypes.BOOL

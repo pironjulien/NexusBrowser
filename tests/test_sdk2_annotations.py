@@ -41,10 +41,12 @@ def test_every_tool_has_its_four_annotations():
         for field in ("read_only_hint", "destructive_hint", "idempotent_hint", "open_world_hint"):
             assert isinstance(getattr(hints, field), bool), f"{name}.{field}"
         assert not (hints.read_only_hint and hints.destructive_hint), name
+        assert hints.title, name
+    assert len({tool.annotations.title for tool in tools.values()}) == len(tools)
     # Annotations publiées au client sous leurs noms MCP (camelCase).
     published = tools["browser_click"].model_dump(by_alias=True)["annotations"]
     assert published == {
-        "title": None,
+        "title": "Click",
         "readOnlyHint": False,
         "destructiveHint": True,
         "idempotentHint": False,
