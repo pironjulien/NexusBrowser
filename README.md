@@ -9,6 +9,8 @@
 
 [![NexusBrowser: your real Chrome, driven by an AI agent in a background tab.](docs/assets/banner.webp)](https://julienpiron.fr/nexusbrowser/)
 
+![NexusBrowser: an AI agent types into a form, picks an option and clicks in a background Chrome tab while the user keeps browsing](docs/assets/demo.webp)
+
 **Your real Chrome, driven by AI agents in background tabs.** NexusBrowser lets Antigravity, Claude and Codex use
 the user's own Chrome (their sessions, their extensions) through one shared local bridge and one MCP server,
 `nexus-browser`. Each agent works in its own background tabs, grouped under its name, with real (trusted) mouse
