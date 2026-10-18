@@ -1,0 +1,32 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.pironjulien/nexus-browser",
+  "title": "NexusBrowser",
+  "description": "Your real Chrome, driven in background tabs. Needs the NexusBrowser bridge and extension.",
+  "version": "2.9.0",
+  "websiteUrl": "https://julienpiron.fr/nexusbrowser/",
+  "repository": {
+    "url": "https://github.com/pironjulien/NexusBrowser",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "nexus-browser",
+      "version": "2.9.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "NEXUS_BROWSER_AGENT",
+          "description": "Agent name used for the tab group (Claude, Codex, Antigravity...)",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

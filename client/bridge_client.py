@@ -333,7 +333,9 @@ def call_bridge(action: str, params: dict[str, Any] | None = None, timeout: floa
         # Jeton pas encore créé : c'est le pont qui le crée (droits restreints) à son démarrage.
         if not (retry and ensure_bridge_running()):
             raise ConnectionError(
-                f"Impossible de joindre le pont NexusBrowser sur {API_URL} : jeton absent et démarrage du pont échoué."
+                f"Impossible de joindre le pont NexusBrowser sur {API_URL} : jeton absent et démarrage du pont échoué. "
+                "Pont et extension pas encore installés sur ce PC ? Une fois : install.ps1 "
+                "(https://github.com/pironjulien/NexusBrowser#installation)."
             ) from None
         headers = authentication_headers()
     request = urllib.request.Request(

@@ -1,12 +1,53 @@
 [project]
 name = "nexus-browser"
 version = "2.9.0"
-description = "Pont Chrome commun à Antigravity, Claude et Codex : extension, pont local authentifié et serveur MCP nexus-browser"
+description = "Your real Chrome, driven by Claude, Codex and Antigravity in background tabs: the nexus-browser MCP server (needs the NexusBrowser bridge and extension)"
+authors = [{ name = "Julien Piron" }]
+license = "MIT"
+readme = "README.md"
 requires-python = ">=3.10"
+keywords = ["mcp", "mcp-server", "chrome", "browser-use", "computer-use", "cdp", "ai-agents", "claude", "codex", "antigravity"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+]
 dependencies = [
     "mcp>=2.3.0,<3",
     "websockets>=13.0,<17",
 ]
+
+[project.urls]
+Homepage = "https://julienpiron.fr/nexusbrowser/"
+Repository = "https://github.com/pironjulien/NexusBrowser"
+Changelog = "https://github.com/pironjulien/NexusBrowser/blob/main/CHANGELOG.md"
+Issues = "https://github.com/pironjulien/NexusBrowser/issues"
+
+[project.scripts]
+nexus-browser = "nexus_browser.__main__:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+# The wheel mirrors the repository layout under nexus_browser/ (client/ imports native-host/ and reads pyproject.toml
+# and VERSION by relative path), so the code ships unchanged. `uv sync` still does not install the project
+# ([tool.uv] package = false): install.ps1 and the three agents keep running from the checkout.
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.force-include]
+"packaging/nexus_browser/__init__.py" = "nexus_browser/__init__.py"
+"packaging/nexus_browser/__main__.py" = "nexus_browser/__main__.py"
+"client" = "nexus_browser/client"
+"native-host" = "nexus_browser/native-host"
+"VERSION" = "nexus_browser/VERSION"
+"pyproject.toml" = "nexus_browser/pyproject.toml"
+
+[tool.hatch.build.targets.sdist]
+include = ["client/", "native-host/", "packaging/", "VERSION", "README.md", "LICENSE", "CHANGELOG.md", "pyproject.toml"]
 
 [dependency-groups]
 dev = [

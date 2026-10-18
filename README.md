@@ -1,6 +1,9 @@
 # NexusBrowser
 
+<!-- mcp-name: io.github.pironjulien/nexus-browser -->
+
 [![Release](https://img.shields.io/github/v/release/pironjulien/NexusBrowser)](https://github.com/pironjulien/NexusBrowser/releases)
+[![PyPI](https://img.shields.io/pypi/v/nexus-browser)](https://pypi.org/project/nexus-browser/)
 [![Tests](https://github.com/pironjulien/NexusBrowser/actions/workflows/tests.yml/badge.svg)](https://github.com/pironjulien/NexusBrowser/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](extension/manifest.json)
@@ -93,6 +96,18 @@ Then load `extension\` once in `chrome://extensions` (developer mode, "Load unpa
 "Antigravity Browser Bridge" if present. The extension ID is fixed by the public `key` in `manifest.json`
 (`blcgddmjdkobmgakjffjpgiicjlflgjf`), the same on every PC and whatever the folder; it is the only origin the bridge
 and the native host accept.
+
+### The MCP server from PyPI
+
+Once the bridge and the extension are installed (above), any MCP client can also start the server straight from
+[PyPI](https://pypi.org/project/nexus-browser/), without the clone:
+
+```bash
+claude mcp add nexus-browser --scope user -e NEXUS_BROWSER_AGENT=Claude -- uvx nexus-browser
+```
+
+Without the bridge, the server still starts and lists its 47 tools, and every call answers with a clear error that
+points to the one-time install.
 
 ## Security (held by the extension and the bridge, not by the agent)
 

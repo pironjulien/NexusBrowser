@@ -1,0 +1,69 @@
+name: Publish to PyPI
+
+# Trusted Publishing (OIDC): no token stored in the repository. PyPI side, once: a trusted publisher for this
+# repository, workflow publish.yml, environment pypi; then set the repository variable PYPI_PUBLISH to true. From then
+# on, a published GitHub release vX.Y.Z (or a manual run) uploads that version (before that, it only builds and checks).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Version matches the release tag, README carries the MCP registry name
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          echo "pyproject version: $version"
+          test "$(cat VERSION)" = "$version"
+          if [ "${{ github.event_name }}" = "release" ] && [ "${{ github.event.release.tag_name }}" != "v$version" ]; then
+            echo "Tag ${{ github.event.release.tag_name }} does not match v$version"; exit 1
+          fi
+          grep -q 'mcp-name: io.github.pironjulien/nexus-browser' README.md
+      - run: uv build
+      - name: Startup check from the built wheel (initialize, 47 tools, clear error without the bridge)
+        shell: bash
+        run: |
+          uv venv --python 3.12 /tmp/wheel
+          uv pip install --python /tmp/wheel/bin/python dist/*.whl
+          HOME=$(mktemp -d) NEXUS_BROWSER_AGENT=Test /tmp/wheel/bin/python - <<'PY'
+          import anyio, os
+          from mcp import ClientSession, StdioServerParameters
+          from mcp.client.stdio import stdio_client
+          async def go():
+              params = StdioServerParameters(command="/tmp/wheel/bin/nexus-browser", args=[], env=dict(os.environ))
+              async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
+                  init = await s.initialize()
+                  assert init.server_info.name == "nexus-browser", init.server_info
+                  tools = (await s.list_tools()).tools
+                  assert len(tools) == 47, len(tools)
+                  print("ok", init.server_info.version, len(tools))
+          anyio.run(go)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    if: vars.PYPI_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/nexus-browser/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

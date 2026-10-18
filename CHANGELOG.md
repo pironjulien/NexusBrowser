@@ -6,7 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
-- README: animated demo recorded from the real tool (docs/assets/demo.webp).
+- PyPI package `nexus-browser` (the MCP server, command `nexus-browser`): the wheel mirrors `client/` and
+  `native-host/` unchanged under `nexus_browser/` (hatchling force-include); `install.ps1` and the three agents keep
+  running from the repository (`[tool.uv] package = false`). Published by Trusted Publishing
+  (`.github/workflows/publish.yml`), checked from the built wheel (initialize, 47 tools).
+- README: animated demo recorded from the real tool; install from PyPI.
+
+### Changed
+- Bridge not reachable and no token: the error now points to the one-time install (install.ps1).
+
+## [Unreleased]
 
 ### Added
 
