@@ -1,15 +1,23 @@
 """
-Antigravity Chrome Bridge - Local Server & Native Gateway
+NexusBrowser - pont local (HTTP 9225 pour les agents, WebSocket 9224 pour l'extension)
 Provides WebSocket (ws://127.0.0.1:9224) and HTTP REST (http://127.0.0.1:9225/api/command)
-to bridge Antigravity AI agent with the Chrome extension.
+entre les agents (Antigravity, Claude, Codex) et l'extension Chrome.
 
-WebSocket : authentification mutuelle nexusagy-bridge/1 (bridge_auth.py) ; seule une connexion qui a prouvé le jeton
-devient un client actif, et chaque message est signé. HTTP : en-tête X-NexusAGY-Token, aucune origine de navigateur.
+WebSocket : authentification mutuelle nexus-browser/1 (bridge_auth.py) ; seule une connexion qui a prouvé le jeton
+devient un client actif, et chaque message est signé. HTTP : en-tête X-Nexus-Browser-Token, aucune origine de navigateur.
+
+Garanties tenues ICI, pour tout client HTTP (même un script qui contourne bridge_client) :
+- identité du client (en-têtes X-Nexus-Browser-Agent et X-Nexus-Browser-Client) obligatoire, transmise à l'extension
+  dans le canal signé : c'est elle qui fixe la propriété des onglets, jamais un paramètre de la commande ;
+- sessions mortes : le processus annoncé par chaque session (en-tête X-Nexus-Browser-Pid) est vérifié ; les sessions
+  du même agent dont le processus a disparu sont signalées à l'extension (« gone »), qui rend leurs onglets orphelins ;
+- téléversement refusé depuis un dossier de secrets (bridge_security.upload_refusal) ;
+- arrêt d'urgence : actions refusées, et dès qu'il est posé, commandes en cours annulées et extension prévenue (frappe,
+  glisser et attentes interrompus, débogueur détaché).
 """
 
 import argparse
 import asyncio
-import collections
 import hashlib
 import hmac
 import json
@@ -17,16 +25,15 @@ import logging
 import math
 import os
 import socket
+import sys
 import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-try:
-    from websockets.asyncio.server import serve
-except ImportError:
-    from websockets.server import serve
+# Aucun __pycache__ à côté des sources (OneDrive), quel que soit le lanceur.
+sys.dont_write_bytecode = True
 
-from bridge_auth import (
+from bridge_auth import (  # noqa: E402
     PROTOCOL,
     AuthError,
     Channel,
@@ -39,7 +46,28 @@ from bridge_auth import (
     server_proof,
     session_key,
 )
-from bridge_security import TOKEN_HEADER, VERSION, load_or_create_token, token_path
+from bridge_security import (  # noqa: E402
+    AGENT_HEADER,
+    CLIENT_HEADER,
+    PID_HEADER,
+    TOKEN_HEADER,
+    VERSION,
+    check_identity,
+    check_pid,
+    harden_token_permissions,
+    is_read_only_action,
+    is_upload_action,
+    load_or_create_token,
+    process_running,
+    token_path,
+    upload_refusal,
+)
+from websockets.asyncio.server import serve  # noqa: E402
+
+# Arrêt d'urgence commun (client/emergency_stop.py, même module que les serveurs MCP) : vérifié ici aussi, pour tout
+# client HTTP du pont, même s'il ne le vérifie pas lui-même.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "client"))
+import emergency_stop  # noqa: E402
 
 PORT = 9224
 HTTP_READ_TIMEOUT = 10.0
@@ -47,15 +75,34 @@ MAX_HEADER_BYTES = 64 * 1024
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
 HANDSHAKE_TIMEOUT = 10.0
 MAX_HANDSHAKE_BYTES = 2048
-MAX_SIDEPANEL_TEXT = 4000
 ROLE_PRIORITY = {"service_worker": 0, "offscreen": 1}
+STOP_POLL_S = 0.2
+# Actions que seul le pont envoie à l'extension (canal signé), jamais un client HTTP.
+RESERVED_ACTIONS = frozenset({"emergency_stop"})
+# Seule commande permise sans identité : le contrôle de vie (verify.ps1, validation réelle).
+ANONYMOUS_ACTIONS = frozenset({"ping"})
 active_connections: list = []  # BridgeClient authentifiés seulement
-pending_requests: dict = {}  # requestId -> (BridgeClient, Future) : seule la connexion visée peut répondre
-sidepanel_requests: collections.deque = collections.deque(maxlen=50)
+# requestId -> (BridgeClient, Future, action) : seule la connexion visée peut répondre
+pending_requests: dict = {}
 _background_tasks: set = set()
 _auth_order = 0
 BRIDGE_TOKEN_PATH: Path | None = None
-LOGGER = logging.getLogger("nexusagy.bridge")
+# (agent, id) -> processus annoncé par la session (None : identité stable, la CLI) ; les plus récentes seulement.
+client_processes: dict[tuple[str, str], int | None] = {}
+MAX_KNOWN_SESSIONS = 256
+
+
+class CommandCancelled(RuntimeError):
+    """Commande annulée par l'arrêt d'urgence pendant son exécution."""
+
+
+def _token_path() -> Path:
+    if BRIDGE_TOKEN_PATH is None:
+        raise RuntimeError("pont non configuré : chemin du jeton absent")
+    return BRIDGE_TOKEN_PATH
+
+
+LOGGER = logging.getLogger("nexus-browser.bridge")
 
 
 def read_bridge_token(path: Path) -> str:
@@ -64,7 +111,7 @@ def read_bridge_token(path: Path) -> str:
         load_or_create_token(path)
     token = path.read_text(encoding="ascii").strip()
     if len(token) < 43:
-        raise RuntimeError(f"Invalid NexusAGY bridge token in {path}")
+        raise RuntimeError(f"Invalid NexusBrowser bridge token in {path}")
     return token
 
 
@@ -120,7 +167,7 @@ def select_target() -> BridgeClient | None:
 
 
 async def authenticate(websocket) -> BridgeClient:
-    """Poignée de main nexusagy-bridge/1 (bridge_auth) ; AuthError si l'extension ne prouve pas le jeton."""
+    """Poignée de main nexus-browser/1 (bridge_auth) ; AuthError si l'extension ne prouve pas le jeton."""
     global _auth_order
 
     async def receive() -> dict:
@@ -141,7 +188,7 @@ async def authenticate(websocket) -> BridgeClient:
     client_nonce = check_nonce(hello.get("client_nonce"), "client_nonce")
     role = check_role(hello.get("role"))
     extension_id = check_extension_id(hello.get("extension_id"))
-    token = read_bridge_token(BRIDGE_TOKEN_PATH)
+    token = read_bridge_token(_token_path())
     server_nonce = new_nonce()
     await websocket.send(
         json.dumps(
@@ -192,6 +239,10 @@ async def ws_handler(websocket):
         client.extension_id,
         len(active_connections),
     )
+    # Service worker redémarré pendant un arrêt d'urgence : il l'apprend dès sa connexion.
+    left = emergency_stop.remaining_s()
+    if left > 0:
+        background(notify_extension_stop(left, client))
     try:
         async for message in websocket:
             try:
@@ -208,8 +259,13 @@ async def ws_handler(websocket):
                 pending_requests.pop(req_id)
                 if not pending[1].done():
                     pending[1].set_result(data)
-            elif data.get("event") == "sidepanel_request":
-                queue_sidepanel_request(data.get("request"), client)
+            elif data.get("event") == "emergency_stop":
+                # Bouton STOP du poste de contrôle (panneau de Chrome) : arrêt commun posé par le pont pour tous
+                # les agents (~/.nexus/stop) ; la surveillance annule ensuite les commandes en cours.
+                LOGGER.warning("Emergency stop requested from the Chrome control panel")
+                emergency_stop.pressed()
+                # Jamais attendu ici : la réponse de l'extension arrive par cette même boucle de lecture.
+                background(cancel_for_stop(emergency_stop.remaining_s()))
             elif "event" in data:
                 LOGGER.info("Event received: %s", data.get("event"))
     except Exception as exc:
@@ -219,53 +275,66 @@ async def ws_handler(websocket):
             active_connections.remove(client)
         LOGGER.info("Chrome Extension disconnected. Active clients: %d", len(active_connections))
         # Les commandes envoyées à CETTE connexion n'auront jamais de réponse.
-        for req_id, (owner, future) in list(pending_requests.items()):
+        for req_id, (owner, future, _action) in list(pending_requests.items()):
             if owner is client:
                 pending_requests.pop(req_id, None)
                 if not future.done():
                     future.set_exception(ConnectionResetError("Chrome Extension disconnected while processing request"))
 
 
-def queue_sidepanel_request(request: object, client: BridgeClient) -> None:
-    """Demande saisie dans le panneau latéral : gardée pour Antigravity (browser_sidepanel_requests)."""
-    if not isinstance(request, dict):
-        return
-    request_id, text = request.get("id"), request.get("text")
-    if not isinstance(request_id, str) or not 0 < len(request_id) <= 64:
-        return
-    if not isinstance(text, str) or not text.strip() or len(text) > MAX_SIDEPANEL_TEXT:
-        return
-    if any(item["id"] == request_id for item in sidepanel_requests):
-        return
-    tab = request.get("tab") if isinstance(request.get("tab"), dict) else None
-    sidepanel_requests.append(
-        {
-            "id": request_id,
-            "text": text.strip(),
-            "tab": {key: tab.get(key) for key in ("id", "title", "url")} if tab else None,
-            "created_at": request.get("created_at") if isinstance(request.get("created_at"), (int, float)) else None,
-            "extension_id": client.extension_id,
-        }
-    )
-    LOGGER.info("Side panel request queued: %s", request_id)
+def background(coroutine) -> None:
+    task = asyncio.ensure_future(coroutine)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
-async def take_sidepanel_requests(consume: bool) -> dict:
-    """File des demandes du panneau ; consume les retire et prévient le panneau qu'elles ont été lues."""
-    items = list(sidepanel_requests)
-    if consume and items:
-        sidepanel_requests.clear()
+# -----------------------------------------------------------------------------
+# Arrêt d'urgence : annulation des commandes en cours (pas seulement refus des suivantes)
+# -----------------------------------------------------------------------------
+_stop_seen_until = 0.0  # échéance monotone de l'arrêt déjà traité (un nouvel appui la repousse)
 
-        async def mark_read() -> None:
-            try:
-                await send_command_to_chrome("sidepanel_mark_read", {"ids": [item["id"] for item in items]}, 5.0)
-            except Exception as error:  # le panneau garde seulement l'état « transmise »
-                LOGGER.info("Side panel read receipt not delivered: %s", error)
 
-        task = asyncio.create_task(mark_read())
-        _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
-    return {"requests": items, "consumed": consume, "remaining": len(sidepanel_requests)}
+async def notify_extension_stop(left: float, target: "BridgeClient | None" = None) -> None:
+    """Prévient l'extension : elle interrompt frappe, glisser et attentes, détache tous les débogueurs et refuse
+    toute action jusqu'à la fin de l'arrêt."""
+    try:
+        await send_command_to_chrome("emergency_stop", {"hold_s": round(left, 1)}, 5.0, target=target)
+    except Exception as error:  # extension absente : rien à interrompre côté Chrome
+        LOGGER.info("Emergency stop not delivered to the extension: %s", error)
+
+
+async def cancel_for_stop(left: float) -> int:
+    """Annule toutes les commandes en attente de l'extension (réponse 423 au client) et prévient l'extension."""
+    global _stop_seen_until
+    if left <= 0:
+        return 0
+    _stop_seen_until = max(_stop_seen_until, asyncio.get_running_loop().time() + left)
+    cancelled = 0
+    for req_id, (_owner, future, action) in list(pending_requests.items()):
+        if action == "emergency_stop" or future.done():
+            continue
+        pending_requests.pop(req_id, None)
+        future.set_exception(
+            CommandCancelled(f"Commande « {action} » annulée en cours d'exécution : {emergency_stop.message(left)}")
+        )
+        cancelled += 1
+    LOGGER.warning("Emergency stop: %d command(s) cancelled", cancelled)
+    await notify_extension_stop(left)
+    return cancelled
+
+
+async def watch_emergency_stop() -> None:
+    """Relit l'arrêt commun toutes les 0,2 s (posé par n'importe quel agent ou par le raccourci) : chaque NOUVEL
+    arrêt annule aussitôt les commandes en cours."""
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            left = emergency_stop.remaining_s()
+            if left > 0 and loop.time() + left > _stop_seen_until + 1.0:
+                await cancel_for_stop(left)
+        except Exception:  # noqa: BLE001 - cette surveillance tient l'arrêt d'urgence : elle ne doit jamais mourir
+            LOGGER.exception("emergency stop watch failure")
+        await asyncio.sleep(STOP_POLL_S)
 
 
 ACTION_ALIASES = {
@@ -303,24 +372,52 @@ ACTION_ALIASES = {
 }
 
 
-async def send_command_to_chrome(action, params=None, timeout=15.0):
-    normalized_action = ACTION_ALIASES.get(action, (action or "").lower().replace("-", "_"))
+def note_session(client: dict, pid: int | None) -> list[str]:
+    """Retient le processus de la session qui commande et renvoie les sessions MORTES du même agent : processus annoncé
+    qui ne tourne plus (redémarrage du serveur MCP, plantage). Seule la preuve compte : une session sans processus
+    connu n'est jamais déclarée morte ici (l'extension le fait après un silence prolongé)."""
+    key = (client["agent"], client["id"])
+    client_processes.pop(key, None)
+    client_processes[key] = pid
+    while len(client_processes) > MAX_KNOWN_SESSIONS:
+        client_processes.pop(next(iter(client_processes)))
+    return [
+        session
+        for (agent, session), known in client_processes.items()
+        if agent == client["agent"] and session != client["id"] and known is not None and not process_running(known)
+    ]
+
+
+def normalize_action(action: str) -> str:
+    return ACTION_ALIASES.get(action, (action or "").lower().replace("-", "_"))
+
+
+async def send_command_to_chrome(action, params=None, timeout=15.0, client=None, target=None, gone=None):
+    """Commande signée vers l'extension. client : identité du demandeur ({"agent", "id"}), posée par le pont à côté
+    des paramètres (jamais lue dans les paramètres de la commande). gone : sessions mortes du même agent."""
+    normalized_action = normalize_action(action)
+    payload = {"action": normalized_action, "params": params or {}}
+    if client is not None:
+        payload["client"] = client
+    if gone:
+        payload["gone"] = list(gone)
     while True:
-        target = select_target()
-        if target is None:
+        chosen = target if target is not None and target in active_connections else select_target()
+        if chosen is None:
             raise RuntimeError(
-                "No Chrome browser extension connected to Antigravity Bridge. Make sure the extension is active in Chrome."
+                "No Chrome browser extension connected to Nexus Browser Bridge. Make sure the extension is active in Chrome."
             )
         req_id = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
-        pending_requests[req_id] = (target, future)
+        pending_requests[req_id] = (chosen, future, normalized_action)
         try:
-            await target.send({"requestId": req_id, "action": normalized_action, "params": params or {}})
+            await chosen.send({"requestId": req_id, **payload})
             break
         except Exception:
             pending_requests.pop(req_id, None)
-            if target in active_connections:
-                active_connections.remove(target)
+            if chosen in active_connections:
+                active_connections.remove(chosen)
+            target = None
 
     try:
         response = await asyncio.wait_for(future, timeout=timeout)
@@ -379,7 +476,7 @@ async def handle_http(reader, writer):
             return
 
         supplied_token = headers.get(TOKEN_HEADER.lower(), "")
-        current_token = read_bridge_token(BRIDGE_TOKEN_PATH)
+        current_token = read_bridge_token(_token_path())
         if not hmac.compare_digest(supplied_token, current_token):
             await send_json_response(writer, 401, {"success": False, "error": "Authentication required"})
             return
@@ -402,7 +499,7 @@ async def handle_http(reader, writer):
                     "connected_clients": len(active_connections),
                     "clients": [client.describe() for client in active_connections],
                     "target": target.describe() if (target := select_target()) else None,
-                    "sidepanel_requests": len(sidepanel_requests),
+                    "emergency_stop_s": round(emergency_stop.remaining_s(), 1),
                     "port": PORT,
                 },
             )
@@ -441,13 +538,48 @@ async def handle_http(reader, writer):
                 )
                 return
 
+            normalized = normalize_action(action.strip())
+            if normalized in RESERVED_ACTIONS:
+                await send_json_response(
+                    writer, 403, {"success": False, "error": f"Action « {action} » réservée au pont lui-même."}
+                )
+                return
+            client = check_identity(headers.get(AGENT_HEADER.lower()), headers.get(CLIENT_HEADER.lower()))
+            if client is None and normalized not in ANONYMOUS_ACTIONS:
+                await send_json_response(
+                    writer,
+                    400,
+                    {
+                        "success": False,
+                        "error": (
+                            f"Identité du client absente ou invalide (en-têtes {AGENT_HEADER} et {CLIENT_HEADER}) : "
+                            "passer par le serveur MCP nexus-browser à jour (ou bridge_client), relancer install.ps1."
+                        ),
+                    },
+                )
+                return
+
+            if not is_read_only_action(action):
+                try:
+                    emergency_stop.check()
+                except emergency_stop.EmergencyStopError as error:
+                    await send_json_response(
+                        writer, 423, {"success": False, "error": str(error), "emergency_stop": True}
+                    )
+                    return
+
+            if is_upload_action(action):
+                refusal = upload_refusal(params.get("files"))
+                if refusal is not None:
+                    await send_json_response(writer, 403, {"success": False, "error": refusal})
+                    return
+
+            gone = note_session(client, check_pid(headers.get(PID_HEADER.lower()))) if client is not None else []
             try:
-                if action.strip().lower().replace("_", "-") == "sidepanel-requests":
-                    # Servie par le pont lui-même : la file des demandes du panneau latéral.
-                    result = await take_sidepanel_requests(params.get("consume", True) is not False)
-                else:
-                    result = await send_command_to_chrome(action, params, timeout=timeout)
+                result = await send_command_to_chrome(action, params, timeout=timeout, client=client, gone=gone)
                 await send_json_response(writer, 200, {"success": True, "data": result})
+            except CommandCancelled as exc:
+                await send_json_response(writer, 423, {"success": False, "error": str(exc), "emergency_stop": True})
             except Exception as exc:
                 await send_json_response(writer, 400, {"success": False, "error": str(exc)})
             return
@@ -477,6 +609,7 @@ async def send_json_response(writer, status: int, payload: dict, extra_headers: 
         408: "Request Timeout",
         413: "Content Too Large",
         415: "Unsupported Media Type",
+        423: "Locked",
         431: "Request Header Fields Too Large",
     }.get(status, "Error")
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -522,6 +655,8 @@ async def main(token_file: Path | None = None, log_file: Path | None = None):
     configure_logging(log_file)
     BRIDGE_TOKEN_PATH = token_file or token_path()
     bridge_token = read_bridge_token(BRIDGE_TOKEN_PATH)
+    # Droits du jeton réglés une fois, par le pont, au démarrage (les clients le lisent seulement).
+    harden_token_permissions(BRIDGE_TOKEN_PATH)
     LOGGER.info(
         "starting version=%s pid=%s token_path=%s token_fingerprint=%s",
         VERSION,
@@ -530,7 +665,7 @@ async def main(token_file: Path | None = None, log_file: Path | None = None):
         hashlib.sha256(bridge_token.encode("ascii")).hexdigest()[:12],
     )
     print("==================================================")
-    print(f"  NexusAGY Browser Bridge Server (v{VERSION})")
+    print(f"  Nexus Browser Bridge Server (v{VERSION})")
     print(f"  WebSocket: ws://127.0.0.1:{PORT}")
     print(f"  HTTP REST: http://127.0.0.1:{PORT + 1}/api/command")
     print("==================================================")
@@ -547,11 +682,11 @@ async def main(token_file: Path | None = None, log_file: Path | None = None):
     http_server = await asyncio.start_server(handle_http, sock=exclusive_listener(PORT + 1), limit=MAX_HEADER_BYTES + 4)
     print(f"  HTTP API available at http://127.0.0.1:{PORT + 1}/api/command")
 
-    await asyncio.gather(ws_server.wait_closed(), http_server.serve_forever())
+    await asyncio.gather(ws_server.wait_closed(), http_server.serve_forever(), watch_emergency_stop())
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=f"NexusAGY Browser Bridge v{VERSION}")
+    parser = argparse.ArgumentParser(description=f"Nexus Browser Bridge v{VERSION}")
     parser.add_argument("--token-file", type=Path, help="Explicit per-user authentication token path")
     parser.add_argument("--log-file", type=Path, help="Rotating operational log path")
     arguments = parser.parse_args()

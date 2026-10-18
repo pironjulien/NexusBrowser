@@ -1,17 +1,17 @@
 /**
- * Liaison authentifiée au pont local NexusAGY (protocole « nexusagy-bridge/1 », voir native-host/bridge_auth.py).
+ * Liaison authentifiée au pont local NexusBrowser (protocole « nexus-browser/1 », voir native-host/bridge_auth.py).
  *
  * Partagée par le service worker (importScripts) et le document offscreen (<script>). Le serveur du port 9224 doit
- * prouver qu'il connaît le jeton ~/.nexusagy/bridge-token (HMAC sur les deux nonces de la connexion) AVANT que
+ * prouver qu'il connaît le jeton ~/.nexus/nexus-browser/bridge-token (HMAC sur les deux nonces de la connexion) AVANT que
  * l'extension ne prouve le sien ; la vérification et la preuve sont faites par l'hôte natif
- * com.nexusagy.bridge_auth (prove), qui ne livre jamais le jeton, seulement une clé de session propre à la
+ * com.nexus.browser_auth (prove), qui ne livre jamais le jeton, seulement une clé de session propre à la
  * connexion. Ensuite chaque message est signé (HMAC-SHA256, numéro d'ordre strict par sens).
  *
  * Règle : rien venant du serveur n'est exécuté avant la fin de la poignée de main (auth_ok signé), et tout message
  * non signé, mal signé, rejoué ou hors d'ordre ferme la connexion sans être exécuté.
  */
 (function (scope) {
-    const PROTOCOL = "nexusagy-bridge/1";
+    const PROTOCOL = "nexus-browser/1";
     const HANDSHAKE_TIMEOUT_MS = 10000;
     const NONCE_RE = /^[A-Za-z0-9_-]{43}$/;
     const encoder = new TextEncoder();
@@ -110,7 +110,7 @@
 
             if (this.state === "handshake") {
                 if (message.type !== "auth_challenge" || !NONCE_RE.test(message.server_nonce || "") || typeof message.server_proof !== "string") {
-                    return this.fail("le serveur n'a pas ouvert la poignée de main NexusAGY : aucune commande acceptée");
+                    return this.fail("le serveur n'a pas ouvert la poignée de main NexusBrowser : aucune commande acceptée");
                 }
                 let proof;
                 try {
@@ -187,8 +187,8 @@
         fail(reason) {
             if (this.closed) return;
             this.error = reason;
-            console.warn(`[NexusAGY] Pont local refusé (${this.role}) : ${reason}`);
-            try { this.ws.close(1008, "NexusAGY authentication failed"); } catch (_) {}
+            console.warn(`[NexusBrowser] Pont local refusé (${this.role}) : ${reason}`);
+            try { this.ws.close(1008, "NexusBrowser authentication failed"); } catch (_) {}
             this._closed();
         }
 

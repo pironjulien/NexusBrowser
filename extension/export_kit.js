@@ -1,5 +1,5 @@
 /**
- * Antigravity Browser Bridge - exports de contenu (inspirés de tab.content.export, exportGsuite et
+ * Nexus Browser Bridge - exports de contenu (inspirés de tab.content.export, exportGsuite et
  * exportYouTubeTranscript de l'extension Chrome de Codex).
  *
  * Vraie fonction autonome, comme agyLocatorKit : sérialisée pour Runtime.evaluate (côté page) et appelée telle quelle

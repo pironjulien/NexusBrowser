@@ -1,0 +1,5 @@
+{
+  "name": "nexus-browser",
+  "version": "2.8.1",
+  "description": "Pont Chrome NexusBrowser commun à Antigravity, Claude et Codex (CDP direct, formulaires, cartes SoM, exports)"
+}

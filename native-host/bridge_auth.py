@@ -1,6 +1,6 @@
-"""Authentification mutuelle du WebSocket local NexusAGY (protocole « nexusagy-bridge/1 »).
+"""Authentification mutuelle du WebSocket local NexusBrowser (protocole « nexus-browser/1 »).
 
-Le jeton partagé (~/.nexusagy/bridge-token) n'est jamais envoyé : chaque côté prouve qu'il le connaît par un HMAC-SHA256
+Le jeton partagé (~/.nexus/nexus-browser/bridge-token) n'est jamais envoyé : chaque côté prouve qu'il le connaît par un HMAC-SHA256
 sur les deux nonces de la connexion (32 octets aléatoires chacun) et le rôle annoncé. Les deux nonces étant neufs à
 chaque connexion, une preuve enregistrée ne sert à rien sur une autre (rejeu). Une clé de session dérivée des mêmes
 éléments signe ensuite chaque message (numéro d'ordre strictement croissant par sens) : un programme placé entre
@@ -24,7 +24,7 @@ import hmac
 import re
 import secrets
 
-PROTOCOL = "nexusagy-bridge/1"
+PROTOCOL = "nexus-browser/1"
 ROLES = ("service_worker", "offscreen")
 NONCE_BYTES = 32
 _B64URL = re.compile(r"[A-Za-z0-9_-]+")

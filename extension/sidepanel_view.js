@@ -1,53 +1,60 @@
 /**
- * Mise en forme pure des résultats du panneau latéral (sans DOM ni chrome.*), testée dans tests/browser.test.cjs.
+ * Mise en forme pure du poste de contrôle (sans DOM ni chrome.*), testée dans tests/browser.test.cjs.
  */
 (function (scope) {
-    const CLICKABLE_ROLES = new Set(["button", "link", "tab", "menuitem", "checkbox", "radio", "switch", "option"]);
-    const CLICKABLE_INPUTS = new Set(["button", "submit", "reset", "checkbox", "radio", "image"]);
-
-    /** Éléments de interactive_map qu'un clic actionne (pas les champs de saisie). */
-    function clickableElements(elements) {
-        return (Array.isArray(elements) ? elements : []).filter((el) => {
-            const tag = String(el.tag || "").toLowerCase();
-            const role = String(el.role || "").toLowerCase();
-            if (tag === "button" || tag === "a" || tag === "summary" || CLICKABLE_ROLES.has(role)) return true;
-            return tag === "input" && CLICKABLE_INPUTS.has(String(el.type || "").toLowerCase());
-        });
-    }
-
-    /** Cookies résumés par domaine : nombre et noms seulement, jamais de valeur (même si elle est fournie). */
-    function summarizeCookies(cookies) {
-        const byDomain = new Map();
-        for (const cookie of Array.isArray(cookies) ? cookies : []) {
-            const domain = String(cookie.domain || "(sans domaine)");
-            if (!byDomain.has(domain)) byDomain.set(domain, new Set());
-            byDomain.get(domain).add(String(cookie.name || ""));
+    /** Hôte lisible d'une URL (jamais ses paramètres). */
+    function hostOf(url) {
+        try {
+            const parsed = new URL(String(url || ""));
+            return parsed.protocol === "about:" ? String(url) : parsed.host || parsed.protocol.replace(/:$/, "");
+        } catch (_) {
+            return String(url || "").slice(0, 60);
         }
-        const domains = [...byDomain.entries()]
-            .map(([domain, names]) => ({ domain, count: names.size, names: [...names].sort() }))
-            .sort((a, b) => a.domain.localeCompare(b.domain));
-        return { count: (Array.isArray(cookies) ? cookies : []).length, domains };
     }
 
-    /** Une ligne lisible par champ de form_fields (libellé, type, nom ; « rempli » sans jamais la valeur). */
-    function describeField(field) {
-        const label = field.label || field.name || field.id || "champ sans libellé";
-        const kind = field.type && field.type !== field.tag ? `${field.tag} ${field.type}` : field.tag;
-        const flags = [field.required ? "requis" : "", field.filled ? "rempli" : "vide", field.disabled ? "désactivé" : ""]
-            .filter(Boolean).join(", ");
-        return `${label} — <${kind}> (${flags})`;
+    /** Onglets pilotés regroupés par agent, agents dans l'ordre alphabétique. */
+    function groupByAgent(tabs) {
+        const groups = new Map();
+        for (const tab of Array.isArray(tabs) ? tabs : []) {
+            const agent = String(tab.agent || "Inconnu");
+            if (!groups.has(agent)) groups.set(agent, []);
+            groups.get(agent).push(tab);
+        }
+        return [...groups.entries()]
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([agent, list]) => ({ agent, tabs: list.sort((a, b) => a.tabId - b.tabId) }));
     }
 
-    const STATUS_LABELS = {
-        sent: "Transmise au pont : en attente de lecture par Antigravity",
-        read: "Lue par Antigravity",
-        answered: "Réponse d'Antigravity reçue",
-        not_sent: "Non transmise : pont local non authentifié"
-    };
-
-    function requestStatusLabel(status) {
-        return STATUS_LABELS[status] || String(status || "");
+    /** Une ligne par onglet : titre, hôte, états (débogueur, commandes en cours, enregistrement réseau, adoption). */
+    function describeTab(tab, now = Date.now()) {
+        const badges = [];
+        if (tab.adopted) badges.push("adopté");
+        if (tab.orphan) badges.push("orphelin (session terminée)");
+        if (!tab.exists) badges.push("fermé");
+        badges.push(tab.debugger ? "débogueur attaché" : "débogueur détaché");
+        if (tab.commandsInFlight > 0) badges.push(`${tab.commandsInFlight} commande(s) en cours`);
+        if (tab.recordingUntil && tab.recordingUntil > now) {
+            badges.push(`réseau enregistré ${Math.ceil((tab.recordingUntil - now) / 1000)} s`);
+        }
+        return {
+            title: tab.title || "Onglet sans titre",
+            subtitle: `#${tab.tabId} · ${hostOf(tab.url)} · session …${tab.session || "?"}`,
+            badges
+        };
     }
 
-    scope.AgySidepanelView = { clickableElements, summarizeCookies, describeField, requestStatusLabel };
+    /** Arrêt d'urgence : texte du bandeau (null s'il n'y a pas d'arrêt). */
+    function stopLabel(stoppedUntil, now = Date.now()) {
+        if (!stoppedUntil || stoppedUntil <= now) return null;
+        return `Arrêt d'urgence actif : plus aucune action pendant ${Math.ceil((stoppedUntil - now) / 1000)} s`;
+    }
+
+    /** État du pont local, relu par le service worker. */
+    function bridgeLabel(bridge) {
+        if (bridge && bridge.connected) return { ok: true, text: "Pont local authentifié" };
+        const reason = bridge && (bridge.authError || bridge.error);
+        return { ok: false, text: `Pont local non joint${reason ? ` : ${reason}` : ""}` };
+    }
+
+    scope.AgySidepanelView = { hostOf, groupByAgent, describeTab, stopLabel, bridgeLabel };
 })(typeof globalThis !== "undefined" ? globalThis : window);

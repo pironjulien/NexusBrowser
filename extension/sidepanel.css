@@ -1,720 +1,121 @@
-/* ==========================================================================
-   Google Gemini Aesthetic Design System for Antigravity Side Panel (v2.0.0)
-   ========================================================================== */
-
+/* Poste de contrôle NexusBrowser : style neutre, clair ou sombre selon le système. */
 :root {
-    --gemini-bg: #131314;
-    --gemini-surface: #1e1f20;
-    --gemini-surface-hover: #282a2c;
-    --gemini-surface-subtle: rgba(255, 255, 255, 0.07);
-    --gemini-border: rgba(255, 255, 255, 0.08);
-    --gemini-border-focus: rgba(66, 133, 244, 0.6);
-
-    --gemini-text-primary: #e3e3e3;
-    --gemini-text-secondary: #c4c7c5;
-    --gemini-text-muted: #8e918f;
-
-    --gemini-blue: #4285F4;
-    --gemini-purple: #9B72CB;
-    --gemini-pink: #D96570;
-    --gemini-yellow: #FBBC04;
-
-    --font-google: "Google Sans", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    color-scheme: light dark;
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --text: #0f172a;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --ok: #15803d;
+    --off: #b45309;
+    --stop: #dc2626;
+    --stop-hover: #b91c1c;
+    --accent: #2563eb;
 }
 
-* {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #111318;
+        --surface: #1a1d24;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+        --border: #2a2f3a;
+        --ok: #4ade80;
+        --off: #fbbf24;
+    }
 }
+
+* { box-sizing: border-box; }
 
 body {
-    font-family: var(--font-google);
-    background-color: var(--gemini-bg);
-    color: var(--gemini-text-primary);
-    height: 100vh;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    user-select: none;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
-.gemini-panel-root {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    width: 100%;
-    position: relative;
-    background: radial-gradient(ellipse 130% 60% at 50% 100%, rgba(26, 44, 92, 0.45) 0%, rgba(19, 19, 20, 0) 80%), var(--gemini-bg);
-}
+.panel { padding: 14px; display: flex; flex-direction: column; gap: 16px; }
 
-/* --------------------------------------------------------------------------
-   Top Bar (Discreet Google Gemini Style)
-   -------------------------------------------------------------------------- */
-.gemini-top-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 48px;
-    padding: 0 14px;
-    flex-shrink: 0;
-    z-index: 10;
-}
+.panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 
-.gemini-brand {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
+h1 { font-size: 16px; margin: 0; }
+h2 { font-size: 13px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 
-.gemini-brand-name {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--gemini-text-secondary);
-    letter-spacing: -0.1px;
-}
+.muted { color: var(--muted); margin: 2px 0 0; }
 
-.gemini-status-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background-color: #34a853;
-    display: inline-block;
-    box-shadow: 0 0 6px rgba(52, 168, 83, 0.6);
-}
-
-.gemini-status-dot.offline {
-    background-color: #ea4335;
-    box-shadow: none;
-}
-
-.gemini-top-actions {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}
-
-.gemini-icon-btn {
-    background: transparent;
-    border: none;
-    color: var(--gemini-text-secondary);
-    cursor: pointer;
-    border-radius: 50%;
-    width: 32px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background-color 0.15s ease, color 0.15s ease;
-}
-
-.gemini-icon-btn:hover {
-    background-color: rgba(255, 255, 255, 0.08);
-    color: var(--gemini-text-primary);
-}
-
-/* --------------------------------------------------------------------------
-   Floating Dropdown Menus
-   -------------------------------------------------------------------------- */
-.gemini-floating-menu {
-    position: absolute;
-    background: var(--gemini-surface);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 14px;
-    padding: 6px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(16px);
-    z-index: 100;
-    min-width: 200px;
-    max-width: 280px;
-    animation: menu-pop 0.15s ease-out;
-}
-
-@keyframes menu-pop {
-    from { opacity: 0; transform: translateY(-6px) scale(0.97); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-#options-dropdown-menu {
-    top: 44px;
-    right: 14px;
-    min-width: 230px;
-    max-width: 280px;
-}
-
-#tabs-dropdown-menu {
-    bottom: 95px;
-    left: 12px;
-    right: 12px;
-    max-width: none;
-    max-height: 250px;
-    overflow-y: auto;
-}
-
-.menu-header {
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--gemini-text-muted);
-    padding: 6px 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.menu-item {
-    padding: 8px 12px;
-    font-size: 13px;
-    color: var(--gemini-text-primary);
-    border-radius: 8px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    transition: background-color 0.12s ease;
-}
-
-.menu-item:hover {
-    background-color: rgba(255, 255, 255, 0.08);
-}
-
-.menu-item.active {
-    color: var(--gemini-blue);
-    font-weight: 500;
-}
-
-.menu-divider {
-    height: 1px;
-    background: var(--gemini-border);
-    margin: 4px 0;
-}
-
-.tabs-list-wrapper {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.tab-select-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    border-radius: 8px;
+.state-pill {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 8px;
     font-size: 12px;
-    cursor: pointer;
-    color: var(--gemini-text-secondary);
-    transition: background 0.12s ease, color 0.12s ease;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
 }
+.state-pill.ok { color: var(--ok); }
+.state-pill.off { color: var(--off); }
 
-.tab-select-item:hover {
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--gemini-text-primary);
-}
+.stop-zone { display: flex; flex-direction: column; gap: 6px; }
 
-.tab-select-item img {
-    width: 14px;
-    height: 14px;
-    border-radius: 2px;
-    flex-shrink: 0;
-}
-
-/* --------------------------------------------------------------------------
-   Main Scroll Area & Gemini Hero
-   -------------------------------------------------------------------------- */
-.gemini-scroll-area {
-    flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 0 16px;
-    display: flex;
-    flex-direction: column;
-    position: relative;
-}
-
-.gemini-scroll-area::-webkit-scrollbar {
-    width: 6px;
-}
-.gemini-scroll-area::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 3px;
-}
-
-.gemini-hero-container {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    margin-top: auto;
-    margin-bottom: 24px;
-    padding-top: 40px;
-    transition: opacity 0.25s ease;
-}
-
-.gemini-sparkle-large-wrap {
-    margin-bottom: 16px;
-    filter: drop-shadow(0 0 16px rgba(66, 133, 244, 0.35));
-    animation: gemini-float 4s ease-in-out infinite;
-}
-
-@keyframes gemini-float {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-4px); }
-}
-
-.gemini-hero-title {
-    font-size: 22px;
-    font-weight: 400;
-    color: var(--gemini-text-primary);
-    line-height: 1.35;
-    letter-spacing: -0.2px;
-}
-
-/* --------------------------------------------------------------------------
-   Suggestion Pills Stack (Exact Gemini Alignment in Bottom-Left)
-   -------------------------------------------------------------------------- */
-.gemini-bottom-dock {
-    position: relative;
-    flex-shrink: 0;
-    padding: 0 12px 14px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    z-index: 10;
-}
-
-.gemini-suggestions-stack {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    gap: 8px;
-    padding-left: 4px;
-}
-
-.gemini-pill-btn {
-    background: var(--gemini-surface);
-    border: 1px solid var(--gemini-border);
-    border-radius: 18px;
-    padding: 8px 16px;
-    font-family: var(--font-google);
-    font-size: 13px;
-    font-weight: 400;
-    color: var(--gemini-text-primary);
-    cursor: pointer;
-    text-align: left;
-    transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
-    backdrop-filter: blur(8px);
-}
-
-.gemini-pill-btn:hover {
-    background: var(--gemini-surface-hover);
-    border-color: rgba(255, 255, 255, 0.16);
-    transform: translateX(2px);
-}
-
-.gemini-pill-btn:active {
-    transform: scale(0.98);
-}
-
-/* --------------------------------------------------------------------------
-   Gemini Floating Input Card (Structured into 3 Distinct Rows)
-   -------------------------------------------------------------------------- */
-.gemini-input-card {
-    background: var(--gemini-surface);
-    border: 1px solid var(--gemini-border);
-    border-radius: 24px;
-    padding: 10px 14px 10px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.gemini-input-card:focus-within {
-    border-color: var(--gemini-border-focus);
-    box-shadow: 0 0 0 1px var(--gemini-border-focus);
-}
-
-/* Row 1: Context chip (e.g. ⓘ Accueil / X ✕) */
-.gemini-context-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.gemini-tab-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: var(--gemini-surface-subtle);
-    border-radius: 12px;
-    padding: 3px 8px 3px 10px;
-    font-size: 12px;
-    color: var(--gemini-text-secondary);
-    max-width: 260px;
-}
-
-.tab-chip-icon {
-    font-size: 11px;
-    color: var(--gemini-blue);
-}
-
-.tab-chip-title {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 400;
-}
-
-.tab-chip-close {
-    background: transparent;
-    border: none;
-    color: var(--gemini-text-muted);
-    cursor: pointer;
-    font-size: 11px;
-    padding: 2px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-}
-
-.tab-chip-close:hover {
-    color: var(--gemini-text-primary);
-    background-color: rgba(255, 255, 255, 0.1);
-}
-
-/* Row 2: Prompt input line (Full width, no squishing!) */
-.gemini-input-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
+.stop-button {
     width: 100%;
-}
-
-.gemini-add-btn {
-    background: transparent;
+    padding: 14px;
     border: none;
-    color: var(--gemini-text-muted);
-    cursor: pointer;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-top: 1px;
-    flex-shrink: 0;
-    transition: color 0.15s ease, background-color 0.15s ease;
-}
-
-.gemini-add-btn:hover {
-    color: var(--gemini-text-primary);
-    background: rgba(255, 255, 255, 0.08);
-}
-
-#prompt-input {
-    flex: 1;
-    width: 100%;
-    background: transparent;
-    border: none;
-    outline: none;
-    color: var(--gemini-text-primary);
-    font-family: var(--font-google);
-    font-size: 14px;
-    line-height: 1.45;
-    resize: none;
-    max-height: 120px;
-    padding: 4px 0;
-    overflow-y: hidden; /* Auto expands without vertical scrollbar clutter */
-}
-
-#prompt-input::placeholder {
-    color: var(--gemini-text-muted);
-}
-
-/* Row 3: Bottom controls (destination + Send Button) */
-.gemini-bottom-controls-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    padding-top: 2px;
-}
-
-.gemini-controls-spacer {
-    flex: 1;
-}
-
-.gemini-controls-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.gemini-action-btn {
-    background: rgba(255, 255, 255, 0.08);
-    border: none;
-    color: var(--gemini-text-secondary);
-    cursor: pointer;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background-color 0.15s ease, transform 0.1s ease, color 0.15s ease, box-shadow 0.2s ease;
-}
-
-.gemini-action-btn:hover {
-    background: rgba(255, 255, 255, 0.12);
-    color: var(--gemini-text-primary);
-}
-
-.gemini-action-btn.has-text {
-    background: var(--gemini-blue);
-    color: #ffffff;
-}
-
-.gemini-action-btn.has-text:hover {
-    background: #5094fa;
-}
-
-/* --------------------------------------------------------------------------
-   Messages Feed & Results
-   -------------------------------------------------------------------------- */
-.gemini-messages {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding: 12px 0;
-    width: 100%;
-}
-
-.message-bubble {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-width: 90%;
-    animation: gemini-fade-in 0.2s ease-out;
-}
-
-.message-bubble.user {
-    align-self: flex-end;
-    background: var(--gemini-surface-hover);
-    padding: 10px 14px;
-    border-radius: 18px 18px 4px 18px;
-    color: var(--gemini-text-primary);
-    font-size: 14px;
-    line-height: 1.4;
-}
-
-.message-bubble.assistant {
-    align-self: flex-start;
-    max-width: 100%;
-    color: var(--gemini-text-primary);
-    font-size: 13px;
-    line-height: 1.5;
-}
-
-@keyframes gemini-fade-in {
-    from { opacity: 0; transform: translateY(6px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.result-card {
-    background: var(--gemini-surface);
-    border: 1px solid var(--gemini-border);
-    border-radius: 14px;
-    padding: 12px;
-    margin-top: 6px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.result-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--gemini-text-secondary);
-}
-
-.elements-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 240px;
-    overflow-y: auto;
-}
-
-.element-pill-action {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid var(--gemini-border);
     border-radius: 8px;
-    font-size: 12px;
-    cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease;
-}
-
-.element-pill-action:hover {
-    background: rgba(66, 133, 244, 0.12);
-    border-color: rgba(66, 133, 244, 0.4);
-}
-
-.element-badge {
-    background: var(--gemini-blue);
+    background: var(--stop);
     color: #fff;
-    font-size: 10px;
-    font-weight: 600;
-    padding: 1px 6px;
-    border-radius: 4px;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    cursor: pointer;
 }
+.stop-button:hover { background: var(--stop-hover); }
+.stop-button:disabled { opacity: 0.6; cursor: default; }
 
-/* --------------------------------------------------------------------------
-   Interactive States, Toast & Thinking Animation
-   -------------------------------------------------------------------------- */
-.tab-select-item.active {
-    background: rgba(66, 133, 244, 0.15);
-    color: var(--gemini-blue);
-    font-weight: 500;
-}
+.stop-state.active { color: var(--stop); font-weight: 600; }
 
-.gemini-toast {
-    position: fixed;
-    bottom: 90px;
-    left: 50%;
-    transform: translateX(-50%) translateY(8px);
-    background: rgba(30, 31, 32, 0.96);
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    color: var(--gemini-text-primary);
-    padding: 8px 16px;
-    border-radius: 20px;
-    font-size: 12px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(12px);
-    z-index: 200;
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.2s ease, transform 0.2s ease;
-}
+.tabs-list { display: flex; flex-direction: column; gap: 12px; }
 
-.gemini-toast.show {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-}
+.agent-group { display: flex; flex-direction: column; gap: 6px; }
+.agent-name { font-weight: 600; }
 
-.thinking-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--gemini-text-muted);
-    font-size: 13px;
-    padding: 4px 0;
-}
-
-.thinking-dots-wrap {
-    display: inline-flex;
-    align-items: center;
+.tab-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
     gap: 4px;
 }
+.tab-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.badge { border: 1px solid var(--border); border-radius: 4px; padding: 0 6px; font-size: 11px; color: var(--muted); }
 
-.thinking-dot {
-    width: 5px;
-    height: 5px;
-    background: var(--gemini-blue);
-    border-radius: 50%;
-    animation: thinking-bounce 1.4s infinite ease-in-out both;
+.release-button {
+    align-self: flex-start;
+    margin-top: 2px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--accent);
+    border-radius: 6px;
+    padding: 3px 10px;
+    cursor: pointer;
 }
+.release-button:hover { background: var(--border); }
 
-.thinking-dot:nth-child(1) { animation-delay: -0.32s; }
-.thinking-dot:nth-child(2) { animation-delay: -0.16s; }
+.footer { font-size: 11px; }
 
-@keyframes thinking-bounce {
-    0%, 80%, 100% { transform: scale(0); opacity: 0.3; }
-    40% { transform: scale(1); opacity: 1; }
+.toast {
+    position: fixed;
+    left: 14px;
+    right: 14px;
+    bottom: 14px;
+    background: var(--text);
+    color: var(--bg);
+    border-radius: 6px;
+    padding: 8px 10px;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
 }
-
-
-/* --------------------------------------------------------------------------
-   Demandes transmises à Antigravity, réponses, cookies (noms seulement)
-   -------------------------------------------------------------------------- */
-.gemini-destination {
-    font-size: 11px;
-    color: var(--gemini-text-muted);
-}
-
-.gemini-action-btn:disabled {
-    opacity: 0.4;
-    cursor: default;
-}
-
-.request-status {
-    font-size: 11px;
-    color: var(--gemini-text-muted);
-}
-
-.request-status.not_sent {
-    color: #f28b82;
-}
-
-.request-status.answered,
-.request-status.read {
-    color: #81c995;
-}
-
-.result-body .muted {
-    font-size: 11px;
-    color: var(--gemini-text-muted);
-    margin-top: 4px;
-}
-
-.result-body .error {
-    color: #f28b82;
-}
-
-.cookie-domain {
-    margin-top: 6px;
-    font-size: 12px;
-    color: var(--gemini-text-secondary);
-}
-
-.cookie-names {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--gemini-text-muted);
-    word-break: break-all;
-}
-
-.field-row {
-    font-size: 11px;
-    color: var(--gemini-text-secondary);
-    background: rgba(255, 255, 255, 0.03);
-    padding: 3px 6px;
-    border-radius: 4px;
-    margin-top: 3px;
-}
-
-.capture-image {
-    width: 100%;
-    border-radius: 8px;
-    margin-top: 6px;
-}
-
-.gemini-hero-subtitle {
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--gemini-text-muted);
-    text-align: center;
-    max-width: 300px;
-}
+.toast.show { opacity: 1; }

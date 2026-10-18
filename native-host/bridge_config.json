@@ -1,11 +1,6 @@
 {
-  "description": "Explicit Chrome extension origins allowed to open the local WebSocket bridge",
+  "description": "Origine de l'extension autorisée à ouvrir le pont local : identifiant fixe, tiré de la clé publique \"key\" de extension/manifest.json (le même sur tous les PC, quel que soit le dossier).",
   "allowed_origins": [
-    "chrome-extension://ljgneacjmkmiopjfacahdpcigiofnngo/",
-    "chrome-extension://bmoppmncalloednpbnkkaikbehponacg/",
-    "chrome-extension://imicfnbdjlkndfcbopfpalpdcepbiobo/",
-    "chrome-extension://ighbankpbmmkejcddeelfampplgbnkfe/",
-    "chrome-extension://mfijmlhofcfejdhgpljfkfeaejgadggi/",
-    "chrome-extension://moapppidhpphhdlmhonnhbdcibpdnbon/"
+    "chrome-extension://blcgddmjdkobmgakjffjpgiicjlflgjf/"
   ]
 }

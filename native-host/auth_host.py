@@ -1,4 +1,4 @@
-"""Hôte natif « com.nexusagy.bridge_auth » : preuves d'authentification de l'extension, sans lui donner le jeton.
+"""Hôte natif « com.nexus.browser_auth » : preuves d'authentification de l'extension, sans lui donner le jeton.
 
 Chrome le lance (chrome.runtime.sendNativeMessage) seulement pour les extensions listées dans son manifeste
 (allowed_origins, mêmes identifiants que bridge_config.json). Un message par lancement (protocole natif de Chrome :
@@ -8,7 +8,7 @@ longueur sur 4 octets little-endian puis JSON UTF-8) :
   → {"ok": true, "client_proof", "session_key"}  si server_proof prouve que le pont connaît le jeton ;
   → {"ok": false, "error"}                        sinon (aucune preuve du client n'est alors calculée).
 
-Le jeton est lu dans ~/.nexusagy/bridge-token (jamais créé ici) et ne sort pas de ce processus.
+Le jeton est lu dans ~/.nexus/nexus-browser/bridge-token (jamais créé ici) et ne sort pas de ce processus.
 """
 
 from __future__ import annotations
@@ -70,7 +70,9 @@ def answer(message: object, caller_id: str | None, token_file: Path | None = Non
         token = read_token(token_file or token_path())
         expected = server_proof(token, client_nonce, server_nonce, role, extension_id)
         if not same(message.get("server_proof"), expected):
-            raise AuthError("le serveur du port 9224 ne prouve pas qu'il connaît le jeton NexusAGY : connexion refusée")
+            raise AuthError(
+                "le serveur du port 9224 ne prouve pas qu'il connaît le jeton NexusBrowser : connexion refusée"
+            )
         return {
             "ok": True,
             "client_proof": client_proof(token, client_nonce, server_nonce, role, extension_id),

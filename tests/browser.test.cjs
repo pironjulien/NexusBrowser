@@ -191,8 +191,46 @@ function virtualClock() {
             schedule();
             return timer;  // clearTimeout du harnais le marque « cleared » : il n'est alors jamais déclenché
         },
-        get now() { return now; }
+        get now() { return now; },
+        advance(ms) { now += ms; }  // temps qui passe sans minuterie (silence d'une session)
     };
+}
+
+// Client du pont simulé : identité posée par le pont à côté des paramètres (agent + session).
+const TEST_CLIENT = {agent: 'Test', id: 'test-session-1'};
+const AGENT_A = {agent: 'Claude', id: 'claude-aaaa1111'};
+const AGENT_B = {agent: 'Codex', id: 'codex-bbbb2222'};
+
+// Monde isolé simulé (comme Page.createIsolatedWorld) : DOM et objets de la page partagés, mais les variables posées
+// par les scripts (« expandos » __*) appartiennent à CE monde : la page ne les voit ni ne les remplace.
+const isExpando = (key) => typeof key === 'string' && key.startsWith('__');
+
+function isolatedGlobal(page, seed = {}) {
+    const own = {...seed};
+    const base = page.window || {};
+    const has = (key) => Object.prototype.hasOwnProperty.call(own, key);
+    const win = new Proxy(base, {
+        get: (target, key) => has(key) ? own[key] : (isExpando(key) ? undefined : target[key]),
+        set: (target, key, value) => { own[key] = value; return true; },
+        has: (target, key) => has(key) || (!isExpando(key) && key in target),
+        defineProperty: (target, key, descriptor) => { Object.defineProperty(own, key, descriptor); return true; },
+        deleteProperty: (target, key) => { delete own[key]; return true; }
+    });
+    const global = {};
+    for (const key of Object.keys(page)) {
+        if (key === 'window') continue;
+        Object.defineProperty(global, key, {get: () => page[key], set: (v) => { page[key] = v; }, enumerable: true, configurable: true});
+    }
+    global.window = win;
+    return {context: vm.createContext(global), window: win, own};
+}
+
+/** Identifiants d'onglet visés par une commande (tabId, tab_id, id, tabIds). */
+function tabIdsOf(params = {}) {
+    const ids = [];
+    for (const key of ['tabId', 'tab_id']) if (Number.isInteger(params[key])) ids.push(params[key]);
+    if (Array.isArray(params.tabIds)) for (const id of params.tabIds) if (Number.isInteger(id)) ids.push(id);
+    return ids;
 }
 
 function harness(pageOverrides = {}, chromeOverrides = {}) {
@@ -203,6 +241,7 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
     const mouseLog = [];
     const mouseState = {nativeDrag: chromeOverrides.nativeDrag !== false};
     const scriptCalls = [];
+    const tabMessages = [];
     const focusCalls = {tabs: 0, windows: 0};
     const element = {
         scrollIntoView() {}, focus() {}, getBoundingClientRect: () => ({x: 0, y: 0, width: 10, height: 10}),
@@ -210,15 +249,21 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
         parentNode: null,
         onTrusted(type) { if (type === 'click') clicks++; }
     };
+    const {isolatedWindow: isolatedSeed, ...pageProps} = pageOverrides;
     const page = {
         document: listenable({
             querySelectorAll: () => found ? [element] : [],
             elementFromPoint: (x, y) => (found && x >= 0 && x <= 10 && y >= 0 && y <= 10) ? element : null
         }),
-        window: {dispatchEvent() {}, __antigravity_som_elements: new Map([[1, element]])},
+        window: {dispatchEvent() {}},
         CustomEvent: class {}, MouseEvent: class {}, Event: class {},
-        ...pageOverrides
+        ...pageProps
     };
+    // Marqueur #1 déjà posé par une carte précédente, dans le monde isolé de l'extension (jamais dans la page).
+    const worldSeed = isolatedSeed || (pageProps.document ? {} : {__nexus_som_elements: new Map([[1, element]])});
+    const worlds = new Map();  // executionContextId -> monde isolé du cadre principal
+    let nextWorld = 1000;
+    let scriptingWorld = null;  // monde ISOLATED de chrome.scripting (repli sans débogueur)
     let onEvent;
     let onMessage;
     let onRemoved;
@@ -249,7 +294,9 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
             reload: async () => {},
             update: async (id, p) => { focusCalls.tabs++; return { id, ...p, windowId: 10 }; },
             group: async ({ tabIds, groupId }) => groupId || 101,
+            sendMessage: async (tabId, message, options) => { tabMessages.push({tabId, message, options}); },
             onRemoved: {addListener(fn) { onRemoved = fn; }},
+            onReplaced: event,
             ...(chromeOverrides.tabs || {})
         },
         windows: {
@@ -261,14 +308,20 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
             async executeScript({target, world, func, args}) {
                 scriptCalls.push({target, world, name: func.name, args});
                 if (chromeOverrides.scriptingError) throw new Error(chromeOverrides.scriptingError);
-                const value = vm.runInNewContext(`(${func.toString()})(...${JSON.stringify(args || [])})`, page);
+                const code = `(${func.toString()})(...${JSON.stringify(args || [])})`;
+                let value;
+                if (world === 'MAIN') value = vm.runInNewContext(code, page);
+                else value = vm.runInContext(code, (scriptingWorld ||= isolatedGlobal(page)).context);
                 return [{frameId: 0, result: value === undefined ? null : JSON.parse(JSON.stringify(value))}];
             }
         },
         storage: {
             session: {
-                get: async (key) => (key in sessionData ? {[key]: sessionData[key]} : {}),
-                set: async (items) => { Object.assign(sessionData, items); },
+                get: async (keys) => {
+                    const list = keys === undefined || keys === null ? Object.keys(sessionData) : (Array.isArray(keys) ? keys : [keys]);
+                    return Object.fromEntries(list.filter(k => k in sessionData).map(k => [k, sessionData[k]]));
+                },
+                set: async (items) => { Object.assign(sessionData, JSON.parse(JSON.stringify(items))); },
                 remove: async (key) => { delete sessionData[key]; }
             }
         },
@@ -278,15 +331,31 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
                 if (chromeOverrides.attachError) throw new Error(chromeOverrides.attachError);
             },
             detach: async (target) => { detached.push(target.tabId); },
+            getTargets: async () => (chromeOverrides.targets || []),
             async sendCommand(target, method, params) {
                 calls.push({target, method, params});
                 if (chromeOverrides.debuggerSendCommand) {
                     const custom = await chromeOverrides.debuggerSendCommand(target, method, params);
                     if (custom !== undefined) return custom;
                 }
+                if (method === 'Page.getFrameTree') {
+                    return {frameTree: {frame: {id: 'MAIN', url: 'https://example.invalid/', securityOrigin: 'https://example.invalid', loaderId: 'L0'}}};
+                }
+                if (method === 'Page.createIsolatedWorld') {
+                    const id = nextWorld++;
+                    worlds.set(id, isolatedGlobal(page, worlds.size ? {} : worldSeed));
+                    return {executionContextId: id};
+                }
                 if (method === 'Runtime.evaluate') {
                     if (failure) return {exceptionDetails: {text: 'Script failed'}};
-                    const evalVal = vm.runInNewContext(params.expression, page);
+                    let evalVal;
+                    if (params.contextId !== undefined) {
+                        const world = worlds.get(params.contextId);
+                        if (!world) throw new Error('Cannot find context with specified id');
+                        evalVal = vm.runInContext(params.expression, world.context);
+                    } else {
+                        evalVal = vm.runInNewContext(params.expression, page);
+                    }
                     return {result: {value: (evalVal && typeof evalVal.then === 'function') ? await evalVal : evalVal}};
                 }
                 if (method === 'DOM.getDocument') return {root: {nodeId: 1}};
@@ -325,8 +394,30 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
         for (const file of files) vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension', file), 'utf8'), ctx);
     };
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/background.js'), 'utf8'), ctx);
+    // autoOwn (défaut) : un onglet visé par un test appartient au client qui le vise, comme s'il l'avait ouvert par
+    // new_tab. Les tests d'isolation le coupent (autoOwn: false) pour éprouver la propriété elle-même.
+    const autoOwn = chromeOverrides.autoOwn !== false;
+    const own = async (tabId, client = TEST_CLIENT, how = 'created') => {
+        await vm.runInContext('extensionStateReady', ctx);
+        await ctx.rememberTabOwner(tabId, client, how);
+    };
     return {
-        run: (action, params) => ctx.handleCommand({action, params}),
+        // extra : champs posés par le pont à côté de la commande (gone : sessions mortes du même agent).
+        run: async (action, params = {}, client = TEST_CLIENT, extra = {}) => {
+            await vm.runInContext('extensionStateReady', ctx);
+            if (autoOwn && client) {
+                for (const id of tabIdsOf(params)) {
+                    if (!vm.runInContext(`tabOwners.has(${id})`, ctx)) await own(id, client);
+                }
+            }
+            return ctx.handleCommand(client ? {action, params, client, ...extra} : {action, params, ...extra});
+        },
+        advanceTime: (ms) => clock.advance(ms),
+        own,
+        owners: () => plain(vm.runInContext('Object.fromEntries(tabOwners)', ctx)),
+        element, tabMessages, worlds,
+        isolatedWindow: () => [...worlds.values()][0]?.window,
+        isolatedWindowFor: (contextId) => worlds.get(contextId)?.window,
         // Expéditeur par défaut : une page de l'extension (panneau, offscreen) ; {tab} = script de contenu.
         sendMessage: (msg, sender = {id: chrome.runtime.id}) => new Promise((resolve) => {
             if (!onMessage) return resolve(undefined);
@@ -519,12 +610,8 @@ test('fill targets mark index or custom selector', async () => {
         get value() { return filledValue; },
         set value(v) { filledValue = v; }
     };
-    const h = harness({
-        window: {
-            dispatchEvent() {},
-            __antigravity_som_elements: new Map([[5, inputElement]])
-        }
-    });
+    // Marqueur #5 posé par une carte précédente, dans le monde isolé de l'extension.
+    const h = harness({isolatedWindow: {__nexus_som_elements: new Map([[5, inputElement]])}});
     const res = await h.run('fill', {tabId: 1, selector: '#5', value: 'hello@example.com'});
     assert.equal(res.data.success, true);
     assert.equal(filledValue, 'hello@example.com');
@@ -615,9 +702,9 @@ test('semanticFill and fill support textarea with prototype setter', async () =>
             getElementById: () => null
         }
     });
-    const res1 = await h.run('semantic_fill', { tabId: 1, label: 'Votre message', value: 'NexusAGY SOTA' });
+    const res1 = await h.run('semantic_fill', { tabId: 1, label: 'Votre message', value: 'NexusBrowser SOTA' });
     assert.equal(res1.data.success, true);
-    assert.equal(textVal, 'NexusAGY SOTA');
+    assert.equal(textVal, 'NexusBrowser SOTA');
 
     const res2 = await h.run('fill', { tabId: 1, selector: '#msg-box', value: 'Updated feedback' });
     assert.equal(res2.data.success, true);
@@ -668,7 +755,7 @@ test('vision_inspect captures screenshot and generates Set-of-Mark elements', as
     };
     const h = harness({
         document: {
-            querySelectorAll: (sel) => (typeof sel === 'string' && sel.includes('__antigravity_som_marker')) ? [] : [btn],
+            querySelectorAll: (sel) => (typeof sel === 'string' && sel.includes('__nexus_som_marker')) ? [] : [btn],
             createElement: () => ({ style: {}, remove() {} }),
             documentElement: { appendChild() {} },
             title: 'Vision Test'
@@ -683,6 +770,35 @@ test('vision_inspect captures screenshot and generates Set-of-Mark elements', as
     assert.equal(res.data.markerCount >= 1, true);
     assert.equal(res.data.markers[0].tag, 'button');
     assert.match(res.data.screenshotDataUrl, /^data:image\/png;base64,/);
+});
+
+test('capture d\'un onglet de fond : flux d\'images tenu pendant la capture (screenshot et vision_inspect), sans premier plan', async () => {
+    const order = (h) => h.calls.map(c => c.method)
+        .filter(m => ['Page.startScreencast', 'Page.captureScreenshot', 'Page.stopScreencast'].includes(m));
+    const h = harness({
+        document: {querySelectorAll: () => [], createElement: () => ({style: {}, remove() {}}), documentElement: {appendChild() {}}},
+        window: {innerWidth: 1024, innerHeight: 768, location: {href: 'https://example.com'}}
+    });
+    await h.run('screenshot', {tabId: 1});
+    assert.deepEqual(order(h), ['Page.startScreencast', 'Page.captureScreenshot', 'Page.stopScreencast']);
+    assert.equal(h.calls.some(c => c.method === 'Page.bringToFront'), false);
+    h.calls.length = 0;
+    await h.run('vision_inspect', {tabId: 1});
+    assert.deepEqual(order(h), ['Page.startScreencast', 'Page.captureScreenshot', 'Page.stopScreencast']);
+});
+
+test('capture : flux refusé par Chrome -> capture directe ; capture en échec -> flux arrêté quand même', async () => {
+    const refused = harness({}, {debuggerSendCommand: async (target, method) => {
+        if (method === 'Page.startScreencast') throw new Error('Screencast refusé');
+    }});
+    const res = await refused.run('screenshot', {tabId: 1});
+    assert.match(res.data.dataUrl, /^data:image\/png;base64,/);
+    assert.equal(refused.calls.some(c => c.method === 'Page.stopScreencast'), false);
+    const failing = harness({}, {debuggerSendCommand: async (target, method) => {
+        if (method === 'Page.captureScreenshot') throw new Error('Capture impossible');
+    }});
+    await failing.run('screenshot', {tabId: 1}).catch(() => {});
+    assert.equal(failing.calls.at(-1).method, 'Page.stopScreencast');
 });
 
 test('about:blank tabs can be created and debugged without protected URL rejection', async () => {
@@ -702,23 +818,15 @@ test('sidePanel behavior is configured to open panel on action click', async () 
     assert.equal(h.getSidePanelBehavior()?.openPanelOnActionClick, true);
 });
 
-test('sidepanel messaging routes getActiveTab and executeAction correctly', async () => {
+test('poste de contrôle : aucune action de page depuis le panneau (ni executeAction ni getActiveTab)', async () => {
     const h = harness();
-    const activeTabRes = await h.sendMessage({ target: 'background', getActiveTab: true });
-    assert.equal(activeTabRes.data.id, 1);
-    assert.equal(activeTabRes.data.url, 'https://example.invalid');
-
-    const clickRes = await h.sendMessage({
-        target: 'background',
-        executeAction: true,
-        action: 'click',
-        params: { tabId: 1, selector: 'button' }
-    });
-    assert.equal(clickRes.data.success, true);
-    assert.equal(h.clicks, 1);
+    assert.equal(await h.sendMessage({target: 'background', executeAction: true, action: 'click', params: {tabId: 1, selector: 'button'}}), undefined);
+    assert.equal(await h.sendMessage({target: 'background', getActiveTab: true}), undefined);
+    assert.equal(h.clicks, 0);
+    assert.equal(h.calls.length, 0);
 });
 
-test('create_tab opens in background and automatically creates Antigravity tab group', async () => {
+test('create_tab opens in background and automatically creates the agent tab group', async () => {
     let groupedData = null;
     let createdActive = null;
     const h = harness({}, {
@@ -744,6 +852,36 @@ test('create_tab opens in background and automatically creates Antigravity tab g
     assert.equal(groupedData.tabIds[0], 99);
 });
 
+test('new_tab de fond : fenêtre normale visée, jamais la fenêtre d\'application ; sans fenêtre normale, fenêtre réduite sans focus', async () => {
+    const created = [];
+    const windowsCreated = [];
+    const withNormal = harness({}, {
+        tabs: { create: async (p) => { created.push(p); return { id: 77, url: p.url, active: p.active, windowId: p.windowId }; } },
+        windows: {
+            getLastFocused: async ({ windowTypes }) => {
+                assert.deepEqual(JSON.parse(JSON.stringify(windowTypes)), ['normal']);
+                return { id: 5, type: 'normal' };
+            },
+            getAll: async () => [{ id: 5, type: 'normal' }],
+        }
+    });
+    await withNormal.run('create_tab', { url: 'https://example.com/a', group: false });
+    assert.deepEqual(JSON.parse(JSON.stringify(created.at(-1))), { url: 'https://example.com/a', active: false, windowId: 5 });
+
+    const appOnly = harness({}, {
+        tabs: { create: async () => { throw new Error('ne doit pas être appelé'); } },
+        windows: {
+            getLastFocused: async () => { throw new Error('No last-focused window'); },
+            getAll: async () => [{ id: 9, type: 'app' }],
+            create: async (p) => { windowsCreated.push(p); return { id: 12, tabs: [{ id: 120, url: p.url, active: false }] }; },
+        }
+    });
+    const res = await appOnly.run('create_tab', { url: 'https://example.com/b' });
+    assert.equal(res.data.id, 120);
+    assert.equal(res.data.windowCreated, true);
+    assert.deepEqual(JSON.parse(JSON.stringify(windowsCreated)), [{ url: 'https://example.com/b', focused: false, state: 'minimized', type: 'normal' }]);
+});
+
 test('group_tabs explicitly groups specified tabs with custom color and title', async () => {
     const h = harness({}, {
         tabGroups: {
@@ -751,30 +889,42 @@ test('group_tabs explicitly groups specified tabs with custom color and title', 
             update: async (id, p) => ({ id, ...p })
         }
     });
-    const res = await h.run('group_tabs', { tabIds: [1, 2], title: 'Antigravity', color: 'purple', collapsed: true });
+    const res = await h.run('group_tabs', { tabIds: [1, 2], title: 'Nexus', color: 'purple', collapsed: true });
     assert.equal(res.data.groupId, 101);
-    assert.equal(res.data.title, 'Antigravity');
+    assert.equal(res.data.title, 'Nexus');
     assert.equal(res.data.color, 'purple');
     assert.equal(res.data.collapsed, true);
     assert.equal(res.data.tabIds[0], 1);
     assert.equal(res.data.tabIds[1], 2);
 });
 
-test('smart tab resolution sticks to created agent tab without disrupting active tab', async () => {
+test('onglets partagés : après new_tab, une commande de page sans tab_id est refusée (ni onglet commun, ni onglet actif)', async () => {
     const h = harness({}, {
         tabs: {
             create: async (p) => ({ id: 88, url: p.url, active: false, windowId: 10 }),
             get: async (id) => ({ id, url: 'https://example.invalid', windowId: 10 })
         }
     });
-
-    // Create an agent tab
-    await h.run('create_tab', { url: 'https://example.com/isolated' });
-
-    // Subsequent action without tabId should target tab 88, not active tab 1
-    await h.run('click', { selector: 'button' });
-    const lastTargetCall = h.calls.find(c => c.method === 'Runtime.evaluate');
-    assert.equal(lastTargetCall.target.tabId, 88);
+    // L'agent A ouvre son onglet ; l'agent B (même extension) envoie une commande sans tab_id.
+    assert.equal((await h.run('create_tab', { url: 'https://example.com/isolated' })).data.id, 88);
+    const pageCommands = [
+        ['click', {selector: 'button'}], ['fill', {selector: 'input', value: 'x'}], ['evaluate', {code: '1'}],
+        ['upload', {files: ['C:/test/one.txt']}], ['press_key', {key: 'Enter'}], ['get_cookies', {}],
+        ['cdp_send', {method: 'Page.reload'}], ['get_content', {mode: 'text'}], ['screenshot', {}],
+        ['handle_dialog', {accept: true}], ['wait_download', {timeoutMs: 10}], ['group_tabs', {title: 'X'}],
+        ['interactive_map', {}], ['network_requests', {}], ['type_keys', {text: 'a'}], ['select_tab', {}]
+    ];
+    for (const [action, params] of pageCommands) {
+        const res = await h.run(action, params);
+        assert.match(res.error || '', /précisez tab_id ou ouvrez un onglet avec new_tab/, action);
+    }
+    assert.equal(h.calls.length, 0);  // aucun débogueur attaché, rien n'a touché l'onglet 88 ni l'onglet actif 1
+    // Avec son tab_id, chaque agent agit sur SON onglet.
+    await h.run('click', {tabId: 88, selector: 'button'});
+    assert.ok(h.calls.length > 0 && h.calls.every(c => c.target.tabId === 88));
+    // Restent permis sans tab_id : ping, liste des onglets, identité de l'onglet actif, nouvel onglet.
+    for (const action of ['ping', 'list_tabs', 'active_tab']) assert.equal((await h.run(action, {})).error, undefined, action);
+    assert.match((await h.run('click', {tabId: 'abc', selector: 'button'})).error, /tab_id invalide/);
 });
 
 // -----------------------------------------------------------------------------
@@ -852,7 +1002,7 @@ function fakeDom(build) {
 }
 
 function domPage(dom) {
-    return {document: dom.document, window: {dispatchEvent() {}, __antigravity_som_elements: new Map()}};
+    return {document: dom.document, window: {dispatchEvent() {}, __nexus_som_elements: new Map()}};
 }
 
 const toolbar = (h) => [
@@ -931,31 +1081,31 @@ test('close_tab, navigate et reload sans tab_id ni onglet d\'agent connu sont re
             reload: async () => { reloaded++; }
         }
     });
-    assert.match((await h.run('close_tab', {})).error, /Aucun onglet de l'agent/);
+    assert.match((await h.run('close_tab', {})).error, /précisez tab_id/);
     assert.match((await h.run('navigate', {url: 'https://example.com'})).error, /tab_id/);
     assert.match((await h.run('reload', {})).error, /new_tab/);
     assert.equal(removed + updated + reloaded, 0);
-    // Les lectures peuvent toujours viser l'onglet actif
-    const content = await h.run('get_content', {mode: 'text'});
-    assert.equal(content.error, undefined);
-    assert.equal(h.calls.find(c => c.method === 'Runtime.evaluate').target.tabId, 1);
+    // Les lectures de page ne visent plus l'onglet actif de Julien non plus.
+    assert.match((await h.run('get_content', {mode: 'text'})).error, /précisez tab_id/);
+    assert.equal(h.calls.some(c => c.method === 'Runtime.evaluate'), false);
 });
 
-test('l\'onglet de l\'agent est persisté et survit au redémarrage du service worker', async () => {
+test('l\'extension ne mémorise aucun onglet d\'agent (ancien onglet commun ignoré après redémarrage)', async () => {
     const first = harness();
     await first.run('create_tab', {url: 'https://example.com/agent'});
-    assert.equal(first.sessionData.nexusagyAgentTabId, 99);
+    assert.equal('nexusBrowserAgentTabId' in first.sessionData, false);
 
     let navigated = null;
     const restarted = harness({}, {
-        sessionStorage: {nexusagyAgentTabId: 77},
+        sessionStorage: {nexusBrowserAgentTabId: 77},
         tabs: {
             get: async (id) => ({id, url: 'https://example.invalid', windowId: 10}),
             update: async (id, p) => { navigated = id; return {id, ...p}; }
         }
     });
-    const res = await restarted.run('navigate', {url: 'https://example.com/next'});
-    assert.equal(res.error, undefined);
+    assert.match((await restarted.run('navigate', {url: 'https://example.com/next'})).error, /précisez tab_id/);
+    assert.equal(navigated, null);
+    assert.equal((await restarted.run('navigate', {tabId: 77, url: 'https://example.com/next'})).error, undefined);
     assert.equal(navigated, 77);
 });
 
@@ -968,10 +1118,13 @@ test('une boîte de dialogue n\'est jamais acceptée d\'office et se règle par 
     const blocked = await h.run('evaluate', {tabId: 1, code: '2'});
     assert.match(blocked.error, /confirm/);
     assert.match(blocked.error, /Supprimer définitivement/);
-    const active = await h.run('active_tab', {});
-    assert.equal(active.data.pendingDialogs[0].message, 'Supprimer définitivement ?');
+    const read = await h.run('get_content', {tabId: 1, mode: 'text'});
+    assert.match(read.error, /Supprimer définitivement/);
+    // Sans tab_id : refusé, la boîte n'est pas réglée au hasard.
+    assert.match((await h.run('handle_dialog', {accept: true})).error, /précisez tab_id/);
+    assert.equal(h.calls.some(c => c.method === 'Page.handleJavaScriptDialog'), false);
 
-    const handled = await h.run('handle_dialog', {accept: false});
+    const handled = await h.run('handle_dialog', {tabId: 1, accept: false});
     assert.equal(handled.data.accepted, false);
     assert.equal(handled.data.dialog.type, 'confirm');
     const call = h.calls.find(c => c.method === 'Page.handleJavaScriptDialog');
@@ -1201,7 +1354,7 @@ test('élément en partie couvert : un point intérieur dégagé est choisi', as
     const h = harness();
     // Bandeau sur la moitié haute du bouton : le centre (5, 5) est couvert, (2.5, 7.5) ne l'est pas.
     const banner = {tagName: 'DIV', id: 'banner', parentNode: null};
-    const button = h.page.window.__antigravity_som_elements.get(1);
+    const button = h.element;
     h.page.document.elementFromPoint = (x, y) => y <= 6 ? banner : button;
     const res = await h.run('click', {tabId: 1, selector: 'button'});
     assert.equal(res.data.trusted_click, true);
@@ -1230,7 +1383,8 @@ test('repli JavaScript signalé quand le débogueur ne peut pas s\'attacher', as
     assert.match(res.data.fallback_reason, /CDP attach error/);
     assert.equal(h.mouse().length, 0);
     assert.equal(h.clicks, 1);  // el.click() synthétique
-    assert.ok(h.scriptCalls.length > 0 && h.scriptCalls.every(c => c.world === 'MAIN' && c.target.tabId === 1));
+    // Repli dans le monde ISOLÉ de l'extension, jamais dans celui de la page.
+    assert.ok(h.scriptCalls.length > 0 && h.scriptCalls.every(c => c.world === 'ISOLATED' && c.target.tabId === 1));
     const hover = await h.run('hover', {tabId: 1, selector: 'button'});
     assert.equal(hover.data.method, 'js_fallback');
     assert.equal(hover.data.trusted_hover, false);
@@ -1319,7 +1473,7 @@ function richDom(build, {frameOrigin = null} = {}) {
     const trusted = [];
     const doc = listenable({title: 'Page', activeElement: null, __selection: null});
     const win = {
-        dispatchEvent() {}, innerWidth: 1280, innerHeight: 4000, __antigravity_som_elements: new Map(),
+        dispatchEvent() {}, innerWidth: 1280, innerHeight: 4000, __nexus_som_elements: new Map(),
         getComputedStyle: (el) => ({display: el.hiddenStyle ? 'none' : (el.inline ? 'inline' : 'block'), visibility: 'visible', paddingLeft: '0', paddingTop: '0'}),
         getSelection: () => ({
             removeAllRanges() { doc.__selection = null; },
@@ -1601,10 +1755,24 @@ test('moteur AX : rôle et nom calculés par Chrome (queryAXTree) puis filtrés 
                 // Nom exposé par Chrome (ex. contenu CSS ::after), absent du DOM.
                 return {nodes: [{backendDOMNodeId: 21, ignored: false, name: {value: 'Envoyer la commande'}}]};
             }
-            if (method === 'DOM.resolveNode') { objects.set('n' + params.backendNodeId, ref.byId('send')); return {object: {objectId: 'n' + params.backendNodeId}}; }
+            if (method === 'DOM.resolveNode') {
+                // Résolu dans le monde demandé : celui de l'extension (monde isolé du cadre principal).
+                objects.set('n' + params.backendNodeId, {el: ref.byId('send'), contextId: params.executionContextId});
+                return {object: {objectId: 'n' + params.backendNodeId}};
+            }
             if (method === 'Runtime.callFunctionOn' && objects.has(params.objectId)) {
-                const value = vm.runInNewContext(`(${params.functionDeclaration}).apply(el, args)`, {el: objects.get(params.objectId), args: params.arguments.map(a => a.value)});
-                return {result: {value}};
+                const {el, contextId} = objects.get(params.objectId);
+                const view = h.isolatedWindowFor(contextId);
+                assert.ok(view, 'élément résolu hors du monde isolé');
+                // this.ownerDocument.defaultView vu depuis ce monde : sa propre fenêtre (comme dans Chrome).
+                const ownerDocument = el.ownerDocument;
+                el.ownerDocument = {defaultView: view};
+                try {
+                    const value = vm.runInNewContext(`(${params.functionDeclaration}).apply(el, args)`, {el, args: params.arguments.map(a => a.value)});
+                    return {result: {value}};
+                } finally {
+                    el.ownerDocument = ownerDocument;
+                }
             }
         }
     });
@@ -1794,7 +1962,9 @@ function crossOriginHarness({oopif = false, coverFrame = false, sameOriginDocume
                 if (target.sessionId === SESSION) return {frameTree: {frame: {id: 'F1', url: 'http://localhost:2/frame', securityOrigin: 'http://localhost:2', loaderId: 'L3'}}};
                 return {frameTree};
             }
-            if (method === 'Page.createIsolatedWorld') { assert.equal(params.frameId, 'F1'); return {executionContextId: 77}; }
+            // Monde isolé du cadre d'une autre origine (77) ; celui du cadre principal MAIN est servi par le harnais.
+            if (method === 'Page.createIsolatedWorld' && params.frameId === 'F1') return {executionContextId: 77};
+            if (method === 'Page.createIsolatedWorld') { assert.equal(params.frameId, 'MAIN'); return undefined; }
             if (method === 'Runtime.evaluate' && params.contextId === 77) {
                 const value = vm.runInNewContext(params.expression, frame.page);
                 return {result: {value}};
@@ -1905,7 +2075,8 @@ test('iframe srcdoc same-origin annoncée avec une origine étrange : parcourue 
     assert.equal(found.data.count, 2);
     assert.deepEqual(plain(found.data.candidates.map(c => c.frame)), ['top', 'iframe#frame']);
     assert.ok(calls.some(c => c.method === 'Runtime.callFunctionOn' && /contentDocument/.test(c.params.functionDeclaration)));
-    assert.equal(calls.filter(c => c.method === 'Page.createIsolatedWorld').length, 0);
+    // Aucun monde isolé pour le cadre (déjà parcouru par sa page) ; seul celui du cadre principal existe.
+    assert.equal(calls.filter(c => c.method === 'Page.createIsolatedWorld' && c.params.frameId !== 'MAIN').length, 0);
 });
 
 // -----------------------------------------------------------------------------
@@ -2072,9 +2243,9 @@ test('wait_download : interruption, danger et délai rapportés clairement', asy
 // Serveur et hôte natif simulés avec node:crypto, même protocole que native-host/bridge_auth.py.
 // -----------------------------------------------------------------------------
 const nodeCrypto = require('node:crypto');
-const BRIDGE_PROTOCOL = 'nexusagy-bridge/1';
+const BRIDGE_PROTOCOL = 'nexus-browser/1';
 const TEST_TOKEN = 'jeton-de-test-'.padEnd(64, 'x');
-const EXT_ID = 'ljgneacjmkmiopjfacahdpcigiofnngo';
+const EXT_ID = 'blcgddmjdkobmgakjffjpgiicjlflgjf';
 const hmacRaw = (key, ...parts) => nodeCrypto.createHmac('sha256', key).update([BRIDGE_PROTOCOL, ...parts].join('\n')).digest();
 const hmac64 = (key, ...parts) => hmacRaw(key, ...parts).toString('base64url');
 const testNonce = () => nodeCrypto.randomBytes(32).toString('base64url');
@@ -2161,6 +2332,7 @@ function bridgeHarness({token} = {}) {
     ws.open();
     const server = fakeServer(ws, {token});
     const evaluations = () => h.calls.filter(c => c.method === 'Runtime.evaluate').length;
+    h.own(1);  // onglet 1 ouvert par le client de test : seules ses commandes signées par le pont y agissent
     // Fin de test : liaison fermée, aucune minuterie de reconnexion ni de keepalive laissée derrière.
     const stop = () => h.evalInContext('if (bridgeLink) bridgeLink.close(); clearTimeout(reconnectTimer); clearInterval(keepaliveInterval);');
     return {h, ws, host, server, evaluations, stop};
@@ -2181,7 +2353,7 @@ test('pont : un serveur qui envoie une commande sans poignée de main n\'obtient
         assert.equal(hello.role, 'service_worker');
         assert.equal(hello.extension_id, EXT_ID);
         assert.match(hello.client_nonce, /^[A-Za-z0-9_-]{43}$/);
-        ws.deliver({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1 + 1'}});
+        ws.deliver({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1 + 1'}, client: TEST_CLIENT});
         await until(() => ws.readyState === 3, 'fermeture');
         await settle();
         assert.equal(ws.closeCode, 1008);
@@ -2201,7 +2373,7 @@ test('pont : preuve du serveur fausse -> aucune preuve du client, aucune command
         assert.equal(server.proof(), undefined);
         // Liaison fermée : même un message signé avec la clé de session n'est plus lu.
         ws.deliver(server.frame({type: 'auth_ok'}));
-        ws.deliver(server.frame({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1'}}));
+        ws.deliver(server.frame({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1'}, client: TEST_CLIENT}));
         await settle();
         assert.equal(evaluations(), 0);
         const status = await h.sendMessage({target: 'background', getStatus: true});
@@ -2219,7 +2391,7 @@ test('pont : commande signée avant auth_ok, non signée, mal signée ou rejoué
             server.challenge();
             await until(() => server.proof(), 'preuve du client');
             assert.equal(server.proof().client_proof, server.expectedProof());
-            const command = {requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1 + 1'}};
+            const command = {requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1 + 1'}, client: TEST_CLIENT};
             if (attack === 'before_auth_ok') {
                 ws.deliver(server.frame(command));
             } else {
@@ -2244,7 +2416,7 @@ test('pont : serveur authentifié -> commande exécutée et réponse signée, li
     const {h, ws, server, evaluations, stop} = bridge;
     try {
         await authenticated(bridge);
-        server.send({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1 + 1'}});
+        server.send({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1 + 1'}, client: TEST_CLIENT});
         await until(() => server.replies().some(r => r.requestId === 'r1'), 'réponse');
         const reply = server.replies().find(r => r.requestId === 'r1');
         assert.deepEqual(plain(reply), {requestId: 'r1', success: true, data: 2});
@@ -2256,44 +2428,38 @@ test('pont : serveur authentifié -> commande exécutée et réponse signée, li
     } finally { stop(); }
 });
 
-test('panneau : demande transmise par la liaison authentifiée, réponse et lecture rattachées, jamais sans pont', async () => {
+test("poste de contrôle : STOP pose l'arrêt dans Chrome puis l'annonce au pont (événement signé)", async () => {
     const bridge = bridgeHarness();
-    const {h, server, stop} = bridge;
-    const tab = {id: 1, title: 'Ex', url: 'https://example.invalid'};
+    const {h, server, evaluations, stop} = bridge;
     try {
-        // Pont non authentifié : rien n'est transmis, et le panneau le dit.
-        const refused = await h.sendMessage({target: 'background', sidepanelSubmit: {text: 'Résume la page', tab}});
-        assert.equal(refused.data.status, 'not_sent');
-        assert.match(refused.error, /non authentifié/);
         await authenticated(bridge);
-        const sent = await h.sendMessage({target: 'background', sidepanelSubmit: {text: 'Résume la page', tab}});
-        assert.equal(sent.data.status, 'sent');
-        await until(() => server.replies().some(r => r.event === 'sidepanel_request'), 'événement');
-        const event = server.replies().find(r => r.event === 'sidepanel_request');
-        assert.equal(event.request.id, sent.data.id);
-        assert.equal(event.request.text, 'Résume la page');
-        assert.deepEqual(plain(event.request.tab), tab);
-        // Le pont signale la lecture, puis l'agent répond.
-        server.send({requestId: 'm1', action: 'sidepanel_mark_read', params: {ids: [sent.data.id]}});
-        await until(() => server.replies().some(r => r.requestId === 'm1'), 'accusé de lecture');
-        let thread = h.sessionData.nexusagySidepanelThread;
-        assert.equal(thread.find(e => e.id === sent.data.id).status, 'read');
-        server.send({requestId: 'a1', action: 'sidepanel_reply', params: {request_id: sent.data.id, text: 'Voici le résumé.'}});
-        await until(() => server.replies().some(r => r.requestId === 'a1'), 'réponse affichée');
-        thread = h.sessionData.nexusagySidepanelThread;
-        assert.equal(thread.find(e => e.id === sent.data.id).status, 'answered');
-        assert.deepEqual(plain(thread.filter(e => e.kind === 'reply').map(e => [e.text, e.request_id])), [['Voici le résumé.', sent.data.id]]);
-        assert.equal(thread.find(e => e.id === refused.data.id).status, 'not_sent');
+        const res = await h.sendMessage({target: 'background', panelStop: true});
+        assert.equal(res.sentToBridge, true);
+        assert.ok(res.stoppedUntil > Date.now() + 100000);
+        await until(() => server.replies().some(r => r.event === 'emergency_stop'), 'arrêt annoncé au pont');
+        assert.equal(server.replies().find(r => r.event === 'emergency_stop').by, 'poste de contrôle');
+        // Plus aucune action, même signée par le pont, tant que l'arrêt tient ; les lectures restent permises.
+        server.send({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1'}, client: TEST_CLIENT});
+        await until(() => server.replies().some(r => r.requestId === 'r1'), 'refus');
+        assert.match(server.replies().find(r => r.requestId === 'r1').error, /Arrêt d'urgence/);
+        assert.equal(evaluations(), 0);
+        server.send({requestId: 'r2', action: 'list_tabs', params: {}, client: TEST_CLIENT});
+        await until(() => server.replies().some(r => r.requestId === 'r2'), 'lecture');
+        assert.equal(server.replies().find(r => r.requestId === 'r2').success, true);
     } finally { stop(); }
 });
 
-test('panneau : un script de contenu ne peut ni exécuter d\'action ni obtenir de preuve du pont', async () => {
+test("poste de contrôle : un script de contenu ne peut ni lire l'état, ni poser STOP, ni rendre un onglet, ni obtenir de preuve", async () => {
     const {h, host, evaluations, stop} = bridgeHarness();
     try {
         const fromPage = {id: EXT_ID, tab: {id: 1}};
         assert.equal(await h.sendMessage({target: 'background', executeAction: true, action: 'evaluate', params: {tabId: 1, code: '1'}}, fromPage), undefined);
         assert.equal(await h.sendMessage({target: 'background', bridgeProve: {op: 'handshake'}}, fromPage), undefined);
-        assert.equal(await h.sendMessage({target: 'background', sidepanelSubmit: {text: 'x'}}, fromPage), undefined);
+        assert.equal(await h.sendMessage({target: 'background', getControlState: true}, fromPage), undefined);
+        assert.equal(await h.sendMessage({target: 'background', panelStop: true}, fromPage), undefined);
+        assert.equal(await h.sendMessage({target: 'background', panelRelease: 1}, fromPage), undefined);
+        assert.equal(h.evalInContext('stopActive()'), false);
+        assert.equal(Object.keys(h.owners()).length, 1);  // l'onglet 1 est toujours piloté
         assert.equal(evaluations(), 0);
         assert.equal(host.calls.length, 0);
         assert.equal((await h.sendMessage({target: 'background', ping: true}, fromPage)).pong, true);  // seul permis
@@ -2343,38 +2509,40 @@ test('document offscreen : serveur sans preuve -> rien relayé au service worker
     await until(() => server.replies().some(r => r.requestId === 'r2'), 'réponse relayée');
     assert.deepEqual(plain(toBackground.filter(m => m.request).map(m => m.request.requestId)), ['r2']);
     assert.equal(server.replies().find(r => r.requestId === 'r2').data, 'exécuté');
-    // Événement à signer pour le service worker (demande du panneau) : seulement depuis une page de l'extension.
+    // Événement à signer pour le service worker (STOP du poste de contrôle) : seulement depuis une page de l'extension.
     let reply = null;
-    listener({target: 'offscreen', bridgeEvent: {event: 'sidepanel_request', request: {id: 'x', text: 't'}}}, {id: EXT_ID}, (r) => { reply = r; });
+    listener({target: 'offscreen', bridgeEvent: {event: 'emergency_stop', by: 'poste de contrôle'}}, {id: EXT_ID}, (r) => { reply = r; });
     assert.deepEqual(plain(reply), {sent: true});
     reply = null;
-    listener({target: 'offscreen', bridgeEvent: {event: 'sidepanel_request'}}, {id: EXT_ID, tab: {id: 3}}, (r) => { reply = r; });
+    listener({target: 'offscreen', bridgeEvent: {event: 'emergency_stop'}}, {id: EXT_ID, tab: {id: 3}}, (r) => { reply = r; });
     assert.equal(reply, null);
     vm.runInContext('if (link) link.close();', ctx);
 });
 
 // -----------------------------------------------------------------------------
-// Panneau latéral : cookies sans valeur, champs sans valeur, éléments cliquables seulement
+// Poste de contrôle (panneau latéral) : mise en forme pure, cookies jamais avec leurs valeurs
 // -----------------------------------------------------------------------------
 function sidepanelView() {
-    const ctx = vm.createContext({});
+    const ctx = vm.createContext({URL});
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/sidepanel_view.js'), 'utf8'), ctx);
     return ctx.AgySidepanelView;
 }
 
-test('cookies du panneau : jamais de valeur (service worker includeValues false, résumé noms et domaines)', async () => {
+test('cookies : valeurs jamais par défaut ; demandées sur un site réel : refus clair, rien lu dans Chrome', async () => {
     const jar = [{name: 'SID', value: 'secret-session-123', domain: '.example.invalid'}, {name: 'pref', value: 'v2', domain: 'example.invalid'}];
     const h = harness({}, {debuggerSendCommand: async (target, method) => method === 'Network.getCookies' ? {cookies: jar} : undefined});
-    const res = await h.run('get_cookies', {tabId: 1, includeValues: false});
+    const res = await h.run('get_cookies', {tabId: 1});
     assert.equal(res.data.cookieCount, 2);
     assert.equal(res.data.valuesIncluded, false);
-    assert.ok(!JSON.stringify(res).includes('secret-session-123'));
+    assert.ok(!JSON.stringify(res).includes('secret-session-123') && !JSON.stringify(res).includes('v2'));
     assert.ok(res.data.cookies.every(c => !('value' in c)));
-    // Le chemin de l'agent (outil MCP browser_get_cookies) garde les valeurs.
-    assert.equal((await h.run('get_cookies', {tabId: 1})).data.cookies[0].value, 'secret-session-123');
-    const summary = plain(sidepanelView().summarizeCookies(jar));
-    assert.deepEqual(summary, {count: 2, domains: [{domain: '.example.invalid', count: 1, names: ['SID']}, {domain: 'example.invalid', count: 1, names: ['pref']}]});
-    assert.ok(!JSON.stringify(summary).includes('secret'));
+    const before = h.calls.length;
+    for (const params of [{includeValues: true}, {include_values: true}, {includeValues: true, urls: ['http://localhost:8000/', 'https://example.invalid/']}]) {
+        const refused = await h.run('get_cookies', {tabId: 1, ...params});
+        assert.match(refused.error, /origine locale de développement/, JSON.stringify(params));
+        assert.ok(!JSON.stringify(refused).includes('secret-session-123'));
+    }
+    assert.equal(h.calls.length, before);  // refus avant tout appel à Chrome
 });
 
 test('champs du formulaire : libellé, type, requis et rempli, jamais la valeur saisie', async () => {
@@ -2397,13 +2565,9 @@ test('champs du formulaire : libellé, type, requis et rempli, jamais la valeur 
         ['Adresse e-mail', 'email', true, true], ['Mot de passe', 'password', true, false], ['Message', 'textarea', false, false]
     ]);
     assert.ok(!JSON.stringify(res).includes('MotDePasse!') && !JSON.stringify(res).includes('julien@example.invalid'));
-    assert.match(sidepanelView().describeField(res.data.fields[1]), /Mot de passe — <input password> \(rempli\)/);
 });
 
-test('carte du panneau : boutons et liens seulement ; jamais la valeur d\'un champ comme libellé', async () => {
-    const view = sidepanelView();
-    const elements = [{mark: 1, tag: 'button'}, {mark: 2, tag: 'input', type: 'text'}, {mark: 3, tag: 'a'}, {mark: 4, tag: 'input', type: 'submit'}, {mark: 5, tag: 'div', role: 'tab'}, {mark: 6, tag: 'select'}];
-    assert.deepEqual(plain(view.clickableElements(elements).map(e => e.mark)), [1, 3, 4, 5]);
+test('carte interactive : jamais la valeur d\'un champ comme libellé', async () => {
     const style = () => ({display: 'block', visibility: 'visible', opacity: '1'});
     const password = {tagName: 'INPUT', type: 'password', value: 'MotDePasse!', innerText: '', placeholder: '', getAttribute: () => null,
         getBoundingClientRect: () => ({x: 1, y: 1, width: 50, height: 20, top: 1, bottom: 21, left: 1, right: 51})};
@@ -2743,4 +2907,859 @@ test('exports annoncés par ping (contrôle préalable de la validation réelle)
     const h = harness();
     const pong = await h.run('ping', {});
     for (const f of ['content-export', 'gsuite-export', 'youtube-transcript']) assert.ok(pong.data.features.includes(f), f);
+});
+
+// -----------------------------------------------------------------------------
+// Revue croisée du 16/10 : Chrome partagé par trois agents, secrets, échappements
+// -----------------------------------------------------------------------------
+test('boîtes de dialogue : seule celle de l\'onglet visé est annoncée, et réglée seulement avec son tab_id', async () => {
+    const h = harness();
+    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('evaluate', {tabId: 2, code: '1'});
+    await h.emit(1, 'Page.javascriptDialogOpening', {type: 'confirm', message: 'Payer 300 euros ?'});
+    await h.emit(2, 'Page.javascriptDialogOpening', {type: 'alert', message: 'Enregistré'});
+    // L'agent de l'onglet 2 ne voit jamais la boîte de l'onglet 1 (ni l'inverse).
+    const onTab2 = await h.run('active_tab', {tabId: 2});
+    assert.equal(onTab2.data.pendingDialogs.length, 1);
+    assert.equal(onTab2.data.pendingDialogs[0].message, 'Enregistré');
+    assert.ok(!JSON.stringify(onTab2).includes('Payer 300 euros'));
+    const onTab3 = await h.run('evaluate', {tabId: 3, code: '1'});
+    assert.ok(!JSON.stringify(onTab3).includes('Payer') && !JSON.stringify(onTab3).includes('Enregistré'));
+    const tabless = await h.run('active_tab', {});
+    assert.equal(tabless.data.pendingDialogs, undefined);
+    // handle_dialog sans tab_id : refusé, même avec une seule boîte ouverte ailleurs.
+    assert.match((await h.run('handle_dialog', {accept: true})).error, /précisez tab_id/);
+    const handled = await h.run('handle_dialog', {tabId: 2, accept: true});
+    assert.equal(handled.data.dialog.message, 'Enregistré');
+    const answers = h.calls.filter(c => c.method === 'Page.handleJavaScriptDialog');
+    assert.equal(answers.length, 1);
+    assert.equal(answers[0].target.tabId, 2);
+    assert.match((await h.run('evaluate', {tabId: 1, code: '2'})).error, /Payer 300 euros/);  // toujours ouverte
+});
+
+test('cdp_send : liste de commandes PERMISES, tout le reste refusé avant Chrome (revue C1)', async () => {
+    const h = harness();
+    const refused = [
+        // Trous de l'ancienne liste de refus (revue du 17/10)
+        'Storage.clearDataForOrigin', 'Network.getRequestPostData', 'Network.loadNetworkResource', 'IO.read',
+        'Fetch.enable', 'Page.addScriptToEvaluateOnNewDocument',
+        // Cookies, stockage, téléchargements, fichiers, autres cibles
+        'Network.getAllCookies', 'Network.getCookies', 'Network.setCookie', 'Storage.getCookies', 'Storage.clearCookies',
+        'Page.setDownloadBehavior', 'Browser.setDownloadBehavior', 'DOM.setFileInputFiles', 'DOMStorage.getDOMStorageItems',
+        'IndexedDB.requestData', 'CacheStorage.requestEntries', 'Target.attachToTarget', 'Target.createTarget',
+        // Navigation (file://), corps de réponse sans masquage, exécution hors monde isolé, réglages
+        'Page.navigate', 'Network.getResponseBody', 'Runtime.callFunctionOn', 'Runtime.addBinding', 'Runtime.compileScript',
+        'DOMSnapshot.captureSnapshot', 'Input.setIgnoreInputEvents', 'Page.bringToFront', 'Network.setExtraHTTPHeaders',
+        'Security.setIgnoreCertificateErrors', 'Emulation.setGeolocationOverride', 'Debugger.enable', 'runtime.evaluate', ''
+    ];
+    for (const method of refused) {
+        const res = await h.run('cdp_send', {tabId: 1, method, commandParams: {}});
+        assert.match(res.error || '', method ? /Commande CDP refusée : .*liste des commandes permises/ : /Missing CDP method/, method);
+    }
+    assert.equal(h.calls.length, 0);  // rien n'a atteint Chrome
+    const allowed = ['DOM.getDocument', 'DOM.querySelector', 'DOM.describeNode', 'DOM.getBoxModel', 'Accessibility.getFullAXTree',
+        'Page.captureScreenshot', 'Page.getLayoutMetrics', 'Page.printToPDF', 'Input.dispatchMouseEvent', 'Input.dispatchKeyEvent',
+        'Emulation.setDeviceMetricsOverride', 'Emulation.setEmulatedMedia', 'Network.enable', 'Network.disable', 'Log.enable', 'Console.enable'];
+    for (const method of allowed) {
+        assert.equal((await h.run('cdp_send', {tabId: 1, method, commandParams: {}})).error, undefined, method);
+        assert.ok(h.calls.some(c => c.method === method), method);
+    }
+});
+
+test('cdp_send Runtime.evaluate : toujours dans le monde isolé, sans API de console ni contexte choisi par l\'agent', async () => {
+    const h = harness({window: {dispatchEvent() {}, __secretDeLaPage: 'valeur-de-page'}});
+    const res = await h.run('cdp_send', {tabId: 1, method: 'Runtime.evaluate', commandParams: {
+        expression: 'typeof window.__secretDeLaPage', returnByValue: true, contextId: 1, uniqueContextId: 'page', includeCommandLineAPI: true
+    }});
+    assert.equal(res.data.result.value, 'undefined');  // variable de la page invisible depuis le monde isolé
+    const call = h.calls.filter(c => c.method === 'Runtime.evaluate').at(-1);
+    assert.ok(h.worlds.has(call.params.contextId));
+    assert.notEqual(call.params.contextId, 1);
+    assert.equal(call.params.includeCommandLineAPI, false);
+    assert.equal(call.params.uniqueContextId, undefined);
+});
+
+test('réseau : en-têtes masqués par motif de nom et paramètres d\'URL sensibles masqués', async () => {
+    const h = harness();
+    await h.run('evaluate', {tabId: 1, code: '1'});
+    const url = 'https://api.example.invalid/cb?code=abc123&state=ok&access_token=tok1&X-Amz-Signature=sig1' +
+        '&X-Amz-Credential=cred1&api_key=k1&page=2#id_token=idt1&scope=email';
+    await h.emit(1, 'Network.requestWillBeSent', {
+        requestId: 'm1', timestamp: 1, type: 'Fetch',
+        request: {url, method: 'GET', headers: {
+            'X-Goog-AuthUser': '0', 'X-CSRF-Token': 'csrf1', 'x-session-id': 'sess1', 'X-Amz-Security-Token': 'amz1',
+            'Api-Key': 'key1', 'x-signature': 'sg1', 'X-Password': 'pw1', 'Proxy-Authorization': 'Basic pa1',
+            Referer: 'https://app.example.invalid/?refresh_token=rt1', Accept: 'application/json'
+        }}
+    });
+    await h.emit(1, 'Network.responseReceived', {requestId: 'm1', type: 'Fetch', response: {
+        status: 302, statusText: 'Found', mimeType: 'text/html',
+        headers: {'Set-Cookie': 'a=b', Location: 'https://app.example.invalid/next?token=loc1&lang=fr', 'Content-Type': 'text/html'}
+    }});
+    const res = await h.run('network_requests', {tabId: 1, includeHeaders: true});
+    const raw = JSON.stringify(res);
+    for (const secret of ['abc123', 'tok1', 'sig1', 'cred1', 'k1', 'idt1', 'csrf1', 'sess1', 'amz1', 'key1', 'sg1', 'pw1', 'pa1', 'rt1', 'loc1']) {
+        assert.ok(!raw.includes(secret), secret);
+    }
+    const rec = res.data.requests[0];
+    assert.equal(rec.url, 'https://api.example.invalid/cb?code=[masqué]&state=ok&access_token=[masqué]&X-Amz-Signature=[masqué]' +
+        '&X-Amz-Credential=[masqué]&api_key=[masqué]&page=2#id_token=[masqué]&scope=email');
+    assert.equal(rec.requestHeaders.Accept, 'application/json');
+    assert.equal(rec.requestHeaders['X-Goog-AuthUser'], '[masqué, 1 caractères]');
+    assert.equal(rec.responseHeaders.Location, 'https://app.example.invalid/next?token=[masqué]&lang=fr');
+    assert.equal(rec.responseHeaders['Content-Type'], 'text/html');
+});
+
+test('carte interactive : le script réellement évalué garde ses échappements (classes, name)', async () => {
+    const box = () => ({x: 0, y: 0, width: 20, height: 20, top: 0, bottom: 20, left: 0, right: 20});
+    const mk = (props) => ({tagName: 'BUTTON', innerText: 'Go', getBoundingClientRect: box, getAttribute: () => null, ...props});
+    const els = [mk({className: 'btn  submit'}), mk({className: 'ss'}), mk({name: 'a\'b"c\\d'})];
+    const page = {document: {querySelectorAll: (sel) => (sel === '*' || sel === 'iframe') ? [] : els, title: 'T'}};
+    const h = harness(page);
+    const res = await h.run('interactive_map', {tabId: 1});
+    assert.deepEqual(plain(res.data.elements.map(e => e.selector)), ['button.btn', 'button.ss', 'button[name="a\'b\\"c\\\\d"]']);
+    const script = h.calls.find(c => c.method === 'Runtime.evaluate' && c.params.expression.includes('__nexus_som_elements')).params.expression;
+    assert.ok(script.includes('split(/\\s+/)'));
+    // Avec CSS.escape (vrai Chrome) : c'est lui qui échappe le name.
+    const withCss = harness({...page, CSS: {escape: (v) => `ESC(${v})`}});
+    const escaped = await withCss.run('interactive_map', {tabId: 1});
+    assert.equal(escaped.data.elements[2].selector, 'button[name="ESC(a\'b"c\\d)"]');
+});
+
+test('group_tabs : titre et couleur annoncés seulement s\'ils ont été appliqués', async () => {
+    const h = harness({}, {tabGroups: {update: async () => { throw new Error('Grouping is not supported by tabs in this window'); }}});
+    const res = await h.run('group_tabs', {tabIds: [1], title: 'Nexus', color: 'purple'});
+    assert.equal(res.data.updated, false);
+    assert.equal(res.data.title, undefined);
+    assert.equal(res.data.color, undefined);
+    assert.match(res.data.warning, /non appliqués.*Grouping is not supported/);
+    const ok = await harness().run('group_tabs', {tabIds: [1], title: 'Nexus', color: 'purple'});
+    assert.deepEqual([ok.data.updated, ok.data.title, ok.data.color], [true, 'Nexus', 'purple']);
+});
+
+test('capture : type MIME conforme au format demandé, format inconnu refusé', async () => {
+    const h = harness();
+    const jpeg = await h.run('screenshot', {tabId: 1, format: 'jpeg'});
+    assert.equal(jpeg.data.mimeType, 'image/jpeg');
+    assert.ok(jpeg.data.dataUrl.startsWith('data:image/jpeg;base64,'));
+    assert.equal(h.calls.find(c => c.method === 'Page.captureScreenshot').params.format, 'jpeg');
+    assert.equal((await h.run('screenshot', {tabId: 1, format: 'webp'})).data.mimeType, 'image/webp');
+    assert.equal((await h.run('screenshot', {tabId: 1})).data.mimeType, 'image/png');
+    assert.match((await h.run('screenshot', {tabId: 1, format: 'gif'})).error, /Format de capture inconnu/);
+});
+
+test('version annoncée lue dans le manifeste, jamais une valeur codée en dur', async () => {
+    const h = harness({}, {runtime: {getManifest: () => ({version: '9.8.7'})}});
+    assert.equal((await h.run('ping', {})).data.version, '9.8.7');
+    const source = fs.readFileSync(path.join(__dirname, '../extension/background.js'), 'utf8');
+    assert.ok(!/["v]2\.0\.0/.test(source), 'version codée en dur');
+});
+
+// =============================================================================
+// Revue de Claude du 17/10 (partie C) : isolation entre agents et secrets tenus PAR L'EXTENSION
+// =============================================================================
+test('propriété : l\'agent A n\'agit ni sur l\'onglet de B ni sur ceux de Julien ; même agent, autre session : refusé', async () => {
+    let next = 200;
+    const h = harness({}, {autoOwn: false, tabs: {
+        create: async (p) => ({id: next++, url: p.url, active: false, windowId: 10}),
+        query: async () => [{id: 1, title: 'Banque de Julien', url: 'https://banque.invalid'}, {id: 200, title: 'A'}, {id: 201, title: 'B'}]
+    }});
+    const a = (await h.run('create_tab', {url: 'https://a.invalid', group: false}, AGENT_A)).data.id;
+    const b = (await h.run('create_tab', {url: 'https://b.invalid', group: false}, AGENT_B)).data.id;
+    assert.deepEqual([a, b], [200, 201]);
+    const pageCommands = [
+        ['click', () => ({selector: 'button'})], ['evaluate', () => ({code: '1'})], ['fill', () => ({selector: 'input', value: 'x'})],
+        ['get_content', () => ({mode: 'text'})], ['screenshot', () => ({})], ['cdp_send', () => ({method: 'DOM.getDocument'})],
+        ['close_tab', () => ({})], ['navigate', () => ({url: 'https://x.invalid'})], ['handle_dialog', () => ({accept: true})],
+        ['network_response', () => ({request_id: '1'})], ['release_tab', () => ({})], ['select_tab', () => ({})],
+        ['upload', () => ({files: ['C:/Dev/rapport.pdf']})], ['get_cookies', () => ({})], ['network_record', () => ({})],
+        ['group_tabs', (id) => ({tabIds: [id]})], ['export_content', () => ({})], ['type_keys', () => ({text: 'a'})]
+    ];
+    for (const [action, extra] of pageCommands) {
+        assert.match((await h.run(action, {tabId: b, ...extra(b)}, AGENT_A)).error || '', /est piloté par Codex : refusé/, `${action} sur l'onglet de B`);
+        assert.match((await h.run(action, {tabId: 1, ...extra(1)}, AGENT_A)).error || '', /aucun agent \(onglet de Julien\)/, `${action} sur l'onglet de Julien`);
+    }
+    const otherSession = {agent: 'Claude', id: 'claude-autre-session'};
+    assert.match((await h.run('click', {tabId: a, selector: 'button'}, otherSession)).error, /Claude dans une autre session/);
+    assert.match((await h.run('click', {tabId: a, selector: 'button'}, null)).error, /sans identité de client/);
+    assert.match((await h.run('click', {tabId: a, selector: 'button'}, {agent: 'Claude'})).error, /sans identité de client/);
+    assert.equal(h.calls.length, 0);  // rien n'a touché Chrome
+    assert.equal((await h.run('evaluate', {tabId: a, code: '40 + 2'}, AGENT_A)).data, 42);
+    assert.ok(h.calls.length > 0 && h.calls.every(c => c.target.tabId === a));
+    const list = (await h.run('list_tabs', {}, AGENT_A)).data;
+    assert.deepEqual(plain(list.map(t => [t.id, t.owner, t.mine])), [[1, null, false], [200, 'Claude', true], [201, 'Codex', false]]);
+    assert.ok(!JSON.stringify(list).includes('codex-bbbb2222'));  // jamais la session d'un autre agent
+});
+
+test('propriété : une boîte de dialogue n\'est annoncée qu\'au pilote de l\'onglet', async () => {
+    const h = harness({}, {autoOwn: false});
+    await h.own(1, AGENT_A);
+    await h.run('evaluate', {tabId: 1, code: '1'}, AGENT_A);
+    await h.emit(1, 'Page.javascriptDialogOpening', {type: 'confirm', message: 'Payer 300 euros ?'});
+    assert.equal((await h.run('active_tab', {tabId: 1}, AGENT_B)).data.pendingDialogs, undefined);
+    assert.equal((await h.run('active_tab', {tabId: 1}, AGENT_A)).data.pendingDialogs[0].message, 'Payer 300 euros ?');
+});
+
+test('adoption : onglet de Julien refusé par défaut, seulement avec julienAsked, visible au poste de contrôle ; jamais celui d\'un autre agent', async () => {
+    const h = harness({}, {autoOwn: false, tabs: {query: async () => [{id: 1, title: 'Boîte mail', url: 'https://mail.example.invalid/#inbox?token=jeton-zzz'}]}});
+    assert.match((await h.run('adopt_tab', {tabId: 1}, AGENT_A)).error, /refusée par défaut/);
+    assert.match((await h.run('adopt_tab', {tabId: 1, julienAsked: 'true'}, AGENT_A)).error, /refusée par défaut/);  // booléen strict
+    assert.equal((await h.run('adopt_tab', {tabId: 1, julienAsked: true}, AGENT_A)).data.adopted, true);
+    assert.match((await h.run('adopt_tab', {tabId: 1, julienAsked: true}, AGENT_B)).error, /piloté par Claude/);
+    assert.equal((await h.run('evaluate', {tabId: 1, code: '2'}, AGENT_A)).data, 2);
+    const state = await h.sendMessage({target: 'background', getControlState: true});
+    assert.deepEqual(plain(state.tabs.map(t => [t.tabId, t.agent, t.adopted])), [[1, 'Claude', true]]);
+    assert.ok(!JSON.stringify(state).includes('jeton-zzz'));
+    assert.equal((await h.run('release_tab', {tabId: 1}, AGENT_A)).data.released, true);
+    assert.ok(h.detached.includes(1));
+    assert.match((await h.run('evaluate', {tabId: 1, code: '3'}, AGENT_A)).error, /onglet de Julien/);
+    const shielded = harness({}, {autoOwn: false, tabs: {get: async (id) => ({id, url: 'chrome://settings', windowId: 10})}});
+    assert.match((await shielded.run('adopt_tab', {tabId: 9, julienAsked: true}, AGENT_A)).error, /protégé/);
+});
+
+test('propriété conservée après redémarrage du service worker (chrome.storage.session), oubliée si l\'onglet a disparu', async () => {
+    const tabs = {create: async (p) => ({id: 300, url: p.url, active: false, windowId: 10}), query: async () => [{id: 300}]};
+    const first = harness({}, {autoOwn: false, tabs});
+    await first.run('create_tab', {url: 'https://a.invalid', group: false}, AGENT_A);
+    assert.equal(first.sessionData.nexusBrowserTabOwners['300'].agent, 'Claude');
+    const restarted = harness({}, {autoOwn: false, tabs, sessionStorage: first.sessionData});
+    assert.equal((await restarted.run('evaluate', {tabId: 300, code: '4'}, AGENT_A)).data, 4);
+    assert.match((await restarted.run('evaluate', {tabId: 300, code: '4'}, AGENT_B)).error, /piloté par Claude/);
+    const gone = harness({}, {autoOwn: false, tabs: {...tabs, query: async () => []}, sessionStorage: first.sessionData});
+    assert.match((await gone.run('evaluate', {tabId: 300, code: '4'}, AGENT_A)).error, /onglet de Julien/);
+});
+
+test('réseau : champs secrets des corps masqués à toute profondeur (JSON, préfixe XSSI, formulaire, JSON tronqué)', async () => {
+    const bodies = {
+        oauth: JSON.stringify({access_token: 'ya29.SECRET1', refresh_token: 'SECRET2', id_token: 'SECRET3', token_type: 'Bearer', expires_in: 3599,
+            user: {name: 'Julien', password: 'SECRET4', nested: [{api_key: 'SECRET5', client_secret: 'SECRET6'}], session: {id: 'SECRET7'}},
+            Authorization: 'Bearer SECRET8', message: 'ok'}),
+        xssi: ")]}'\n" + JSON.stringify({data: {token: 'SECRET9', title: 'Doc'}}),
+        form: 'grant_type=refresh_token&refresh_token=SECRET10&client_secret=SECRET11&scope=email',
+        cut: '{"items":[1,2],"access_token":"SECRET12","note":"suite tronq',
+        page: '<script>var cfg = {"apiKey": "SECRET13", "lang": "fr"}; location.href = "/cb?code=SECRET14&state=ok";</script>'
+    };
+    const mimes = {oauth: 'application/json', xssi: 'application/json', form: 'application/x-www-form-urlencoded', cut: 'application/json', page: 'text/html'};
+    const h = harness({}, {debuggerSendCommand: (target, method, params) => method === 'Network.getResponseBody' ? {body: bodies[params.requestId], base64Encoded: false} : undefined});
+    await h.run('evaluate', {tabId: 1, code: '1'});
+    for (const id of Object.keys(bodies)) {
+        await h.emit(1, 'Network.requestWillBeSent', {requestId: id, timestamp: 1, request: {url: `https://x.invalid/${id}`, method: 'POST', headers: {}}});
+        await h.emit(1, 'Network.responseReceived', {requestId: id, response: {status: 200, mimeType: mimes[id], headers: {}}});
+        await h.emit(1, 'Network.loadingFinished', {requestId: id, timestamp: 2, encodedDataLength: 10});
+    }
+    const read = async (id) => (await h.run('network_response', {tabId: 1, request_id: id})).data;
+    const oauth = await read('oauth');
+    const parsed = JSON.parse(oauth.body);
+    assert.equal(parsed.access_token, '[masqué, 12 caractères]');
+    assert.equal(parsed.token_type, 'Bearer');
+    assert.equal(parsed.expires_in, 3599);
+    assert.equal(parsed.user.name, 'Julien');
+    assert.equal(parsed.user.session, '[masqué]');
+    assert.equal(parsed.message, 'ok');
+    assert.equal(oauth.masked, 8);
+    const xssi = await read('xssi');
+    assert.ok(xssi.body.startsWith(")]}'\n"));
+    assert.equal(JSON.parse(xssi.body.slice(5)).data.title, 'Doc');
+    assert.equal((await read('form')).body, 'grant_type=refresh_token&refresh_token=[masqué]&client_secret=[masqué]&scope=email');
+    const cut = await read('cut');
+    assert.match(cut.body, /"access_token":"\[masqué, 8 caractères\]"/);
+    const page = await read('page');
+    assert.match(page.body, /"lang": "fr"/);
+    for (const id of Object.keys(bodies)) {
+        const raw = JSON.stringify(await read(id));
+        for (let n = 1; n <= 14; n++) assert.ok(!raw.includes(`SECRET${n}`), `${id} : SECRET${n}`);
+    }
+});
+
+test('arrêt d\'urgence : la frappe touche par touche s\'interrompt au caractère suivant, aucune touche laissée enfoncée', async () => {
+    let downs = 0;
+    let ref = null;
+    const {h, dom} = richHarness(formPage, {debuggerSendCommand: (target, method, params) => {
+        if (method === 'Input.dispatchKeyEvent' && params.type === 'keyDown' && ++downs === 3) ref.ctx.emergencyStop({holdMs: 120000, source: 'test'});
+    }});
+    ref = h;
+    const res = await h.run('fill', {tabId: 1, locator: {placeholder: 'Rechercher'}, value: 'Bonjour le monde', perKey: true});
+    assert.match(res.error, /Arrêt d'urgence/);
+    const keys = h.keyboard().filter(k => k.method === 'Input.dispatchKeyEvent');
+    assert.equal(keys.filter(k => k.type === 'keyDown').length, 3);  // et non 16
+    assert.equal(keys.at(-1).type, 'keyUp');
+    assert.ok(dom.byId('search').value.length < 'Bonjour le monde'.length);
+    // Pendant l'arrêt : actions refusées, lectures permises, débogueurs détachés.
+    assert.match((await h.run('click', {tabId: 1, locator: {testId: 'submit-zone'}})).error, /Arrêt d'urgence/);
+    assert.equal((await h.run('list_tabs', {})).error, undefined);
+    assert.ok(h.detached.includes(1));
+    assert.ok(h.sessionData.nexusBrowserStopUntil > Date.now());
+});
+
+test('arrêt d\'urgence : le glisser en cours s\'arrête et le bouton est relâché', async () => {
+    const dp = dragPage();
+    let moves = 0;
+    let ref = null;
+    const h = harness(dp.page, {debuggerSendCommand: (target, method, params) => {
+        if (method === 'Input.dispatchMouseEvent' && params.type === 'mouseMoved' && params.buttons === 1 && ++moves === 2) ref.ctx.emergencyStop({holdMs: 120000});
+    }});
+    ref = h;
+    const res = await h.run('drag_and_drop', {tabId: 1, from_selector: '#source', to_selector: '#zone', steps: 10, delayMs: 0});
+    assert.match(res.error, /Arrêt d'urgence/);
+    const mouse = h.mouse();
+    assert.equal(mouse.filter(e => e.type === 'mouseMoved' && e.buttons === 1).length, 2);  // et non 10
+    assert.deepEqual([mouse.at(-1).type, mouse.at(-1).buttons], ['mouseReleased', 0]);
+    assert.equal(dp.drops, 0);
+});
+
+test('arrêt d\'urgence : une attente (chargement) en cours est interrompue', async () => {
+    const h = harness({document: {readyState: 'loading', querySelectorAll: () => []}}, {virtualTime: true});
+    const waiting = h.run('wait_load', {tabId: 1, timeoutMs: 100000});
+    await settle();
+    await h.run('emergency_stop', {hold_s: 120}, null);  // commande signée du pont, sans client
+    const res = await waiting;
+    assert.match(res.error, /Arrêt d'urgence/);
+});
+
+test('repli windows.create : id de l\'ONGLET créé (relu par tabs.query), jamais celui de la fenêtre', async () => {
+    const windows = (id) => ({getLastFocused: async () => ({id: 5, type: 'normal'}), create: async () => ({id})});
+    const h = harness({}, {autoOwn: false, windows: windows(12), tabs: {
+        create: async () => { throw new Error('No current window'); },
+        query: async ({windowId} = {}) => windowId === 12 ? [{id: 121, windowId: 12, url: 'https://x.invalid'}] : []
+    }});
+    const res = await h.run('create_tab', {url: 'https://x.invalid', group: false}, AGENT_A);
+    assert.equal(res.data.id, 121);
+    assert.equal(h.owners()['121'].agent, 'Claude');
+    assert.equal(h.owners()['12'], undefined);
+    const none = harness({}, {autoOwn: false, windows: windows(13), tabs: {create: async () => { throw new Error('x'); }, query: async () => []}});
+    assert.match((await none.run('create_tab', {url: 'https://x.invalid', group: false}, AGENT_A)).error, /onglet est introuvable/);
+    assert.deepEqual(none.owners(), {});
+});
+
+test('capture d\'élément : zone en repère de la PAGE (défilement ajouté), au-delà de la vue', async () => {
+    const el = {scrollIntoView() {}, getBoundingClientRect: () => ({x: 10, y: 20, width: 200, height: 100})};
+    const h = harness({document: {querySelectorAll: (sel) => sel === '#card' ? [el] : []}}, {
+        debuggerSendCommand: (target, method) => method === 'Page.getLayoutMetrics' ? {cssVisualViewport: {pageX: 30, pageY: 1500, clientWidth: 1280, clientHeight: 720}} : undefined
+    });
+    assert.equal((await h.run('screenshot', {tabId: 1, selector: '#card'})).error, undefined);
+    const shot = h.calls.find(c => c.method === 'Page.captureScreenshot');
+    assert.deepEqual(plain(shot.params.clip), {x: 40, y: 1520, width: 200, height: 100, scale: 1});
+    assert.equal(shot.params.captureBeyondViewport, true);
+});
+
+test('service worker redémarré, onglet encore attaché : session reprise et iframes de nouveau suivies', async () => {
+    const h = harness({}, {attachError: 'Another debugger is already attached to the tab with id: 1.'});
+    assert.equal((await h.run('evaluate', {tabId: 1, code: '5'})).data, 5);
+    const methods = h.calls.map(c => [c.method, c.params?.autoAttach]);
+    for (const m of ['Page.enable', 'Runtime.enable', 'Network.enable']) assert.ok(methods.some(([x]) => x === m), m);
+    const auto = methods.filter(([m]) => m === 'Target.setAutoAttach').map(([, on]) => on);
+    assert.deepEqual(auto, [false, true]);  // coupé puis remis : Chrome annonce de nouveau les cadres ouverts
+    await h.emitFrom({tabId: 1}, 'Target.attachedToTarget', {sessionId: 's-9', targetInfo: {targetId: 'F9', type: 'iframe', url: 'https://autre.invalid/'}});
+    assert.ok(h.calls.some(c => c.target.sessionId === 's-9' && c.method === 'Target.setAutoAttach'));
+});
+
+test('débogueur : compteur de commandes PAR ONGLET, une commande bloquée sur l\'onglet 2 n\'empêche pas de détacher l\'onglet 1', async () => {
+    const h = harness({}, {debuggerSendCommand: (target, method) => (method === 'Runtime.evaluate' && target.tabId === 2) ? new Promise(() => {}) : undefined});
+    await h.run('evaluate', {tabId: 1, code: '1'});
+    h.run('evaluate', {tabId: 2, code: 'bloque'});  // ne se termine jamais
+    await settle();
+    await h.fireIdleTimers();
+    assert.ok(h.detached.includes(1));
+    assert.ok(!h.detached.includes(2));
+});
+
+test('réseau : débogueur gardé seulement pendant l\'enregistrement demandé (borné), puis arrêt explicite', async () => {
+    const h = harness();
+    const rec = await h.run('network_record', {tabId: 1, durationS: 99999});
+    assert.equal(rec.data.duration_s, 600);
+    await h.fireIdleTimers();
+    assert.deepEqual(h.detached, []);  // gardé pendant l'enregistrement
+    assert.ok((await h.run('network_requests', {tabId: 1})).data.recording_until);
+    const stopped = await h.run('network_stop', {tabId: 1});
+    assert.equal(stopped.data.detached, true);
+    assert.deepEqual(h.detached, [1]);
+    await h.run('evaluate', {tabId: 2, code: '1'});
+    await h.fireIdleTimers();
+    assert.ok(h.detached.includes(2));  // sans enregistrement : détaché à l'inactivité
+});
+
+test('monde isolé : une page qui remplace __nexus_som_elements, __nexusBrowserMouse ou __nexusBrowserAx ne fausse plus rien', async () => {
+    const {h, dom} = richHarness(formPage);
+    const trap = dom.byId('d1');  // « Supprimer »
+    const fakeMarks = {get: () => trap, has: () => true, set() {}, clear() {}, size: 99};
+    Object.defineProperty(dom.win, '__nexus_som_elements', {get: () => fakeMarks, set() {}, configurable: true});
+    const fakeProbe = {el: trap, trusted: 9, untrusted: 0, seen: ['click'], types: [], attached: false};
+    dom.win.__nexusBrowserMouse = {probes: {get: () => fakeProbe, set() {}, delete() {}, has: () => true, [Symbol.iterator]: function* () {}}, seq: 0};
+    dom.win.__nexusBrowserAx = new Proxy({}, {get: () => [{el: trap, role: 'button', name: 'Valider'}]});
+    const map = await h.run('interactive_map', {tabId: 1, viewportOnly: false});
+    const v1 = map.data.elements.find(e => e.selector === 'button#v1');
+    assert.ok(v1, 'marqueur de #v1');
+    const res = await h.run('click', {tabId: 1, mark: v1.mark});
+    assert.equal(res.data.id, 'v1');
+    assert.equal(res.data.trusted_click, true);
+    assert.deepEqual(dom.trusted.filter(t => t.type === 'click').map(t => t.el.id), ['v1']);
+    // Les objets de l'extension vivent dans son monde isolé ; ceux de la page sont restés les siens.
+    assert.equal(dom.win.__nexus_som_elements, fakeMarks);
+    assert.ok(h.isolatedWindow().__nexus_som_elements.size >= 1 && h.isolatedWindow().__nexus_som_elements.get(v1.mark) === dom.byId('v1'));
+    assert.ok(h.calls.filter(c => c.method === 'Runtime.evaluate').every(c => h.worlds.has(c.params.contextId)));
+});
+
+test('navigation : jamais de fichier local ni de page interne (file://, chrome://, javascript:)', async () => {
+    const h = harness();
+    for (const url of ['file:///C:/Users/user/.ssh/id_ed25519', 'FILE:///c:/x', 'chrome://settings', 'javascript:alert(1)', 'view-source:https://x.invalid', 'devtools://devtools']) {
+        assert.match((await h.run('navigate', {tabId: 1, url})).error, /Adresse refusée/, url);
+        assert.match((await h.run('create_tab', {url})).error, /Adresse refusée/, url);
+    }
+    assert.equal(h.focusCalls.tabs, 0);
+    assert.equal((await h.run('navigate', {tabId: 1, url: 'https://example.com/'})).error, undefined);
+});
+
+test('poste de contrôle : onglets pilotés par agent, état du débogueur, rendre l\'onglet', async () => {
+    let next = 400;
+    const h = harness({}, {autoOwn: false, tabs: {
+        create: async (p) => ({id: next++, url: p.url, title: 'T', active: false, windowId: 10}),
+        query: async () => [{id: 400, title: 'Console', url: 'https://console.cloud.google.com/?authuser=0&token=zzz'}, {id: 401, title: 'Play', url: 'https://play.google.com/'}]
+    }});
+    await h.run('create_tab', {url: 'https://console.cloud.google.com/', group: false}, AGENT_A);
+    await h.run('create_tab', {url: 'https://play.google.com/', group: false}, AGENT_B);
+    await h.run('evaluate', {tabId: 400, code: '1'}, AGENT_A);
+    const state = await h.sendMessage({target: 'background', getControlState: true});
+    assert.deepEqual(plain(state.tabs.map(t => [t.tabId, t.agent, t.debugger])), [[400, 'Claude', true], [401, 'Codex', false]]);
+    assert.ok(!JSON.stringify(state).includes('zzz') && !JSON.stringify(state).includes('claude-aaaa1111'));
+    const released = await h.sendMessage({target: 'background', panelRelease: 400});
+    assert.equal(released.previousOwner, 'Claude');
+    assert.ok(h.detached.includes(400));
+    assert.match((await h.run('evaluate', {tabId: 400, code: '1'}, AGENT_A)).error, /onglet de Julien/);
+    assert.deepEqual(Object.keys(h.owners()), ['401']);
+    // Pastille : message de l'extension au cadre principal (jamais un événement de la page).
+    assert.ok(h.tabMessages.some(m => m.tabId === 400 && m.message.nexusPill?.agent === 'Claude' && m.options.frameId === 0));
+    const stopped = await h.sendMessage({target: 'background', panelStop: true});
+    assert.equal(stopped.sentToBridge, false);
+    assert.match(stopped.warning, /Pont injoignable/);
+    assert.ok((await h.sendMessage({target: 'background', getControlState: true})).stoppedUntil > Date.now());
+});
+
+test('poste de contrôle : mise en forme (groupes par agent, badges, arrêt, pont)', () => {
+    const view = sidepanelView();
+    const now = 1_000_000;
+    const tabs = [
+        {tabId: 7, agent: 'Codex', title: 'B', url: 'https://b.invalid/x?y=1', session: 'abcd1234', exists: true, debugger: false, commandsInFlight: 0},
+        {tabId: 3, agent: 'Claude', title: '', url: 'https://a.invalid/', session: '99999999', exists: true, debugger: true, commandsInFlight: 2, recordingUntil: now + 4200, adopted: true}
+    ];
+    assert.deepEqual(plain(view.groupByAgent(tabs).map(g => [g.agent, g.tabs.map(t => t.tabId)])), [['Claude', [3]], ['Codex', [7]]]);
+    const line = plain(view.describeTab(tabs[1], now));
+    assert.equal(line.title, 'Onglet sans titre');
+    assert.equal(line.subtitle, '#3 · a.invalid · session …99999999');
+    assert.deepEqual(line.badges, ['adopté', 'débogueur attaché', '2 commande(s) en cours', 'réseau enregistré 5 s']);
+    assert.equal(view.describeTab(tabs[0], now).subtitle, '#7 · b.invalid · session …abcd1234');  // jamais les paramètres d'URL
+    assert.equal(view.stopLabel(null, now), null);
+    assert.equal(view.stopLabel(now + 90500, now), "Arrêt d'urgence actif : plus aucune action pendant 91 s");
+    assert.deepEqual(plain(view.bridgeLabel({connected: false, authError: 'jeton faux'})), {ok: false, text: 'Pont local non joint : jeton faux'});
+    assert.equal(view.bridgeLabel({connected: true}).ok, true);
+});
+
+test('panneau : nom neutre, ni chat ni boutons d\'action sur la page, ni style copié de Gemini', () => {
+    const html = fs.readFileSync(path.join(__dirname, '../extension/sidepanel.html'), 'utf8');
+    const js = fs.readFileSync(path.join(__dirname, '../extension/sidepanel.js'), 'utf8');
+    const css = fs.readFileSync(path.join(__dirname, '../extension/sidepanel.css'), 'utf8');
+    assert.match(html, /<title>Poste de contrôle<\/title>/);
+    assert.match(html, /id="btn-stop"/);
+    assert.ok(!/<textarea|prompt-input|data-action=/.test(html), 'zone de texte ou boutons d\'action restés');
+    assert.ok(!/executeAction|sidepanelSubmit|interactive_map|get_cookies|form_fields|screenshot/.test(js));
+    assert.ok(!/gemini|sparkle|#4285F4|#9B72CB|#D96570/i.test(html + css), 'style Gemini resté');
+    assert.ok(!fs.existsSync(path.join(__dirname, '../extension/popup.html')) && !fs.existsSync(path.join(__dirname, '../extension/popup.js')));
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../extension/manifest.json'), 'utf8'));
+    assert.notEqual(manifest.commands['toggle-side-panel'].suggested_key.default, 'Ctrl+Shift+A');  // « Rechercher dans les onglets » de Chrome
+});
+
+test('pastille et point du clic : seulement sur message de l\'extension, jamais sur un événement de la page', () => {
+    const appended = [];
+    const windowListeners = {};
+    let listener = null;
+    const node = () => ({style: {}, appendChild() {}, querySelector: () => ({textContent: ''}), parentNode: null});
+    const win = {addEventListener: (type, fn) => { windowListeners[type] = fn; }, dispatchEvent() {}};
+    win.top = win;
+    const ctx = vm.createContext({
+        window: win, document: {documentElement: {appendChild: (n) => appended.push(n)}, getElementById: () => null, createElement: node},
+        chrome: {runtime: {id: EXT_ID, lastError: undefined, sendMessage() {}, onMessage: {addListener(fn) { listener = fn; }}}},
+        requestAnimationFrame: () => 0, setTimeout: () => 0, clearTimeout() {}
+    });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/content_script.js'), 'utf8'), ctx);
+    assert.deepEqual(Object.keys(windowListeners), []);  // aucun écouteur d'événement de la page
+    listener({nexusPill: {agent: 'Claude', text: 'Faux'}}, {id: EXT_ID, tab: {id: 3}});  // script de contenu ou page
+    listener({nexusRipple: {x: 1, y: 2}}, {id: 'autre-extension'});
+    assert.equal(appended.length, 0);
+    listener({nexusPill: {agent: 'Claude', text: 'Onglet créé'}}, {id: EXT_ID});
+    listener({nexusRipple: {x: 5, y: 6}}, {id: EXT_ID});
+    assert.equal(appended.length, 2);
+});
+// =============================================================================
+// Revue d'Antigravity du 17/10 (partie 2) : régressions de la 2.7.0
+// =============================================================================
+test('2.1 orphelins : processus disparu (signalé par le pont) -> onglets repris par le même agent ; jamais par un autre agent ; session vivante protégée', async () => {
+    let next = 500;
+    const h = harness({}, {autoOwn: false, tabs: {
+        create: async (p) => ({id: next++, url: p.url, active: false, windowId: 10}),
+        query: async () => [{id: 1, title: 'Julien'}, {id: 500, title: 'A1'}, {id: 501, title: 'A2'}, {id: 502, title: 'Vivant'}, {id: 503, title: 'Codex'}]
+    }});
+    const old = {agent: 'Claude', id: 'claude-ancienne-1'};
+    const fresh = {agent: 'Claude', id: 'claude-nouvelle-2'};
+    const alive = {agent: 'Claude', id: 'claude-vivante-3'};
+    for (const client of [old, old, alive, AGENT_B]) await h.run('create_tab', {url: 'https://a.invalid', group: false}, client);
+    // Serveur MCP redémarré : le pont signale que le processus de l'ancienne session ne tourne plus.
+    const listed = (await h.run('list_tabs', {}, fresh, {gone: ['claude-ancienne-1']})).data;
+    assert.deepEqual(plain(listed.map(t => [t.id, t.state, t.mine])),
+        [[1, 'julien', false], [500, 'orphan', false], [501, 'orphan', false], [502, 'other', false], [503, 'other', false]]);
+    assert.ok(!JSON.stringify(listed).includes('claude-ancienne-1'));  // jamais l'identifiant d'une session
+    // Un autre agent ne prend, ne ferme ni ne rend jamais l'orphelin de Claude.
+    assert.deepEqual(plain((await h.run('list_tabs', {}, AGENT_B)).data.map(t => [t.id, t.state])),
+        [[1, 'julien'], [500, 'other'], [501, 'other'], [502, 'other'], [503, 'mine']]);
+    for (const action of ['adopt_tab', 'close_tab', 'release_tab', 'click']) {
+        assert.match((await h.run(action, {tabId: 500, selector: 'b'}, AGENT_B)).error || '', /piloté par Claude : refusé/, action);
+    }
+    // Commande de page sur l'orphelin sans le reprendre : refus qui dit comment faire, rien dans Chrome.
+    assert.match((await h.run('click', {tabId: 500, selector: 'button'}, fresh)).error, /orphelin.*browser_adopt_tab\(tab_id\)/);
+    assert.equal(h.calls.length, 0);
+    // Reprise sans julien_asked, puis pilotage normal.
+    const reclaimed = (await h.run('adopt_tab', {tabId: 500}, fresh)).data;
+    assert.deepEqual(plain([reclaimed.reclaimed, reclaimed.owner, reclaimed.adopted]), [true, 'Claude', false]);
+    assert.equal((await h.run('evaluate', {tabId: 500, code: '6 * 7'}, fresh)).data, 42);
+    // Fermer ou rendre un orphelin du même agent : permis sans reprise.
+    assert.equal((await h.run('release_tab', {tabId: 501}, fresh)).data.released, true);
+    assert.deepEqual(Object.keys(h.owners()).sort(), ['500', '502', '503']);
+    // Session vivante du même agent (autre conversation) : toujours protégée.
+    for (const action of ['adopt_tab', 'close_tab', 'release_tab', 'evaluate']) {
+        assert.match((await h.run(action, {tabId: 502, code: '1'}, fresh)).error || '', /Claude dans une autre session : refusé/, action);
+    }
+    assert.equal(h.owners()['502'].client, 'claude-vivante-3');
+    // L'onglet de Julien reste soumis à julien_asked.
+    assert.match((await h.run('adopt_tab', {tabId: 1}, fresh)).error, /refusée par défaut/);
+});
+
+test('2.1 orphelins : fermeture permise, mort retenue après redémarrage du service worker, « gone » jamais lu dans les paramètres', async () => {
+    let next = 520;
+    const tabs = {create: async (p) => ({id: next++, url: p.url, active: false, windowId: 10}), query: async () => [{id: 520}, {id: 521}]};
+    const old = {agent: 'Codex', id: 'codex-ancienne-1'};
+    const fresh = {agent: 'Codex', id: 'codex-nouvelle-2'};
+    const h = harness({}, {autoOwn: false, tabs});
+    await h.run('create_tab', {url: 'https://a.invalid', group: false}, old);
+    await h.run('create_tab', {url: 'https://b.invalid', group: false}, old);
+    // Paramètre forgé : sans effet (seul le pont pose « gone », à côté de la commande).
+    assert.match((await h.run('close_tab', {tabId: 520, gone: ['codex-ancienne-1']}, fresh)).error, /Codex dans une autre session/);
+    await h.run('list_tabs', {}, fresh, {gone: ['codex-ancienne-1', 'codex-nouvelle-2']});  // jamais soi-même
+    assert.equal((await h.run('close_tab', {tabId: 520}, fresh)).data.closedTabId, 520);
+    const restarted = harness({}, {autoOwn: false, tabs, sessionStorage: h.sessionData});
+    assert.deepEqual(plain((await restarted.run('list_tabs', {}, fresh)).data.map(t => [t.id, t.state])), [[520, 'julien'], [521, 'orphan']]);
+    assert.equal((await restarted.run('adopt_tab', {tabId: 521}, fresh)).data.reclaimed, true);
+    assert.equal((await restarted.run('evaluate', {tabId: 521, code: '1'}, fresh)).data, 1);
+});
+
+test('2.1 orphelins : silence de plus de 1,618 x 60 s -> session morte ; un battement garde la session vivante', async () => {
+    const h = harness({}, {autoOwn: false, virtualTime: true, tabs: {
+        create: async (p) => ({id: 600, url: p.url, active: false, windowId: 10}), query: async () => [{id: 600}]
+    }});
+    const quiet = {agent: 'Antigravity', id: 'antigravity-silence-1'};
+    const fresh = {agent: 'Antigravity', id: 'antigravity-nouvelle-2'};
+    await h.run('create_tab', {url: 'https://a.invalid', group: false}, quiet);
+    h.advanceTime(60000);
+    assert.match((await h.run('adopt_tab', {tabId: 600}, fresh)).error, /dans une autre session/);
+    assert.equal((await h.run('heartbeat', {}, quiet)).data.alive, true);  // battement à 60 s
+    h.advanceTime(80000);  // 140 s depuis l'ouverture, 80 s depuis le battement : encore vivante
+    assert.match((await h.run('adopt_tab', {tabId: 600}, fresh)).error, /dans une autre session/);
+    h.advanceTime(30000);  // 110 s sans signe de vie (plus de 97 s) : morte
+    assert.equal((await h.run('list_tabs', {}, fresh)).data[0].state, 'orphan');
+    assert.equal((await h.run('adopt_tab', {tabId: 600}, fresh)).data.reclaimed, true);
+    assert.equal(h.owners()['600'].client, 'antigravity-nouvelle-2');
+    // L'ancienne session qui revient (fausse alerte) ne reprend pas l'onglet d'une session vivante.
+    assert.match((await h.run('adopt_tab', {tabId: 600}, quiet)).error, /dans une autre session/);
+});
+
+test('2.1 démarrage : le premier battement reprend les orphelins de l\'agent s\'il n\'en a aucun ; jamais ceux d\'un autre agent ni d\'une session vivante', async () => {
+    let next = 700;
+    const h = harness({}, {autoOwn: false, tabs: {create: async (p) => ({id: next++, url: p.url, active: false, windowId: 10}), query: async () => []}});
+    const old = {agent: 'Claude', id: 'claude-ancienne-1'};
+    const deadCodex = {agent: 'Codex', id: 'codex-ancienne-9'};
+    const alive = {agent: 'Claude', id: 'claude-vivante-3'};
+    for (const client of [old, old, deadCodex, alive]) await h.run('create_tab', {url: 'https://a.invalid', group: false}, client);
+    await h.run('list_tabs', {}, AGENT_B, {gone: ['codex-ancienne-9']});
+    const busy = {agent: 'Claude', id: 'claude-occupee-4'};
+    await h.own(710, busy);  // une session qui a déjà un onglet ne reprend rien
+    assert.deepEqual(plain((await h.run('heartbeat', {reclaim: true}, busy, {gone: ['claude-ancienne-1']})).data.reclaimed), []);
+    const fresh = {agent: 'Claude', id: 'claude-nouvelle-2'};
+    const beat = (await h.run('heartbeat', {reclaim: true}, fresh)).data;
+    assert.deepEqual(plain(beat.reclaimed), [700, 701]);
+    assert.equal(beat.sessionDeadAfterS, 97);
+    const owners = h.owners();
+    assert.deepEqual(plain([owners['700'].client, owners['701'].client, owners['702'].client, owners['703'].client]),
+        ['claude-nouvelle-2', 'claude-nouvelle-2', 'codex-ancienne-9', 'claude-vivante-3']);
+    assert.deepEqual(plain((await h.run('heartbeat', {reclaim: true}, {agent: 'Claude', id: 'claude-autre-5'})).data.reclaimed), []);
+    // Battement permis pendant l'arrêt d'urgence (aucune action de page).
+    await h.sendMessage({target: 'background', panelStop: true});
+    assert.equal((await h.run('heartbeat', {}, fresh)).data.alive, true);
+    // Poste de contrôle : l'orphelin restant est signalé.
+    const state = await h.sendMessage({target: 'background', getControlState: true});
+    assert.deepEqual(plain(state.tabs.filter(t => t.orphan).map(t => t.tabId)), [702]);
+});
+
+test('2.1 poste de contrôle : badge « orphelin »', () => {
+    const view = sidepanelView();
+    const line = plain(view.describeTab({tabId: 4, agent: 'Claude', title: 'T', url: 'https://a.invalid/', session: '1', exists: true, debugger: false, orphan: true}));
+    assert.ok(line.badges.includes('orphelin (session terminée)'));
+});
+
+test('2.2 cdp_send Runtime.evaluate : monde de la PAGE sur demande explicite (world="page"), monde isolé par défaut', async () => {
+    const h = harness({window: {dispatchEvent() {}, __INITIAL_STATE__: {user: 'julien'}}});
+    const expression = 'typeof window.__INITIAL_STATE__ === "object" ? window.__INITIAL_STATE__.user : "invisible"';
+    const isolated = await h.run('cdp_send', {tabId: 1, method: 'Runtime.evaluate', commandParams: {expression, returnByValue: true}});
+    assert.equal(isolated.data.result.value, 'invisible');
+    const page = await h.run('cdp_send', {tabId: 1, method: 'Runtime.evaluate', world: 'page', commandParams: {
+        expression, returnByValue: true, contextId: 1000, uniqueContextId: 'x', includeCommandLineAPI: true
+    }});
+    assert.equal(page.data.result.value, 'julien');
+    assert.equal(page.data.world, 'page');
+    const call = h.calls.filter(c => c.method === 'Runtime.evaluate').at(-1);
+    assert.equal(call.params.contextId, undefined);  // contexte par défaut du cadre principal : la page
+    assert.equal(call.params.uniqueContextId, undefined);
+    assert.equal(call.params.includeCommandLineAPI, false);
+    assert.match((await h.run('cdp_send', {tabId: 1, method: 'Runtime.evaluate', world: 'main', commandParams: {expression: '1'}})).error, /world invalide/);
+    assert.match((await h.run('cdp_send', {tabId: 1, method: 'DOM.getDocument', world: 'page'})).error, /ne vaut que pour Runtime.evaluate/);
+    assert.match((await h.run('cdp_send', {tabId: 1, method: 'Page.navigate', world: 'page', commandParams: {url: 'file:///C:/'}})).error, /Commande CDP refusée/);
+});
+
+test('2.3 cookies : include_values seulement pour localhost, 127.0.0.1, [::1], *.localhost, *.test ; valeurs des seuls domaines locaux', async () => {
+    const jar = [
+        {name: 'csrftoken', value: 'csrf-local-1', domain: 'localhost'}, {name: 'dev', value: 'dev-2', domain: '.app.test'},
+        {name: 'SID', value: 'google-secret', domain: '.google.com'}
+    ];
+    let tabUrl = 'http://localhost:8000/app';
+    const h = harness({}, {
+        tabs: {get: async (id) => ({id, url: tabUrl, windowId: 10})},
+        debuggerSendCommand: async (target, method) => method === 'Network.getCookies' ? {cookies: jar} : undefined
+    });
+    const res = await h.run('get_cookies', {tabId: 1, includeValues: true});
+    assert.equal(res.data.valuesIncluded, true);
+    assert.deepEqual(plain(res.data.cookies.map(c => [c.name, 'value' in c ? c.value : 'sans valeur'])),
+        [['csrftoken', 'csrf-local-1'], ['dev', 'dev-2'], ['SID', 'sans valeur']]);
+    assert.ok(!JSON.stringify(res).includes('google-secret'));
+    for (const url of ['http://127.0.0.1:5000/', 'http://[::1]:8080/', 'https://api.localhost/', 'http://site.test/x']) {
+        assert.equal((await h.run('get_cookies', {tabId: 1, includeValues: true, urls: [url]})).data.valuesIncluded, true, url);
+    }
+    for (const url of ['https://localhost.evil.com/', 'http://127.0.0.1.nip.io/', 'https://test.example.com/', 'file:///C:/x', 'http://127.0.0.2/']) {
+        assert.match((await h.run('get_cookies', {tabId: 1, includeValues: true, urls: [url]})).error, /origine locale de développement/, url);
+    }
+    tabUrl = 'https://mail.google.com/';
+    assert.match((await h.run('get_cookies', {tabId: 1, include_values: true})).error, /origine locale de développement/);
+    assert.equal((await h.run('get_cookies', {tabId: 1})).data.valuesIncluded, false);
+});
+
+test('2.4 réseau : pagination et compteurs de jetons jamais masqués (Google, OpenAI, Gemini, Anthropic), secrets toujours masqués', async () => {
+    const bodies = {
+        drive: JSON.stringify({kind: 'drive#fileList', nextPageToken: '~!!~AI9FV7Tp0Wq3bXk1mZ8sYv2cRtNh4LgEe', incompleteSearch: false, files: [{id: '1a', name: 'Rapport'}]}),
+        youtube: ")]}'\n" + JSON.stringify({nextPageToken: 'CAUQAA', prevPageToken: 'CAoQAQ', pageInfo: {totalResults: 42}}),
+        calendar: JSON.stringify({nextSyncToken: 'CPDAlvWDx70CEPDAlvWDx70CGAU=', items: []}), // gitleaks:allow (fake value)
+        aws: JSON.stringify({NextToken: 'eyJleGNsdXNpdmVTdGFydEtleSI6bnVsbH0=', continuation_token: 'c2', cursor: 'abc'}), // gitleaks:allow (fake value)
+        openai: JSON.stringify({id: 'chatcmpl-1', usage: {prompt_tokens: 9, completion_tokens: 12, total_tokens: 21,
+            prompt_tokens_details: {cached_tokens: 0}, completion_tokens_details: {reasoning_tokens: 4}}, max_tokens: 100}),
+        responses: JSON.stringify({usage: {input_tokens: 10, output_tokens: 5, input_tokens_details: {cached_tokens: 2}, cache_read_input_tokens: 0}}),
+        gemini: JSON.stringify({usageMetadata: {promptTokenCount: 8, candidatesTokenCount: 20, totalTokenCount: 28}, generationConfig: {maxOutputTokens: 256}}),
+        meta: JSON.stringify({tokenizer: 'cl100k_base', token_count: 12, tokens_used: '12', token_type: 'Bearer', expires_at: 1760000000}),
+        oauth: JSON.stringify({access_token: 'ya29.a0AfH6SMBSECRETA', expires_in: 3599, refresh_token: '1//0gSECRETB', scope: 'email', // gitleaks:allow (fake value)
+            token_type: 'Bearer', id_token: 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxIn0.SECRETC'}), // gitleaks:allow (fake value)
+        ambiguous: JSON.stringify({resumeToken: 'Zx9Kq2Lm8Np4Rt6Vw1SECRETD', sessionCount: 3, sessionState: {active: true}, // gitleaks:allow (fake value)
+            pageToken: 'ghp_SECRETEabcdefghijklmnopqrstuvwxyz01', access_tokens: ['SECRETF'], deviceTokens: ['SECRETG'], token: 'SECRETH'}),
+        form: 'pageToken=CAUQAA&max_tokens=100&access_token=SECRETI&nextPageToken=CAoQAQ',
+        cut: '{"nextPageToken":"CAUQAA","total_tokens":21,"refresh_token":"SECRETJ","items":[1'
+    };
+    const mimes = {form: 'application/x-www-form-urlencoded'};
+    const h = harness({}, {debuggerSendCommand: (target, method, params) => method === 'Network.getResponseBody' ? {body: bodies[params.requestId], base64Encoded: false} : undefined});
+    await h.run('evaluate', {tabId: 1, code: '1'});
+    for (const id of Object.keys(bodies)) {
+        await h.emit(1, 'Network.requestWillBeSent', {requestId: id, timestamp: 1, request: {url: `https://x.invalid/${id}`, method: 'GET', headers: {}}});
+        await h.emit(1, 'Network.responseReceived', {requestId: id, response: {status: 200, mimeType: mimes[id] || 'application/json', headers: {}}});
+        await h.emit(1, 'Network.loadingFinished', {requestId: id, timestamp: 2, encodedDataLength: 10});
+    }
+    const read = async (id) => (await h.run('network_response', {tabId: 1, request_id: id})).data;
+    const json = async (id) => { const body = (await read(id)).body; return JSON.parse(body.replace(/^\)\]\}'\n/, '')); };
+    for (const id of ['drive', 'youtube', 'calendar', 'aws', 'openai', 'responses', 'gemini', 'meta']) {
+        assert.deepEqual(await json(id), JSON.parse(bodies[id].replace(/^\)\]\}'\n/, '')), id);  // intact
+        assert.equal((await read(id)).masked, 0, id);
+    }
+    const oauth = await json('oauth');
+    assert.deepEqual(plain([oauth.expires_in, oauth.token_type, oauth.scope]), [3599, 'Bearer', 'email']);
+    const ambiguous = await json('ambiguous');
+    assert.deepEqual(plain([ambiguous.sessionCount, ambiguous.sessionState]), [3, {active: true}]);
+    assert.equal((await read('ambiguous')).masked, 5);  // resumeToken, pageToken (format GitHub), access_tokens, deviceTokens, token
+    assert.equal((await read('form')).body, 'pageToken=CAUQAA&max_tokens=100&access_token=[masqué]&nextPageToken=CAoQAQ');
+    const cut = (await read('cut')).body;
+    assert.match(cut, /"nextPageToken":"CAUQAA","total_tokens":21,"refresh_token":"\[masqué, 7 caractères\]"/);
+    for (const id of Object.keys(bodies)) {
+        const raw = JSON.stringify(await read(id));
+        for (const letter of 'ABCDEFGHIJ') assert.ok(!raw.includes(`SECRET${letter}`), `${id} : SECRET${letter}`);
+    }
+});
+
+test('2.x capacités annoncées par ping (validation réelle : extension rechargée)', async () => {
+    const h = harness();
+    const features = (await h.run('ping', {})).data.features;
+    for (const f of ['orphan-tabs', 'cdp-page-world', 'local-cookie-values', 'body-masking-allowlist']) assert.ok(features.includes(f), f);
+});
+
+// =============================================================================
+// 2.8 : valeurs des mots de passe, codes et cartes jamais renvoyées ; aucun script injecté par Page.reload.
+// =============================================================================
+const SECRET_VALUES = ['MotDePasse!1', 'Visible!2', 'Nouveau!3', 'Otp482913', 'Carte4970101234567890', 'Cvc737'];
+const secretPage = (h) => [
+    h('label', {for: 'user'}, 'Identifiant'), h('input', {id: 'user', value: 'julien'}),
+    h('label', {for: 'pw'}, 'Mot de passe'), h('input', {id: 'pw', type: 'password', value: 'MotDePasse!1'}),
+    // Champ passé en type=text par un bouton « afficher » : reconnu par son autocomplete.
+    h('label', {for: 'shown'}, 'Mot de passe affiché'), h('input', {id: 'shown', autocomplete: 'current-password', value: 'Visible!2'}),
+    h('input', {id: 'new', autocomplete: 'section-a new-password', 'aria-label': 'Nouveau', value: 'Nouveau!3'}),
+    h('input', {id: 'otp', autocomplete: 'one-time-code', 'aria-label': 'Code reçu', value: 'Otp482913'}),
+    h('input', {id: 'card', autocomplete: 'cc-number', 'aria-label': 'Numéro de carte', value: 'Carte4970101234567890'}),
+    h('input', {id: 'cvc', autocomplete: 'billing cc-csc', 'aria-label': 'Cryptogramme', value: 'Cvc737'})
+];
+const leaks = (res) => SECRET_VALUES.filter(v => JSON.stringify(res).includes(v));
+
+test('2.8 content et vision_inspect : jamais la valeur d\'un mot de passe, d\'un code ou d\'une carte (« [valeur masquée] »)', async () => {
+    const {h, dom} = richHarness(secretPage);
+    dom.win.location = {href: 'https://compte.example.invalid/connexion'};
+    const content = await h.run('get_content', {tabId: 1, mode: 'interactive'});
+    assert.deepEqual(leaks(content), []);
+    const byId = Object.fromEntries(content.data.elements.map(e => [e.id, e]));
+    for (const id of ['pw', 'shown', 'new', 'otp', 'card', 'cvc']) assert.equal(byId[id].value, '[valeur masquée]', id);
+    assert.equal(byId.user.text, 'julien');  // champ ordinaire : valeur gardée
+    assert.equal(byId.new.text, 'Nouveau');  // libellé à la place de la valeur
+    dom.doc.createElement = () => ({style: {}, remove() {}});
+    dom.html.appendChild = () => {};
+    const vision = await h.run('vision_inspect', {tabId: 1});
+    assert.deepEqual(leaks(vision), []);
+    assert.ok(vision.data.markers.filter(m => m.value === '[valeur masquée]').length >= 6);
+    const found = await h.run('find', {tabId: 1, locator: {label: 'Mot de passe'}});
+    assert.equal(found.data.count, 2);
+    assert.ok(found.data.candidates.every(c => c.value === '[valeur masquée]'));
+    assert.deepEqual(leaks(found), []);
+    assert.equal((await h.run('find', {tabId: 1, locator: {label: 'Identifiant'}})).data.candidates[0].value, 'julien');
+});
+
+test('2.8 content html : attribut value d\'un champ sensible masqué dans une copie, page intacte', async () => {
+    const input = (attrs) => ({tagName: 'INPUT', attrs: {...attrs}, get type() { return this.attrs.type || 'text'; },
+        getAttribute(n) { return n in this.attrs ? this.attrs[n] : null; }, setAttribute(n, v) { this.attrs[n] = String(v); }});
+    const page = [input({type: 'password', value: 'MotDePasse!1'}), input({autocomplete: 'cc-csc', value: 'Cvc737'}), input({value: 'julien'})];
+    const render = (list) => '<html><body>' + list.map(i => `<input${Object.entries(i.attrs).map(([k, v]) => ` ${k}="${v}"`).join('')}>`).join('') + '</body></html>';
+    const copy = page.map(i => input(i.attrs));
+    const h = harness({document: {documentElement: {
+        get outerHTML() { return render(page); },
+        cloneNode: (deep) => ({querySelectorAll: (sel) => (deep && sel === '[value]' ? copy : []), get outerHTML() { return render(copy); }})
+    }}});
+    const res = await h.run('get_content', {tabId: 1, mode: 'html'});
+    assert.deepEqual(leaks(res), []);
+    assert.match(res.data, /type="password" value="\[valeur masquée\]"/);
+    assert.match(res.data, /value="julien"/);
+    assert.equal(page[0].attrs.value, 'MotDePasse!1');  // la page n'est pas modifiée
+});
+
+test('2.8 fill dans un mot de passe : frappe réelle et relue, valeur jamais renvoyée (ni attendue, ni repli JavaScript)', async () => {
+    const {h, dom} = richHarness(secretPage);
+    const res = await h.run('fill', {tabId: 1, selector: '#pw', value: 'NouveauSecret!7'});
+    assert.equal(res.data.verified, true);
+    assert.equal(res.data.value, '[valeur masquée]');
+    assert.equal(dom.byId('pw').value, 'NouveauSecret!7');
+    assert.ok(!JSON.stringify(res).includes('NouveauSecret!7'));
+    // Valeur réécrite par la page : non vérifiée, ni la valeur relue ni l'attendue ne sortent.
+    dom.byId('card').hooks.input = () => { dom.byId('card')._value = dom.byId('card')._value.replace(/\s/g, ''); };
+    const card = await h.run('fill', {tabId: 1, selector: '#card', value: '4970 1012'});
+    assert.equal(card.data.verified, false);
+    assert.equal(card.data.value, '[valeur masquée]');
+    assert.equal(card.data.expected, '[valeur masquée]');
+    assert.ok(!JSON.stringify(card).includes('4970'));
+    const plainField = await h.run('fill', {tabId: 1, selector: '#user', value: 'julien.piron'});
+    assert.equal(plainField.data.value, 'julien.piron');  // champ ordinaire : valeur relue renvoyée
+    const dom2 = richDom(secretPage);
+    const h2 = harness(dom2.page, {attachError: 'Cannot attach to this target.'});
+    const fallback = await h2.run('fill', {tabId: 1, selector: '#otp', value: 'Otp999111'});
+    assert.equal(fallback.data.method, 'js_fallback');
+    assert.equal(fallback.data.value, '[valeur masquée]');
+    assert.equal(dom2.byId('otp').value, 'Otp999111');
+    assert.ok(!JSON.stringify(fallback).includes('Otp999111'));
+});
+
+test('2.8 cdp_send Page.reload : scriptToEvaluateOnLoad refusé avant Chrome, rechargement simple permis', async () => {
+    const h = harness();
+    for (const script of ['alert(document.cookie)', '', null]) {
+        const res = await h.run('cdp_send', {tabId: 1, method: 'Page.reload', commandParams: {ignoreCache: true, scriptToEvaluateOnLoad: script}});
+        assert.match(res.error || '', /Commande CDP refusée : Page\.reload avec scriptToEvaluateOnLoad/, String(script));
+    }
+    assert.equal(h.calls.length, 0);  // rien n'a atteint Chrome
+    assert.equal((await h.run('cdp_send', {tabId: 1, method: 'Page.reload', commandParams: {ignoreCache: true}})).error, undefined);
+    const reload = h.calls.filter(c => c.method === 'Page.reload');
+    assert.equal(reload.length, 1);
+    assert.deepEqual(plain(reload[0].params), {ignoreCache: true});
+});
+
+test('2.8 capacités annoncées par ping : masquage des champs sensibles, Page.reload sans script', async () => {
+    const features = (await harness().run('ping', {})).data.features;
+    for (const f of ['sensitive-field-masking', 'cdp-reload-no-script', 'ax-value-masking']) assert.ok(features.includes(f), f);
+});
+
+test('2.8 axtree : valeur d\'une carte ou d\'un code masquée (Chrome ne masque que les mots de passe), champ ordinaire gardé', async () => {
+    const dom = {
+        11: {nodeName: 'INPUT', attributes: ['id', 'card', 'autocomplete', 'cc-number']},
+        12: {nodeName: 'INPUT', attributes: ['id', 'otp', 'AUTOCOMPLETE', 'one-time-code']},
+        13: {nodeName: 'INPUT', attributes: ['id', 'user', 'type', 'text']},
+        14: {nodeName: 'INPUT', attributes: ['type', 'PASSWORD']}
+    };
+    const ax = [
+        // Vu dans Chrome : la valeur est répétée comme nom des nœuds de texte du champ (StaticText puis InlineTextBox).
+        {nodeId: '1', role: {value: 'textbox'}, name: {value: 'Carte'}, value: {value: 'Carte4970101234567890'}, backendDOMNodeId: 11, childIds: ['1a']},
+        {nodeId: '1a', role: {value: 'StaticText'}, name: {value: 'Carte4970101234567890'}, backendDOMNodeId: 21, childIds: ['1b']},
+        {nodeId: '1b', role: {value: 'InlineTextBox'}, name: {value: 'Carte4970101234567890'}},
+        {nodeId: '3a', role: {value: 'StaticText'}, name: {value: 'Texte de la page'}, backendDOMNodeId: 23},
+        {nodeId: '2', role: {value: 'textbox'}, name: {value: 'Code'}, value: {value: 'Otp482913'}, backendDOMNodeId: 12},
+        {nodeId: '3', role: {value: 'textbox'}, name: {value: 'Identifiant'}, value: {value: 'julien'}, backendDOMNodeId: 13},
+        {nodeId: '4', role: {value: 'textbox'}, name: {value: 'Mot de passe'}, value: {value: 'MotDePasse!1'}, backendDOMNodeId: 14},
+        {nodeId: '5', role: {value: 'textbox'}, name: {value: 'Illisible'}, value: {value: 'Cvc737'}, backendDOMNodeId: 99}
+    ];
+    const h = harness({}, {debuggerSendCommand: async (target, method, params) => {
+        if (method === 'Accessibility.getFullAXTree') return {nodes: ax};
+        if (method === 'DOM.describeNode') {
+            if (!dom[params.backendNodeId]) throw new Error('No node with given id found');
+            return {node: dom[params.backendNodeId]};
+        }
+        return undefined;
+    }});
+    const res = await h.run('axtree', {tabId: 1});
+    assert.deepEqual(leaks(res), []);
+    assert.deepEqual(plain(res.data.nodes.filter(n => n.nodeId.startsWith('1')).map(n => [n.role, n.name])),
+        [['textbox', 'Carte'], ['StaticText', '[valeur masquée]'], ['InlineTextBox', '[valeur masquée]']]);
+    assert.equal(res.data.nodes.find(n => n.nodeId === '3a').name, 'Texte de la page');
+    const values = Object.fromEntries(res.data.nodes.filter(n => n.role === 'textbox').map(n => [n.name, n.value]));
+    assert.deepEqual(plain(values), {Carte: '[valeur masquée]', Code: '[valeur masquée]', Identifiant: 'julien',
+        'Mot de passe': '[valeur masquée]', Illisible: '[valeur masquée]'});
+});
+
+test('2.8 revue d\'Antigravity : texte rendu d\'un champ sensible, bouton « afficher » sans autocomplete, composants', async () => {
+    const page = (h) => [
+        h('textarea', {id: 'ta', autocomplete: 'current-password', 'aria-label': 'Secret'}, 'TexteSecret!4'),
+        h('input', {id: 'password', name: 'password', type: 'text', value: 'Affiche!5'}),
+        h('input', {id: 'mdp-champ', value: 'Mdp!6'}),
+        h('input', {id: 'pass-hint', name: 'passenger', value: 'Julien Voyageur'}),
+        h('div', {id: 'zone-password', role: 'button'}, 'Section mot de passe')
+    ];
+    const {h, dom} = richHarness(page);
+    dom.win.location = {href: 'https://compte.example.invalid/'};
+    const raw = JSON.stringify(await h.run('get_content', {tabId: 1, mode: 'interactive'}));
+    for (const secret of ['TexteSecret!4', 'Affiche!5', 'Mdp!6']) assert.ok(!raw.includes(secret), secret);
+    assert.ok(raw.includes('Julien Voyageur'));  // « passenger » n'est pas un mot de passe
+    const found = await h.run('find', {tabId: 1, locator: {role: 'button', name: 'Section mot de passe'}});
+    assert.equal(found.data.count, 1);  // un conteneur nommé « password » n'est pas un champ
+    // Arbre AX : composant (non-input) porteur d'un autocomplete de carte.
+    const ax = [{nodeId: '1', role: {value: 'textbox'}, name: {value: 'Carte'}, value: {value: 'Carte4970101234567890'}, backendDOMNodeId: 7}];
+    const h2 = harness({}, {debuggerSendCommand: async (target, method) => {
+        if (method === 'Accessibility.getFullAXTree') return {nodes: ax};
+        if (method === 'DOM.describeNode') return {node: {nodeName: 'STRIPE-CARD-NUMBER', attributes: ['autocomplete', 'cc-number']}};
+        return undefined;
+    }});
+    assert.equal((await h2.run('axtree', {tabId: 1})).data.nodes[0].value, '[valeur masquée]');
+    // HTML : attribut value d'un composant sensible.
+    const comp = {tagName: 'X-CARD', attrs: {autocomplete: 'cc-csc', value: 'Cvc737'},
+        getAttribute(n) { return n in this.attrs ? this.attrs[n] : null; }, setAttribute(n, v) { this.attrs[n] = String(v); }};
+    const h3 = harness({document: {documentElement: {cloneNode: () => ({
+        querySelectorAll: (sel) => (sel === '[value]' ? [comp] : []), get outerHTML() { return `<x-card value="${comp.attrs.value}">`; }
+    })}}});
+    assert.equal((await h3.run('get_content', {tabId: 1, mode: 'html'})).data, '<x-card value="[valeur masquée]">');
 });

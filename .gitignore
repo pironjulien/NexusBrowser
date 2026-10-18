@@ -2,20 +2,19 @@
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-env/
-venv/
+*.log
 .venv/
 
-# Credentials & Local Tokens
-*.token
-*token*.txt
-.env
-.env.local
-
-# Operating System
-.DS_Store
+# Windows / OS
 Thumbs.db
-desktop.ini
-*.log
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Backups
+*.bak
+*.tmp
+
+# Development caches (normally stored outside OneDrive by test.ps1)
+.pytest_cache/
+.ruff_cache/

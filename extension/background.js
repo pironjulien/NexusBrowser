@@ -1,5 +1,5 @@
 /**
- * Antigravity Browser Bridge - Background Service Worker (Manifest V3)
+ * Nexus Browser Bridge - Background Service Worker (Manifest V3)
  * Full automation engine with Chrome DevTools Protocol, AXTree, DOM, PDF Export & visual feedback.
  */
 
@@ -13,37 +13,248 @@ if (typeof importScripts === "function") importScripts("export_kit.js");
 // numéro de version). Ajouter ici chaque nouvelle capacité visible.
 const AGY_FEATURES = [
     "cdp-mouse", "focus-emulation", "focus-emulation-child-settle", "locator", "trusted-typing", "oopif",
-    "network-log", "wait-download", "dialogs", "bridge-auth", "sidepanel-requests",
-    "content-export", "gsuite-export", "youtube-transcript"
+    "network-log", "wait-download", "dialogs", "bridge-auth",
+    "content-export", "gsuite-export", "youtube-transcript", "explicit-tab-id", "url-masking",
+    "tab-ownership", "cdp-allowlist", "isolated-world", "body-masking", "cookie-names-only", "stop-cancel",
+    "network-record", "control-panel", "page-coordinates-capture",
+    "orphan-tabs", "cdp-page-world", "local-cookie-values", "body-masking-allowlist",
+    "sensitive-field-masking", "cdp-reload-no-script", "ax-value-masking", "capture-screencast"
 ];
 
 let attachedDebuggers = new Set();
 let tabConsoleLogs = new Map();
 // tabId -> Set(requestId) : requêtes réseau en cours depuis l'attachement CDP (remis à zéro à chaque navigation).
 let tabInFlightRequests = new Map();
-// Onglet de travail de l'agent, persisté dans chrome.storage.session : il survit au redémarrage du service worker.
-let lastAgentTabId = null;
-const AGENT_TAB_STORAGE_KEY = "nexusagyAgentTabId";
+// Aucun « onglet courant » ici : trois agents (Antigravity, Claude, Codex) partagent ce Chrome. Chaque commande de page
+// porte son tab_id, et l'extension vérifie que cet onglet appartient au client qui la demande (voir « Propriété »).
 // Débogueur détaché après cette inactivité (bandeau « en cours de débogage » retiré, onglet rendu à Julien).
 const DEBUGGER_IDLE_MS = 30000;
 const debuggerIdleTimers = new Map();
 // tabId -> boîte de dialogue JavaScript ouverte ({type, message, ...}) : jamais acceptée d'office.
 const pendingDialogs = new Map();
 const dialogWaiters = new Map();
-let commandsInFlight = 0;
+// tabId -> commandes en cours sur CET onglet : seul ce compteur retient le détachement de son débogueur.
+const tabCommandsInFlight = new Map();
+// tabId -> échéance (ms) de l'enregistrement réseau demandé (browser_network_record) : débogueur gardé jusque-là.
+const networkRecording = new Map();
+const NETWORK_RECORD_MAX_S = 600;
 
-console.log("[NexusAGY] Background Service Worker (v2.0.0) active.");
+// -----------------------------------------------------------------------------
+// Propriété des onglets : chaque client du pont (agent + identifiant de session, posés par le pont dans le canal
+// signé) possède les onglets qu'il a ouverts. Toute commande de page sur un autre onglet (Julien, autre agent, autre
+// session du même agent) est refusée. Gardée dans chrome.storage.session : elle survit au redémarrage du service
+// worker, et disparaît avec la fermeture de Chrome (comme les onglets).
+//
+// Sessions vivantes : chaque commande (et le battement « heartbeat » des serveurs MCP) date le dernier signe de vie
+// de son client. Une session MORTE (silence de plus de SESSION_DEAD_MS, ou processus disparu, signalé par le pont dans
+// « gone ») laisse des onglets ORPHELINS : un client du MÊME agent peut les reprendre (adopt_tab sans julienAsked),
+// les fermer ou les rendre. Une session vivante reste protégée, même contre une autre session de son agent.
+// -----------------------------------------------------------------------------
+const OWNERS_KEY = "nexusBrowserTabOwners";
+const STOP_KEY = "nexusBrowserStopUntil";
+const SEEN_KEY = "nexusBrowserClientSeen";
+// Silence au-delà duquel une session est morte : 1,618 x 60 s (battement des serveurs MCP : 60 / 1,618 s).
+const SESSION_DEAD_MS = Math.round(1.618 * 60000);
+const SEEN_SAVE_MS = 15000;  // date de vie écrite au plus toutes les 15 s par session (pas une écriture par commande)
+const tabOwners = new Map();  // tabId -> { agent, client, adopted, since }
+const clientSeen = new Map();  // clientKey -> dernier signe de vie (ms) ; 0 : session morte (processus disparu)
+const seenSaved = new Map();  // clientKey -> date de vie déjà écrite dans chrome.storage.session
+let stoppedUntil = 0;  // échéance (ms) de l'arrêt d'urgence vu par l'extension
+let stateChain = Promise.resolve();
+
+function validClient(client) {
+    return !!(client && typeof client === "object"
+        && typeof client.agent === "string" && /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,31}$/.test(client.agent)
+        && typeof client.id === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{3,63}$/.test(client.id));
+}
+
+function clientKey(client) {
+    return `${client.agent}\u0000${client.id}`;
+}
+
+function ownedBy(owner, client) {
+    return !!(owner && validClient(client) && owner.client === client.id && owner.agent === client.agent);
+}
+
+/** Vrai tant que la session qui possède l'onglet donne signe de vie (commande ou battement récent). */
+function sessionAlive(owner, now = Date.now()) {
+    if (!owner) return false;
+    const key = clientKey({ agent: owner.agent, id: owner.client });
+    const seen = clientSeen.has(key) ? clientSeen.get(key) : (Number(owner.since) || 0);
+    return now - seen <= SESSION_DEAD_MS;
+}
+
+/** Onglet orphelin repris par ce client : même agent, autre session, et cette session-là est morte. */
+function orphanFor(owner, client) {
+    return !!(owner && validClient(client) && owner.agent === client.agent && owner.client !== client.id && !sessionAlive(owner));
+}
+
+/** Signe de vie du client qui commande, et sessions de son agent que le pont a vues mourir (processus disparu). */
+async function noteClientAlive(client, gone) {
+    const now = Date.now();
+    const key = clientKey(client);
+    clientSeen.set(key, now);
+    let save = now - (seenSaved.get(key) || 0) >= SEEN_SAVE_MS;
+    for (const id of Array.isArray(gone) ? gone : []) {
+        const dead = { agent: client.agent, id };
+        if (!validClient(dead) || id === client.id) continue;
+        const deadKey = clientKey(dead);
+        if (clientSeen.get(deadKey) !== 0) { clientSeen.set(deadKey, 0); save = true; }
+    }
+    if (save) await saveExtensionState();
+}
+
+async function loadExtensionState() {
+    try {
+        const stored = await chrome.storage.session.get([OWNERS_KEY, STOP_KEY, SEEN_KEY]);
+        const owners = stored?.[OWNERS_KEY];
+        if (owners && typeof owners === "object") {
+            for (const [id, owner] of Object.entries(owners)) {
+                const tabId = Number(id);
+                if (Number.isInteger(tabId) && owner && typeof owner.agent === "string" && typeof owner.client === "string") {
+                    tabOwners.set(tabId, owner);
+                }
+            }
+        }
+        if (Number.isFinite(stored?.[STOP_KEY])) stoppedUntil = Math.max(stoppedUntil, stored[STOP_KEY]);
+        const seen = stored?.[SEEN_KEY];
+        if (seen && typeof seen === "object") {
+            for (const [key, at] of Object.entries(seen)) {
+                if (Number.isFinite(at) && !clientSeen.has(key)) { clientSeen.set(key, at); seenSaved.set(key, at); }
+            }
+        }
+        // Onglets fermés pendant que le service worker dormait : propriété oubliée.
+        if (tabOwners.size && chrome.tabs?.query) {
+            const alive = new Set((await chrome.tabs.query({})).map(t => t.id));
+            let changed = false;
+            for (const tabId of [...tabOwners.keys()]) {
+                if (!alive.has(tabId)) { tabOwners.delete(tabId); changed = true; }
+            }
+            if (changed) await saveExtensionState();
+        }
+    } catch (error) {
+        console.log("[NexusBrowser] État de session illisible :", error?.message || error);
+    }
+}
+
+function saveExtensionState() {
+    // Dates de vie gardées pour les sessions qui possèdent un onglet, ou vues dans l'heure.
+    const now = Date.now();
+    const owning = new Set([...tabOwners.values()].map(owner => clientKey({ agent: owner.agent, id: owner.client })));
+    for (const [key, at] of [...clientSeen.entries()]) {
+        if (!owning.has(key) && now - at > 3600000) { clientSeen.delete(key); seenSaved.delete(key); }
+    }
+    for (const [key, at] of clientSeen.entries()) seenSaved.set(key, at);
+    const run = stateChain.then(() => chrome.storage.session.set({
+        [OWNERS_KEY]: Object.fromEntries([...tabOwners.entries()].map(([id, owner]) => [String(id), owner])),
+        [STOP_KEY]: stoppedUntil,
+        [SEEN_KEY]: Object.fromEntries(clientSeen.entries())
+    }));
+    stateChain = run.catch(() => {});
+    return run;
+}
+
+// Propriété relue avant la toute première commande (redémarrage du service worker compris).
+const extensionStateReady = (typeof chrome !== "undefined" && chrome.storage?.session) ? loadExtensionState() : Promise.resolve();
+
+async function rememberTabOwner(tabId, client, how = "created") {
+    if (!Number.isInteger(tabId) || !validClient(client)) return;
+    tabOwners.set(tabId, { agent: client.agent, client: client.id, adopted: how === "adopted", since: Date.now() });
+    await saveExtensionState();
+}
+
+async function forgetTabOwner(tabId) {
+    if (!tabOwners.delete(tabId)) return false;
+    await saveExtensionState();
+    return true;
+}
+
+function ownerLabel(owner) {
+    return owner ? `${owner.agent}${owner.adopted ? " (adopté)" : ""}` : "Julien";
+}
+
+// -----------------------------------------------------------------------------
+// Arrêt d'urgence vu par l'extension (posé par le pont ou par le bouton STOP du poste de contrôle) : toute action est
+// refusée jusqu'à l'échéance, et les boucles en cours (frappe touche par touche, glisser, attentes) s'interrompent au
+// prochain pas. Les lectures restent permises, comme au pont.
+// -----------------------------------------------------------------------------
+const STOP_HOLD_MS = 120000;
+const stopWaiters = new Set();
+// Lectures permises pendant l'arrêt : miroir de READ_ONLY_ACTIONS (native-host/bridge_security.py), aux noms d'action
+// reçus par l'extension (vérifié par tests/test_cross_review.py).
+const STOP_ALLOWED_ACTIONS = new Set([
+    "ping", "list_tabs", "get_active_tab", "active_tab", "get_dom", "get_content", "content", "axtree",
+    "get_accessibility_tree", "get_logs", "logs", "console_logs", "screenshot", "take_screenshot", "print_pdf", "pdf",
+    "export_pdf", "check_handoff", "download_status", "wait_load", "wait_for_load", "wait_network_idle",
+    "network_idle", "interactive_map", "interactive_elements", "som_map", "vision_inspect", "som_inspect", "find",
+    "find_elements", "locate", "network_requests", "network_response", "network_response_body", "wait_download",
+    "export_content", "content_export", "export_gsuite", "gsuite_export", "release_tab", "network_stop",
+    "emergency_stop", "heartbeat"
+]);
+
+function stopActive() {
+    return Date.now() < stoppedUntil;
+}
+
+function stopMessage() {
+    const left = Math.max(0, Math.round((stoppedUntil - Date.now()) / 1000));
+    return `Arrêt d'urgence demandé par Julien : plus aucune action pendant encore ${left} s (commande en cours interrompue). Attendre ses instructions ; ne pas contourner.`;
+}
+
+/** Point de contrôle des boucles et des envois d'entrées : lève une erreur pendant l'arrêt d'urgence. */
+function assertNotStopped() {
+    if (stopActive()) {
+        const error = new Error(stopMessage());
+        error.emergencyStop = true;
+        throw error;
+    }
+}
+
+async function emergencyStop({ holdMs = STOP_HOLD_MS, source = "pont" } = {}) {
+    stoppedUntil = Math.max(stoppedUntil, Date.now() + Math.max(0, Math.min(Number(holdMs) || STOP_HOLD_MS, STOP_HOLD_MS)));
+    for (const wake of [...stopWaiters]) wake();
+    // Débogueurs détachés : plus aucune entrée possible, bandeau retiré. Aussi ceux attachés avant un redémarrage du
+    // service worker (onglets pilotés que Chrome dit débogués).
+    const toDetach = new Set(attachedDebuggers);
+    try {
+        if (chrome.debugger?.getTargets) {
+            for (const target of await chrome.debugger.getTargets()) {
+                if (target.attached && Number.isInteger(target.tabId) && tabOwners.has(target.tabId)) toDetach.add(target.tabId);
+            }
+        }
+    } catch (_) {}
+    for (const tabId of toDetach) await detachDebugger(tabId);
+    for (const [tabId, pending] of [...pendingFileChoosers]) {
+        pendingFileChoosers.delete(tabId);
+        pending.reject(new Error(stopMessage()));
+    }
+    networkRecording.clear();
+    await saveExtensionState();
+    console.log(`[NexusBrowser] Arrêt d'urgence (${source}) jusqu'à ${new Date(stoppedUntil).toISOString()}`);
+    return { stoppedUntil, source };
+}
+
+// Version lue d'une seule source : le manifeste chargé par Chrome.
+function extensionVersion() {
+    try {
+        return chrome.runtime?.getManifest?.()?.version || null;
+    } catch (_) {
+        return null;
+    }
+}
+
+console.log(`[NexusBrowser] Background Service Worker (v${extensionVersion() || "inconnue"}) active.`);
 
 // -----------------------------------------------------------------------------
 // Pont local authentifié (bridge_link.js) & keepalive Chrome 116+
 // Deux liaisons : celle du service worker (ici, elle exécute les commandes elle-même) et celle du document
 // offscreen (relais, garde une connexion quand le service worker est suspendu). Les deux prouvent le jeton par
-// l'hôte natif com.nexusagy.bridge_auth ; le pont choisit le service worker en priorité.
+// l'hôte natif com.nexus.browser_auth ; le pont choisit le service worker en priorité.
 // -----------------------------------------------------------------------------
 if (typeof importScripts === "function") importScripts("bridge_link.js");
 
 const BRIDGE_WS_URL = "ws://127.0.0.1:9224";
-const NATIVE_AUTH_HOST = "com.nexusagy.bridge_auth";
+const NATIVE_AUTH_HOST = "com.nexus.browser_auth";
 let bridgeLink = null;
 let offscreenLinkState = null;
 let lastBridgeAuthError = null;
@@ -62,7 +273,7 @@ function proveWithNativeHost(args) {
             chrome.runtime.sendNativeMessage(NATIVE_AUTH_HOST, args, (reply) => {
                 const error = chrome.runtime.lastError;
                 if (error || !reply) {
-                    resolve({ ok: false, error: `hôte natif ${NATIVE_AUTH_HOST} injoignable (${error?.message || "aucune réponse"}) : lancer install.ps1 de NexusAGY` });
+                    resolve({ ok: false, error: `hôte natif ${NATIVE_AUTH_HOST} injoignable (${error?.message || "aucune réponse"}) : lancer install.ps1 de NexusBrowser` });
                 } else {
                     resolve(reply);
                 }
@@ -103,7 +314,7 @@ function connectBridgeWS() {
                 if (link.state !== "ready") return;
                 lastBridgeAuthError = null;
                 reconnectAttempts = 0;
-                console.log("[NexusAGY] Service worker authentifié auprès du pont " + BRIDGE_WS_URL);
+                console.log("[NexusBrowser] Service worker authentifié auprès du pont " + BRIDGE_WS_URL);
                 link.send({ event: "bridge_connected", timestamp: Date.now() });
                 if (keepaliveInterval) clearInterval(keepaliveInterval);
                 keepaliveInterval = setInterval(() => {
@@ -175,9 +386,9 @@ async function ensureOffscreenDocument() {
         await chrome.offscreen.createDocument({
             url: "offscreen.html",
             reasons: ["BLOBS"],
-            justification: "NexusAGY persistent local WebSocket bridge connection"
+            justification: "NexusBrowser persistent local WebSocket bridge connection"
         });
-        console.log("[NexusAGY] Offscreen keepalive document created.");
+        console.log("[NexusBrowser] Offscreen keepalive document created.");
     } catch (_) {}
 }
 
@@ -244,12 +455,18 @@ if (typeof chrome !== "undefined") {
                 sendResponse(bridgeStatus());
                 return true;
             }
-            if (message.getActiveTab) {
-                getActiveTab().then(sendResponse);
+            // Poste de contrôle (panneau latéral) : il n'exécute aucune action sur les pages ; il montre les onglets
+            // pilotés, pose l'arrêt d'urgence et rend un onglet à Julien.
+            if (message.getControlState) {
+                controlState().then(sendResponse, (error) => sendResponse({ error: error.message || String(error) }));
                 return true;
             }
-            if (message.executeAction) {
-                handleCommand({ action: message.action, params: message.params || {} }).then(sendResponse);
+            if (message.panelStop) {
+                panelEmergencyStop().then(sendResponse, (error) => sendResponse({ error: error.message || String(error) }));
+                return true;
+            }
+            if (message.panelRelease !== undefined) {
+                releaseTabFromPanel(message.panelRelease).then(sendResponse, (error) => sendResponse({ error: error.message || String(error) }));
                 return true;
             }
             if (message.bridgeProve) {
@@ -261,10 +478,6 @@ if (typeof chrome !== "undefined") {
                 offscreenLinkState = { ...message.bridgeState, at: Date.now() };
                 if (offscreenLinkState.error) lastBridgeAuthError = offscreenLinkState.error;
                 sendResponse({ ok: true });
-                return true;
-            }
-            if (message.sidepanelSubmit) {
-                submitSidepanelRequest(message.sidepanelSubmit).then(sendResponse);
                 return true;
             }
             if (message.request) {
@@ -279,75 +492,63 @@ if (typeof chrome !== "undefined") {
 setTimeout(connectBridgeWS, 300);
 
 // -----------------------------------------------------------------------------
-// Panneau latéral : demandes transmises à Antigravity par le pont, réponses de l'agent
-// Fil unique dans chrome.storage.session (mémoire, effacé à la fermeture de Chrome), lu par le panneau.
+// Poste de contrôle (panneau latéral) : onglets pilotés par chaque agent, état du débogueur, STOP, rendre l'onglet.
+// Aucune action sur les pages n'en part ; tout ce qu'il affiche est relu ici.
 // -----------------------------------------------------------------------------
-const SIDEPANEL_THREAD_KEY = "nexusagySidepanelThread";
-const SIDEPANEL_THREAD_MAX = 50;
-const SIDEPANEL_TEXT_MAX = 4000;
-let sidepanelThreadChain = Promise.resolve();
-
-function updateSidepanelThread(mutate) {
-    const run = sidepanelThreadChain.then(async () => {
-        const stored = await chrome.storage.session.get(SIDEPANEL_THREAD_KEY);
-        const thread = Array.isArray(stored?.[SIDEPANEL_THREAD_KEY]) ? stored[SIDEPANEL_THREAD_KEY] : [];
-        const result = mutate(thread);
-        await chrome.storage.session.set({ [SIDEPANEL_THREAD_KEY]: thread.slice(-SIDEPANEL_THREAD_MAX) });
-        return result;
-    });
-    sidepanelThreadChain = run.catch(() => {});
-    return run;
-}
-
-function newSidepanelId() {
-    if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
-    return `sp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-async function submitSidepanelRequest(input = {}) {
-    const text = String(input.text || "").trim();
-    if (!text) return { error: "Demande vide" };
-    if (text.length > SIDEPANEL_TEXT_MAX) return { error: `Demande trop longue (${SIDEPANEL_TEXT_MAX} caractères au plus)` };
-    const tab = input.tab && typeof input.tab === "object"
-        ? { id: input.tab.id ?? null, title: String(input.tab.title || "").slice(0, 200), url: String(input.tab.url || "").slice(0, 500) }
-        : null;
-    const request = { id: newSidepanelId(), text, tab, created_at: Date.now() };
-    const sent = await sendBridgeEvent({ event: "sidepanel_request", request });
-    const entry = { ...request, kind: "request", status: sent ? "sent" : "not_sent" };
-    await updateSidepanelThread((thread) => { thread.push(entry); });
+async function controlState() {
+    await extensionStateReady;
+    let tabs = [];
+    try { tabs = await chrome.tabs.query({}); } catch (_) {}
+    const byId = new Map(tabs.map(t => [t.id, t]));
+    const piloted = [...tabOwners.entries()].map(([tabId, owner]) => {
+        const tab = byId.get(tabId) || {};
+        const recordingUntil = networkRecording.get(tabId) || null;
+        return {
+            tabId,
+            agent: owner.agent,
+            session: String(owner.client || "").slice(-8),
+            adopted: !!owner.adopted,
+            orphan: !sessionAlive(owner),
+            since: owner.since || null,
+            title: tab.title || "",
+            url: maskUrl(tab.url || ""),
+            exists: byId.has(tabId),
+            debugger: attachedDebuggers.has(tabId),
+            commandsInFlight: tabCommandsInFlight.get(tabId) || 0,
+            recordingUntil: recordingUntil && recordingUntil > Date.now() ? recordingUntil : null
+        };
+    }).sort((a, b) => a.agent.localeCompare(b.agent) || a.tabId - b.tabId);
     return {
-        data: { id: request.id, status: entry.status },
-        ...(sent ? {} : { error: "Pont local non authentifié : demande non transmise à Antigravity" })
+        version: extensionVersion(),
+        bridge: bridgeStatus(),
+        stoppedUntil: stopActive() ? stoppedUntil : null,
+        tabs: piloted,
+        attachedDebuggers: attachedDebuggers.size
     };
 }
 
-async function replyToSidepanel(params = {}) {
-    const text = String(params.text || "").trim();
-    if (!text) return { error: "Missing 'text' for the side panel reply" };
-    if (text.length > SIDEPANEL_TEXT_MAX * 4) return { error: "Reply too long" };
-    const requestId = params.request_id || params.requestId || null;
-    const entry = { id: newSidepanelId(), kind: "reply", text, request_id: requestId, created_at: Date.now() };
-    await updateSidepanelThread((thread) => {
-        thread.push(entry);
-        const asked = requestId && thread.find(item => item.kind === "request" && item.id === requestId);
-        if (asked) asked.status = "answered";
-    });
-    return { data: { id: entry.id, shown: true } };
+/** Bouton STOP : arrêt local immédiat, puis arrêt commun ~/.nexus/stop posé par le pont pour tous les agents. */
+async function panelEmergencyStop() {
+    await emergencyStop({ holdMs: STOP_HOLD_MS, source: "poste de contrôle" });
+    const sent = await sendBridgeEvent({ event: "emergency_stop", by: "poste de contrôle", timestamp: Date.now() });
+    return {
+        stoppedUntil,
+        sentToBridge: sent,
+        ...(sent ? {} : { warning: "Pont injoignable : arrêt tenu dans Chrome seulement, pas encore chez les autres agents." })
+    };
 }
 
-async function markSidepanelRead(params = {}) {
-    const ids = new Set(Array.isArray(params.ids) ? params.ids : []);
-    const marked = await updateSidepanelThread((thread) => {
-        let count = 0;
-        for (const item of thread) {
-            if (item.kind === "request" && ids.has(item.id) && item.status === "sent") {
-                item.status = "read";
-                count++;
-            }
-        }
-        return count;
-    });
-    return { data: { marked } };
+/** « Rendre l'onglet » : propriété retirée, débogueur détaché ; l'onglet reste ouvert pour Julien. */
+async function releaseTabFromPanel(rawTabId) {
+    const tabId = Number(rawTabId);
+    if (!Number.isInteger(tabId)) return { error: `Onglet invalide : ${rawTabId}` };
+    await extensionStateReady;
+    const owner = tabOwners.get(tabId) || null;
+    networkRecording.delete(tabId);
+    await detachDebugger(tabId);  // même après un redémarrage du service worker (attachement oublié en mémoire)
+    await forgetTabOwner(tabId);
+    notifyTabStatus(tabId, "Onglet rendu à Julien", 2500, null);
+    return { tabId, released: !!owner, previousOwner: owner ? owner.agent : null };
 }
 
 // -----------------------------------------------------------------------------
@@ -387,6 +588,21 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
     } else if (method === "Page.frameNavigated") {
         // Nouveau document principal : les requêtes de l'ancien ne finiront jamais, on repart de zéro.
         if (!params?.frame?.parentId && !source.sessionId) resetNetworkTracking(source.tabId);
+    } else if (method === "Runtime.executionContextCreated") {
+        // Monde isolé « nexus-browser » d'un cadre, créé avant un rattachement du débogueur : repris tel quel (ses
+        // marqueurs de interactive_map restent valables), jamais confondu avec un monde de la page.
+        const context = params?.context;
+        const frameId = context?.auxData?.frameId;
+        if (context?.name === FRAME_WORLD_NAME && frameId && context.auxData?.type === "isolated") {
+            isolatedWorlds.set(`${source.tabId}|${source.sessionId || ""}|${frameId}`, context.id);
+        }
+    } else if (method === "Runtime.executionContextDestroyed") {
+        for (const [key, id] of [...isolatedWorlds]) {
+            if (id === params?.executionContextId && key.startsWith(`${source.tabId}|${source.sessionId || ""}|`)) isolatedWorlds.delete(key);
+        }
+    } else if (method === "Runtime.executionContextsCleared") {
+        const prefix = `${source.tabId}|${source.sessionId || ""}|`;
+        for (const key of [...isolatedWorlds.keys()]) if (key.startsWith(prefix)) isolatedWorlds.delete(key);
     } else if (method === "Page.javascriptDialogOpening") {
         // Jamais d'acceptation automatique : la boîte est mémorisée, signalée dans les réponses, et l'agent
         // répond explicitement avec handle_dialog (browser_handle_dialog).
@@ -441,7 +657,6 @@ chrome.debugger.onDetach.addListener((source) => {
 
 if (chrome.tabs?.onRemoved?.addListener) {
     chrome.tabs.onRemoved.addListener((tabId) => {
-        if (tabId === lastAgentTabId) setAgentTab(null);
         if (attachedDebuggers.has(tabId)) detachDebugger(tabId);
         clearDebuggerIdleTimer(tabId);
         pendingDialogs.delete(tabId);
@@ -450,6 +665,7 @@ if (chrome.tabs?.onRemoved?.addListener) {
         tabInFlightRequests.delete(tabId);
         tabNetwork.delete(tabId);
         lastActionAt.delete(tabId);
+        networkRecording.delete(tabId);
         forgetTabFrames(tabId);
         const pending = pendingFileChoosers.get(tabId);
         if (pending) {
@@ -457,26 +673,120 @@ if (chrome.tabs?.onRemoved?.addListener) {
             pending.reject(new Error("Tab closed during file upload"));
         }
         activeUploads.delete(tabId);
+        extensionStateReady.then(() => forgetTabOwner(tabId)).catch(() => {});
+    });
+}
+// Onglet remplacé par Chrome (prérendu, navigation instantanée) : la propriété suit le nouvel identifiant.
+if (chrome.tabs?.onReplaced?.addListener) {
+    chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+        extensionStateReady.then(async () => {
+            const owner = tabOwners.get(removedTabId);
+            if (!owner) return;
+            tabOwners.delete(removedTabId);
+            tabOwners.set(addedTabId, owner);
+            await saveExtensionState();
+        }).catch(() => {});
     });
 }
 
 // -----------------------------------------------------------------------------
 // Command Router
 // -----------------------------------------------------------------------------
+// Commandes sans onglet visé (ou qui en créent un). Toutes les autres exigent un onglet du client qui les demande.
+const TAB_FREE_ACTIONS = new Set([
+    "ping", "list_tabs", "active_tab", "get_active_tab", "create_tab", "new_tab", "download_status", "download_erase",
+    "reload_extension", "adopt_tab", "heartbeat"
+]);
+// Commandes permises sur un onglet ORPHELIN du même agent (session morte), sans le reprendre d'abord.
+const ORPHAN_ACTIONS = new Set(["close_tab", "release_tab"]);
+// Commandes du pont lui-même (canal signé), sans client : contrôle de vie et arrêt d'urgence.
+const BRIDGE_ACTIONS = new Set(["ping", "emergency_stop"]);
+
+function normalizedAction(req) {
+    return String(req.action || req.command || "").toLowerCase().replace(/-/g, "_");
+}
+
+function foreignTabMessage(tabId, owner, client) {
+    if (orphanFor(owner, client)) {
+        return `L'onglet ${tabId} est orphelin : sa session de ${owner.agent} est terminée (serveur redémarré ou arrêté). ` +
+            "Le reprendre avec browser_adopt_tab(tab_id) (sans julien_asked), ou le fermer (browser_close_tab) ou le rendre à Julien (browser_release_tab).";
+    }
+    if (!owner) {
+        return `L'onglet ${tabId} n'est piloté par aucun agent (onglet de Julien) : refusé. Ouvrir le sien avec browser_new_tab ; ` +
+            "browser_adopt_tab(tab_id, julien_asked=True) seulement si Julien l'a demandé explicitement.";
+    }
+    const sameAgent = client && owner.agent === client.agent;
+    return `L'onglet ${tabId} est piloté par ${owner.agent}${sameAgent ? " dans une autre session" : ""} : refusé. ` +
+        "Chaque agent n'agit que dans les onglets qu'il a ouverts (browser_new_tab).";
+}
+
+/** Refus (message) d'une commande, ou null : identité, arrêt d'urgence, propriété de l'onglet visé. */
+function authorizeCommand(action, params, client) {
+    if (BRIDGE_ACTIONS.has(action)) return null;
+    if (!client) return "Commande sans identité de client (agent et session posés par le pont) : refusée. Relancer install.ps1 (pont à jour).";
+    if (stopActive() && !STOP_ALLOWED_ACTIONS.has(action)) return stopMessage();
+    if (TAB_FREE_ACTIONS.has(action)) return null;
+    if (action === "group_tabs" && Array.isArray(params.tabIds) && params.tabIds.length) {
+        for (const raw of params.tabIds) {
+            const tabId = Number(raw);
+            if (!Number.isInteger(tabId)) return `tab_id invalide : ${raw}`;
+            if (!ownedBy(tabOwners.get(tabId), client)) return foreignTabMessage(tabId, tabOwners.get(tabId), client);
+        }
+        return null;
+    }
+    const tabId = requestedTabId(params);
+    if (tabId === null) {
+        const given = params.tabId ?? params.tab_id ?? params.id;
+        if (given !== undefined && given !== null && given !== "") return `tab_id invalide : ${given}`;
+        return MISSING_TAB_MESSAGE;
+    }
+    const owner = tabOwners.get(tabId);
+    if (ownedBy(owner, client)) return null;
+    if (ORPHAN_ACTIONS.has(action) && orphanFor(owner, client)) return null;
+    return foreignTabMessage(tabId, owner, client);
+}
+
 async function handleCommand(req) {
-    commandsInFlight++;
+    await extensionStateReady;
+    const action = normalizedAction(req);
+    const params = req.params || req.payload || {};
+    // Identité posée par le pont à côté des paramètres (jamais lue dans les paramètres eux-mêmes).
+    const client = validClient(req.client) ? { agent: req.client.agent, id: req.client.id } : null;
+    // Signe de vie noté AVANT l'autorisation (une commande refusée prouve aussi que la session vit) ; « gone » : posé
+    // par le pont dans le canal signé, jamais lu dans les paramètres.
+    if (client) await noteClientAlive(client, req.gone);
+    const refusal = authorizeCommand(action, params, client);
+    if (refusal) return { error: refusal };
+    const tabId = requestedTabId(params);
+    if (tabId !== null) tabCommandsInFlight.set(tabId, (tabCommandsInFlight.get(tabId) || 0) + 1);
     let result;
     try {
-        result = await routeCommand(req);
+        result = await routeCommand({ action, params }, client);
     } finally {
-        commandsInFlight--;
+        if (tabId !== null) {
+            const left = (tabCommandsInFlight.get(tabId) || 1) - 1;
+            if (left > 0) tabCommandsInFlight.set(tabId, left);
+            else tabCommandsInFlight.delete(tabId);
+        }
     }
-    const action = (req.action || req.command || "").toLowerCase().replace(/-/g, "_");
+    const visible = tabId !== null && ownedBy(tabOwners.get(tabId), client) ? tabId : null;
     // Evaluation may legitimately return an object containing an error field.
     if (!["eval", "evaluate", "evaluate_js"].includes(action) && result?.data?.error) {
-        return annotatePendingDialogs({ error: result.data.error });
+        return annotatePendingDialogs({ error: result.data.error }, visible);
     }
-    return annotatePendingDialogs(result);
+    return annotatePendingDialogs(result, visible);
+}
+
+/** Onglet explicitement visé par une commande (tab_id, tabId ou id), sinon null. */
+function requestedTabId(params) {
+    if (!params || typeof params !== "object") return null;
+    for (const key of ["tabId", "tab_id", "id"]) {
+        const value = params[key];
+        if (value === undefined || value === null || value === "") continue;
+        const id = typeof value === "number" ? value : Number(String(value).trim());
+        return Number.isInteger(id) ? id : null;
+    }
+    return null;
 }
 
 function publicDialog(dialog) {
@@ -494,11 +804,12 @@ function describeDialog(dialog) {
 }
 
 /**
- * Signale dans la réponse de toute commande les boîtes de dialogue encore ouvertes (aucune n'est acceptée d'office).
+ * Signale dans la réponse d'une commande la boîte de dialogue encore ouverte dans l'onglet qu'ELLE vise (aucune
+ * n'est acceptée d'office). Jamais celles des autres onglets : elles appartiennent peut-être à un autre agent.
  */
-function annotatePendingDialogs(result) {
-    if (pendingDialogs.size === 0 || !result) return result;
-    const dialogs = [...pendingDialogs.values()].map(publicDialog);
+function annotatePendingDialogs(result, tabId = null) {
+    if (!result || tabId === null || !pendingDialogs.has(tabId)) return result;
+    const dialogs = [publicDialog(pendingDialogs.get(tabId))];
     if (result.error) {
         return { ...result, error: `${result.error} [${dialogs.map(d => describeDialog(d)).join(" ; ")} : répondre avec handle_dialog]` };
     }
@@ -558,10 +869,9 @@ function dialogInterruption(dialog) {
     };
 }
 
-async function routeCommand(req) {
-    const rawAction = req.action || req.command || "";
-    const action = rawAction.toLowerCase().replace(/-/g, "_");
-    const rawParams = req.params || req.payload || req;
+async function routeCommand(req, client = null) {
+    const action = normalizedAction(req);
+    const rawParams = req.params || req.payload || {};
     const params = { ...rawParams };
     if (params.tab_id !== undefined && params.tabId === undefined) {
         params.tabId = params.tab_id;
@@ -577,25 +887,43 @@ async function routeCommand(req) {
                 return {
                     data: {
                         status: "pong",
-                        version: chrome.runtime?.getManifest?.()?.version || "2.0.0",
+                        version: extensionVersion(),
                         features: AGY_FEATURES,
                         timestamp: Date.now(),
                     },
                 };
 
             case "list_tabs":
-                return await listTabs(params);
+                return await listTabs(params, client);
 
             case "active_tab":
             case "get_active_tab":
-                return await getActiveTab();
+                return await getActiveTab(client);
 
             case "select_tab":
                 return await selectTab(params);
 
             case "create_tab":
             case "new_tab":
-                return await createTab(params);
+                return await createTab(params, client);
+
+            case "adopt_tab":
+                return await adoptTab(params, client);
+
+            case "heartbeat":
+                return await heartbeat(params, client);
+
+            case "release_tab":
+                return await releaseTab(params);
+
+            case "emergency_stop":
+                return { data: await emergencyStop({ holdMs: Number(params.hold_s) * 1000, source: "pont" }) };
+
+            case "network_record":
+                return await recordNetwork(params);
+
+            case "network_stop":
+                return await stopNetworkRecording(params);
 
             case "group_tabs":
             case "tabs_group":
@@ -746,12 +1074,6 @@ async function routeCommand(req) {
             case "drag":
                 return await dragAndDrop(params);
 
-            case "sidepanel_reply":
-                return await replyToSidepanel(params);
-
-            case "sidepanel_mark_read":
-                return await markSidepanelRead(params);
-
             case "form_fields":
                 return await getFormFields(params);
 
@@ -769,13 +1091,13 @@ async function routeCommand(req) {
 
             case "reload_extension":
                 setTimeout(() => { try { chrome.runtime.reload(); } catch(e) {} }, 100);
-                return { data: { reloading: true, version: chrome.runtime?.getManifest?.()?.version || "2.0.0" } };
+                return { data: { reloading: true, version: extensionVersion() } };
 
             default:
                 return { error: `Unknown action '${action}'` };
         }
     } catch (error) {
-        console.log(`[Antigravity] Notice for '${action}':`, error.message);
+        console.log(`[NexusBrowser] Notice for '${action}':`, error.message);
         return { error: error.message || String(error) };
     }
 }
@@ -903,7 +1225,7 @@ function agyTextKit(install) {
         const kit = { __agyNorm, __agyAttr, __agyTag, __agySkipped, __agyLabels, __agyAllElements, __agyIsInteractive,
             __agyIsVisible, __agyDepth, __agyKey, __agyLess, __agyPick, __agyInteractiveTarget, __agyFindByText };
         if (!install) return kit;
-        try { (typeof window !== "undefined" ? window : globalThis).__nexusagyTextKit = kit; } catch (_) {}
+        try { (typeof window !== "undefined" ? window : globalThis).__nexusBrowserTextKit = kit; } catch (_) {}
         return true;
 }
 
@@ -915,14 +1237,14 @@ function agyTextKit(install) {
 function agyMouseKit(spec, textKit, locatorKit) {
     const win0 = typeof window !== "undefined" ? window : globalThis;
     const doc0 = typeof document !== "undefined" ? document : null;
-    const kit = textKit || win0.__nexusagyTextKit || null;
-    const lk = locatorKit || win0.__nexusagyLocatorKit || null;
+    const kit = textKit || win0.__nexusBrowserTextKit || null;
+    const lk = locatorKit || win0.__nexusBrowserLocatorKit || null;
     // Échec détaillé du dernier locate() (localisateur ambigu, aucun élément...).
     let locateFailure = null;
-    let store = win0.__nexusagyMouse;
+    let store = win0.__nexusBrowserMouse;
     if (!store || !store.probes || typeof store.probes.get !== "function") {
         store = { probes: new Map(), seq: 0 };
-        try { win0.__nexusagyMouse = store; } catch (_) {}
+        try { win0.__nexusBrowserMouse = store; } catch (_) {}
     }
 
     function up(node) { return node ? (node.parentNode || node.parentElement || node.host || null) : null; }
@@ -946,8 +1268,13 @@ function agyMouseKit(spec, textKit, locatorKit) {
         if (cls.length) out += "." + cls.join(".");
         return out;
     }
+    // Mot de passe, code à usage unique, carte bancaire : sa valeur ne sort jamais de la page (kit de localisation).
+    function sensitive(el) {
+        if (lk && typeof lk.sensitiveField === "function") return lk.sensitiveField(el);
+        return String((el && el.type) || "").toLowerCase() === "password";
+    }
     function info(el) {
-        const raw = el.innerText !== undefined && el.innerText !== null ? el.innerText : (typeof el.value === "string" ? el.value : "");
+        const raw = el.innerText !== undefined && el.innerText !== null ? el.innerText : (typeof el.value === "string" && !sensitive(el) ? el.value : "");
         return {
             tagName: el.tagName || null,
             id: el.id || (typeof el.getAttribute === "function" ? el.getAttribute("id") : null) || null,
@@ -1001,7 +1328,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         return hit && !role ? kit.__agyInteractiveTarget(hit) : hit;
     }
     function axPool(token) {
-        const reg = win0.__nexusagyAx;
+        const reg = win0.__nexusBrowserAx;
         const list = reg && token ? reg[token] : null;
         return Array.isArray(list) ? list.filter(x => x && x.el && x.el.isConnected !== false).map(x => ({ el: x.el, role: x.role, name: x.name })) : null;
     }
@@ -1052,7 +1379,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             const tag = String((a && a.tagName) || "").toUpperCase();
             return a && tag !== "BODY" && tag !== "HTML" ? a : null;
         }
-        const som = win0.__antigravity_som_elements;
+        const som = win0.__nexus_som_elements;
         if (loc.mark !== undefined && loc.mark !== null) {
             return som && typeof som.get === "function" ? (som.get(Number(loc.mark)) || null) : null;
         }
@@ -1240,9 +1567,6 @@ function agyMouseKit(spec, textKit, locatorKit) {
             attached: probe.attached
         };
     }
-    function visual(x, y) {
-        try { win0.dispatchEvent(new CustomEvent("__antigravity_visual_click", { detail: { x, y } })); } catch (_) {}
-    }
     function round2(v) { return Math.round(v * 100) / 100; }
 
     // Sondes oubliées (page bloquée, navigation) : retirées après une minute.
@@ -1292,7 +1616,6 @@ function agyMouseKit(spec, textKit, locatorKit) {
         const probeId = Array.isArray(spec.probe) && spec.probe.length ? addProbe(el, spec.probe) : null;
         const x = round2(chosen.x);
         const y = round2(chosen.y);
-        if (spec.visual) visual(x, y);
         return {
             success: true,
             ...base,
@@ -1400,7 +1723,9 @@ function agyMouseKit(spec, textKit, locatorKit) {
             kind,
             ...info(el),
             type: el.type || null,
+            // Valeur réelle gardée pour la relecture (verified) côté extension, masquée avant de sortir (shownValue).
             value: readValue(),
+            sensitive: sensitive(el),
             editable: kind !== "other" && kind !== "select" && !el.disabled && !el.readOnly,
             disabled: !!el.disabled,
             readOnly: !!el.readOnly,
@@ -1544,7 +1869,6 @@ function agyMouseKit(spec, textKit, locatorKit) {
             fire("mouseup", { button: 2, buttons: 0 });
             fire("contextmenu", { button: 2, buttons: 0 });
         } else {
-            visual(cx, cy);
             if (typeof el.focus === "function") { try { el.focus(); } catch (_) {} }
             const count = spec.clickCount === 2 ? 2 : 1;
             for (let i = 1; i <= count; i++) {
@@ -1593,8 +1917,22 @@ const MOUSE_PROOF_EVENT = { left: "click", right: "contextmenu", middle: "auxcli
 const MOUSE_COMMAND_TIMEOUT_MS = 10000;
 const MOUSE_RETRY_MS = 60;
 
+/**
+ * Attente interrompue par l'arrêt d'urgence (frappe, glisser, attentes de chargement, de réseau, de téléchargement) :
+ * lève l'erreur d'arrêt avant, pendant (réveil immédiat) et après.
+ */
 function sleepMs(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    assertNotStopped();
+    return new Promise((resolve, reject) => {
+        let timer = null;
+        const wake = () => {
+            clearTimeout(timer);
+            stopWaiters.delete(wake);
+            try { assertNotStopped(); resolve(); } catch (error) { reject(error); }
+        };
+        stopWaiters.add(wake);
+        timer = setTimeout(wake, ms);
+    });
 }
 
 async function withTimeout(promise, ms, message) {
@@ -1678,13 +2016,14 @@ function mousePageError(details) {
 }
 
 /**
- * Exécute une phase de agyMouseKit dans la page par CDP. Renvoie la valeur, ou { __dialog } si une boîte s'ouvre.
- * contextId : monde isolé d'un cadre d'une autre origine (sinon monde principal du cadre principal de la session).
+ * Exécute une phase de agyMouseKit par CDP dans le monde isolé « nexus-browser » du cadre (contextId obligatoire :
+ * jamais le monde de la page, qui pourrait remplacer les marqueurs, les sondes ou le registre AX). Renvoie la valeur,
+ * ou { __dialog } si une boîte s'ouvre.
  */
 async function mousePageCall(target, spec, contextId) {
+    if (!contextId) throw new Error("Monde isolé absent : aucun script exécuté dans le monde de la page.");
     const expression = `(${MOUSE_KIT_SOURCE})(${JSON.stringify(spec)}, (${TEXT_KIT_SOURCE})(false), (${LOCATOR_KIT_SOURCE})())`;
-    const commandParams = { expression, returnByValue: true, awaitPromise: false };
-    if (contextId) commandParams.contextId = contextId;
+    const commandParams = { expression, returnByValue: true, awaitPromise: false, contextId };
     const result = await sendCommandWatchingDialogs(target, "Runtime.evaluate", commandParams);
     if (result?.__dialog) return result;
     if (result?.exceptionDetails) throw mousePageError(result.exceptionDetails);
@@ -1701,6 +2040,7 @@ function isDebuggerUnavailable(error) {
 }
 
 async function dispatchMouse(target, params) {
+    assertNotStopped();
     const call = sendCommandWatchingDialogs(target, "Input.dispatchMouseEvent", params);
     call.catch(() => {});
     return await withTimeout(call, MOUSE_COMMAND_TIMEOUT_MS,
@@ -1724,11 +2064,13 @@ const FOCUS_EMULATION_SETTLE_MS = 150;
 const FOCUS_EMULATION_CHILD_SETTLE_MS = 600;
 const FOCUS_EMULATION_MAX_WAIT_MS = 1000;
 
-/** La page principale se croit-elle active ? (document.hasFocus, relu dans la page) */
+/** La page principale se croit-elle active ? (document.hasFocus, relu depuis le monde isolé : la page ne peut pas
+ * remplacer la fonction pour fausser l'attente) */
 async function pageHasFocus(target) {
     try {
+        const contextId = await rootContextId(rootOf(target));
         const res = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
-            expression: "document.hasFocus()", returnByValue: true
+            expression: "document.hasFocus()", returnByValue: true, contextId
         });
         return res?.result?.value === true;
     } catch (_) {
@@ -1804,7 +2146,7 @@ async function runMouseSequence(target, sequence, moveDelayMs = 0) {
 // -----------------------------------------------------------------------------
 // tabId -> Map(sessionId -> { sessionId, targetId, type, url, parentSessionId, parentFrameId })
 const childSessions = new Map();
-// `${tabId}|${sessionId}|${frameId}` -> executionContextId du monde isolé « nexusagy »
+// `${tabId}|${sessionId}|${frameId}` -> executionContextId du monde isolé « nexus-browser »
 const isolatedWorlds = new Map();
 // tabId -> Map(mark -> clé du contexte racine) pour les marqueurs posés dans un cadre d'une autre origine
 const markRoots = new Map();
@@ -1813,7 +2155,7 @@ const crossOriginSupport = new Map();
 const domEnabledSessions = new Set();
 // tabId -> horodatage de la dernière action (clic, saisie, touche) : point de départ de wait_download
 const lastActionAt = new Map();
-const FRAME_WORLD_NAME = "nexusagy";
+const FRAME_WORLD_NAME = "nexus-browser";
 let axTokenSeq = 0;
 // `${tabId}|${frameId}|${loaderId}` -> document du cadre lisible par le script de son parent (même origine)
 const frameReach = new Map();
@@ -1871,10 +2213,12 @@ function forgetChildSession(tabId, sessionId) {
     for (const key of [...isolatedWorlds.keys()]) if (key.startsWith(prefix)) isolatedWorlds.delete(key);
     domEnabledSessions.delete(`${tabId}|${sessionId}`);
     focusEmulatedTabs.delete(`${tabId}|${sessionId}`);
+    mainFrames.delete(`${tabId}|${sessionId}`);
 }
 
 function forgetTabFrames(tabId) {
     childSessions.delete(tabId);
+    for (const key of [...mainFrames.keys()]) if (key.startsWith(`${tabId}|`)) mainFrames.delete(key);
     for (const key of [...axUnavailable]) if (key.includes(`|${tabId}|`)) axUnavailable.delete(key);
     for (const key of [...frameReach.keys()]) if (key.startsWith(`${tabId}|`)) frameReach.delete(key);
     markRoots.delete(tabId);
@@ -1956,8 +2300,12 @@ async function frameReachable(target, frame) {
     try {
         await ensureDomAgent(target);
         const owner = await chrome.debugger.sendCommand(target, "DOM.getFrameOwner", { frameId: frame.id });
+        // Lu depuis le monde isolé du cadre parent : la page ne peut pas fausser contentDocument.
         const resolved = owner?.backendNodeId
-            ? await chrome.debugger.sendCommand(target, "DOM.resolveNode", { backendNodeId: owner.backendNodeId }) : null;
+            ? await chrome.debugger.sendCommand(target, "DOM.resolveNode", {
+                backendNodeId: owner.backendNodeId,
+                executionContextId: await worldFor(target, frame.parentId || await mainFrameId(target))
+            }) : null;
         const objectId = resolved?.object?.objectId;
         if (objectId) {
             const res = await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
@@ -1984,19 +2332,42 @@ async function ensureDomAgent(target) {
     domEnabledSessions.add(key);
 }
 
+// `${tabId}|${sessionId}` -> identifiant du cadre principal de la session (Page.getFrameTree)
+const mainFrames = new Map();
+
+async function mainFrameId(target, refresh = false) {
+    const key = sessionKey(target);
+    if (!refresh && mainFrames.has(key)) return mainFrames.get(key);
+    const tree = (await chrome.debugger.sendCommand(target, "Page.getFrameTree"))?.frameTree;
+    const frameId = tree?.frame?.id;
+    if (!frameId) throw new Error("Cadre principal introuvable (Page.getFrameTree) : aucun script exécuté.");
+    mainFrames.set(key, frameId);
+    return frameId;
+}
+
 /**
- * Monde isolé du cadre d'un contexte racine non principal (créé une fois, recréé si le cadre a navigué).
+ * Monde isolé « nexus-browser » d'un cadre de la session target (créé une fois, recréé si le cadre a navigué). Même
+ * séparation que les scripts de contenu : DOM partagé, variables et objets JavaScript invisibles pour la page.
  */
-async function rootContextId(root, refresh = false) {
-    if (!root || root.key === "top") return null;
-    const key = `${root.target.tabId}|${root.sessionId || ""}|${root.frameId}`;
+async function worldFor(target, frameId, refresh = false, label = null) {
+    const key = `${target.tabId}|${target.sessionId || ""}|${frameId}`;
     if (!refresh && isolatedWorlds.has(key)) return isolatedWorlds.get(key);
-    const res = await chrome.debugger.sendCommand(root.target, "Page.createIsolatedWorld", {
-        frameId: root.frameId, worldName: FRAME_WORLD_NAME, grantUniveralAccess: false
+    const res = await chrome.debugger.sendCommand(target, "Page.createIsolatedWorld", {
+        frameId, worldName: FRAME_WORLD_NAME, grantUniveralAccess: false
     });
-    if (!res?.executionContextId) throw new Error(`Monde isolé indisponible pour le cadre ${root.label}`);
+    if (!res?.executionContextId) throw new Error(`Monde isolé indisponible pour le cadre ${label || frameId}`);
     isolatedWorlds.set(key, res.executionContextId);
     return res.executionContextId;
+}
+
+/**
+ * Monde isolé du cadre d'un contexte racine : cadre principal compris (plus aucun script de l'extension dans le monde
+ * de la page, sauf browser_eval et la transcription YouTube, qui lisent la page elle-même).
+ */
+async function rootContextId(root, refresh = false) {
+    if (!root?.target) throw new Error("Contexte racine inconnu");
+    const frameId = root.key === "top" ? (root.frameId || await mainFrameId(root.target, refresh)) : root.frameId;
+    return await worldFor(root.target, frameId, refresh, root.label);
 }
 
 function isContextLost(error) {
@@ -2004,11 +2375,10 @@ function isContextLost(error) {
 }
 
 /**
- * Phase du kit de page dans un contexte racine (monde principal pour top, monde isolé du cadre sinon).
+ * Phase du kit de page dans un contexte racine, toujours dans le monde isolé de son cadre.
  */
 async function pageCall(where, spec) {
     const root = rootOf(where);
-    if (root.key === "top") return await mousePageCall(root.target, spec);
     for (let attempt = 0; ; attempt++) {
         const contextId = await rootContextId(root, attempt > 0);
         try {
@@ -2028,9 +2398,11 @@ async function ownerCall(root, spec) {
     await ensureDomAgent(ownerTarget);
     const owner = await chrome.debugger.sendCommand(ownerTarget, "DOM.getFrameOwner", { frameId: root.frameId });
     if (!owner?.backendNodeId) throw new Error(`Élément <iframe> propriétaire introuvable pour le cadre ${root.label}`);
-    const resolveParams = { backendNodeId: owner.backendNodeId };
-    const parentContext = root.parent && root.parent.key !== "top" && sessionKey(root.parent.target) === sessionKey(ownerTarget) ? await rootContextId(root.parent) : null;
-    if (parentContext) resolveParams.executionContextId = parentContext;
+    // <iframe> propriétaire résolu dans le monde isolé de SON cadre (jamais le monde de la page parente).
+    const parentContext = root.parent && sessionKey(root.parent.target) === sessionKey(ownerTarget)
+        ? await rootContextId(root.parent)
+        : await worldFor(ownerTarget, root.parentFrameId || await mainFrameId(ownerTarget));
+    const resolveParams = { backendNodeId: owner.backendNodeId, executionContextId: parentContext };
     const resolved = await chrome.debugger.sendCommand(ownerTarget, "DOM.resolveNode", resolveParams);
     const objectId = resolved?.object?.objectId;
     if (!objectId) throw new Error(`Élément <iframe> propriétaire non résolu pour le cadre ${root.label}`);
@@ -2093,9 +2465,9 @@ async function axRegister(root, locator) {
     if (root.key !== "top") return null;
     try {
         await ensureDomAgent(root.target);
-        const contextId = root.key === "top" ? null : await rootContextId(root);
-        const docParams = { expression: "document", returnByValue: false };
-        if (contextId) docParams.contextId = contextId;
+        // Registre AX rangé dans le monde isolé : la page ne peut ni le lire ni y glisser ses propres éléments.
+        const contextId = await rootContextId(root);
+        const docParams = { expression: "document", returnByValue: false, contextId };
         const docObj = await chrome.debugger.sendCommand(root.target, "Runtime.evaluate", docParams);
         const docId = docObj?.result?.objectId;
         if (!docId) return null;
@@ -2123,8 +2495,7 @@ async function axRegister(root, locator) {
         let registered = 0;
         for (const n of hits) {
             try {
-                const resolveParams = { backendNodeId: n.backendDOMNodeId };
-                if (contextId) resolveParams.executionContextId = contextId;
+                const resolveParams = { backendNodeId: n.backendDOMNodeId, executionContextId: contextId };
                 const obj = await chrome.debugger.sendCommand(root.target, "DOM.resolveNode", resolveParams);
                 const objectId = obj?.object?.objectId;
                 if (!objectId) continue;
@@ -2139,7 +2510,7 @@ async function axRegister(root, locator) {
                             w = fe.ownerDocument.defaultView;
                         }
                         if (!w) return false;
-                        const reg = w.__nexusagyAx && typeof w.__nexusagyAx === "object" ? w.__nexusagyAx : (w.__nexusagyAx = {});
+                        const reg = w.__nexusBrowserAx && typeof w.__nexusBrowserAx === "object" ? w.__nexusBrowserAx : (w.__nexusBrowserAx = {});
                         if (!reg[token]) { for (const k of Object.keys(reg)) delete reg[k]; reg[token] = []; }
                         reg[token].push({ el: this, role, name });
                         return true;
@@ -2222,8 +2593,7 @@ function prepareError(prep, locate) {
 async function prepareInRoot(root, locate, options) {
     const spec = {
         phase: "prepare", locate, scroll: options.scroll || "center", probe: options.probe || null,
-        visual: !!options.visual, allowUnreachable: !!options.allowUnreachable, allPoints: root.key !== "top",
-        forEdit: !!options.forEdit
+        allowUnreachable: !!options.allowUnreachable, allPoints: root.key !== "top", forEdit: !!options.forEdit
     };
     const prep = await pageCall(root, spec);
     if (prep?.__dialog || !prep?.success) return prep;
@@ -2350,9 +2720,10 @@ async function releaseMouseProbes(where, probeIds) {
     try { await pageCall(where, { phase: "release", probeIds: ids }); } catch (_) {}
 }
 
+// Repli sans débogueur : monde ISOLÉ de l'extension (celui des scripts de contenu), jamais le monde de la page.
 async function runPageScript(tabId, func, args) {
     const [frame] = await withTimeout(
-        chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func, args }),
+        chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", func, args }),
         MOUSE_COMMAND_TIMEOUT_MS,
         `injection JavaScript sans réponse après ${MOUSE_COMMAND_TIMEOUT_MS} ms (boîte de dialogue ouverte ?)`
     );
@@ -2401,7 +2772,6 @@ async function mouseJsFallback(tabId, spec, reason, timeoutMs) {
  */
 async function performMouseAction(params, options) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     const { kind, locate, timeoutMs } = options;
     const button = kind === "hover" ? null : options.button;
     const clickCount = kind === "hover" ? 0 : options.clickCount;
@@ -2426,7 +2796,6 @@ async function performMouseAction(params, options) {
             // pointerdown en plus : prouve qu'AUCUN événement n'a atteint l'élément (condition de la relance unique).
             probe: kind === "hover" ? mouseProbeTypes(kind, button, clickCount)
                 : [...mouseProbeTypes(kind, button, clickCount), "pointerdown"],
-            visual: kind !== "hover",
             timeoutMs
         });
     } catch (error) {
@@ -2442,6 +2811,7 @@ async function performMouseAction(params, options) {
     const sequence = kind === "hover"
         ? [{ type: "mouseMoved", x, y, button: "none", buttons: 0 }]
         : mouseClickSequence(x, y, button, clickCount);
+    if (kind !== "hover") notifyRipple(tabId, x, y);
     let run;
     try {
         run = await runMouseSequence(target, sequence);
@@ -2522,37 +2892,58 @@ async function ensureDebugger(tabId) {
 
     const target = { tabId };
     if (!attachedDebuggers.has(tabId)) {
+        let resumed = false;
         try {
             await chrome.debugger.attach(target, "1.3");
-            attachedDebuggers.add(tabId);
-            resetNetworkTracking(tabId);
-            await chrome.debugger.sendCommand(target, "Page.enable");
-            await chrome.debugger.sendCommand(target, "Runtime.enable");
-            await chrome.debugger.sendCommand(target, "Log.enable");
-            // Suivi réseau dès l'attachement : wait_network_idle voit aussi les requêtes lancées avant son appel.
-            await chrome.debugger.sendCommand(target, "Network.enable");
-            networkLog(tabId).epoch++;
-            // Iframes hors processus (autre site) : sessions enfants à plat, adressées par sessionId (Chrome 125+).
-            try {
-                await chrome.debugger.sendCommand(target, "Target.setAutoAttach", {
-                    autoAttach: true, waitForDebuggerOnStart: false, flatten: true
-                });
-                crossOriginSupport.set(tabId, true);
-            } catch (error) {
-                crossOriginSupport.set(tabId, `Target.setAutoAttach refusé : ${error.message || error}`);
-            }
         } catch (e) {
-            if (e.message && e.message.includes("is already attached")) {
-                attachedDebuggers.add(tabId);
-                scheduleDebuggerDetach(tabId);
-                return target;
+            if (!(e.message && e.message.includes("is already attached"))) {
+                console.log("[CDP Attach]", e.message);
+                throw new Error(`CDP attach error: ${e.message}`);
             }
-            console.log("[CDP Attach]", e.message);
-            throw new Error(`CDP attach error: ${e.message}`);
+            // Déjà attaché par CETTE extension avant un redémarrage du service worker : session reprise (domaines,
+            // réseau et suivi des iframes relancés), sinon les cadres hors processus seraient perdus.
+            resumed = true;
+        }
+        attachedDebuggers.add(tabId);
+        try {
+            await setupDebuggerSession(target, resumed);
+        } catch (error) {
+            attachedDebuggers.delete(tabId);
+            throw new Error(`CDP attach error: ${error.message || error}`);
         }
     }
     scheduleDebuggerDetach(tabId);
     return target;
+}
+
+/**
+ * Domaines CDP d'une session (nouvelle ou reprise) : page, exécution, console, réseau dès l'attachement, et
+ * auto-attachement à plat des iframes hors processus (Chrome 125+). Reprise : auto-attachement coupé puis remis,
+ * pour que Chrome annonce de nouveau les cadres déjà ouverts (Target.attachedToTarget).
+ */
+async function setupDebuggerSession(target, resumed = false) {
+    const tabId = target.tabId;
+    resetNetworkTracking(tabId);
+    await chrome.debugger.sendCommand(target, "Page.enable");
+    await chrome.debugger.sendCommand(target, "Runtime.enable");
+    await chrome.debugger.sendCommand(target, "Log.enable");
+    // Suivi réseau dès l'attachement : wait_network_idle voit aussi les requêtes lancées avant son appel.
+    await chrome.debugger.sendCommand(target, "Network.enable");
+    networkLog(tabId).epoch++;
+    try {
+        if (resumed) {
+            await chrome.debugger.sendCommand(target, "Target.setAutoAttach", {
+                autoAttach: false, waitForDebuggerOnStart: false, flatten: true
+            });
+            childSessions.delete(tabId);
+        }
+        await chrome.debugger.sendCommand(target, "Target.setAutoAttach", {
+            autoAttach: true, waitForDebuggerOnStart: false, flatten: true
+        });
+        crossOriginSupport.set(tabId, true);
+    } catch (error) {
+        crossOriginSupport.set(tabId, `Target.setAutoAttach refusé : ${error.message || error}`);
+    }
 }
 
 function inFlightSet(tabId) {
@@ -2585,11 +2976,14 @@ function scheduleDebuggerDetach(tabId) {
 async function detachIdleDebugger(tabId) {
     debuggerIdleTimers.delete(tabId);
     if (!attachedDebuggers.has(tabId)) return;
-    // Jamais pendant une commande, un téléversement, ou une boîte de dialogue à laquelle l'agent doit répondre.
-    if (commandsInFlight > 0 || activeUploads.has(tabId) || pendingDialogs.has(tabId)) {
+    // Jamais pendant une commande sur CET onglet, un téléversement, une boîte de dialogue à laquelle l'agent doit
+    // répondre, ni pendant l'enregistrement réseau demandé (borné à NETWORK_RECORD_MAX_S).
+    const recording = (networkRecording.get(tabId) || 0) > Date.now();
+    if ((tabCommandsInFlight.get(tabId) || 0) > 0 || activeUploads.has(tabId) || pendingDialogs.has(tabId) || recording) {
         scheduleDebuggerDetach(tabId);
         return;
     }
+    networkRecording.delete(tabId);
     await detachDebugger(tabId);
 }
 
@@ -2605,7 +2999,19 @@ async function detachDebugger(tabId) {
     } catch (_) {}
 }
 
-async function listTabs(params = {}) {
+/**
+ * Pilote d'un onglet tel que vu par le client qui demande (jamais l'identifiant d'un autre) : agent, à moi ou non, et
+ * état : "mine", "orphan" (orphelin de mon agent, à reprendre), "other" (autre agent ou session vivante), "julien".
+ */
+function publicOwner(tabId, client) {
+    const owner = tabOwners.get(tabId);
+    if (!owner) return { owner: null, mine: false, state: "julien" };
+    const mine = ownedBy(owner, client);
+    const state = mine ? "mine" : (orphanFor(owner, client) ? "orphan" : "other");
+    return { owner: ownerLabel(owner), mine, adopted: !!owner.adopted, state };
+}
+
+async function listTabs(params = {}, client = null) {
     const tabs = await chrome.tabs.query({});
     return {
         data: tabs.map(t => ({
@@ -2617,119 +3023,72 @@ async function listTabs(params = {}) {
             active: t.active,
             pinned: t.pinned,
             groupId: t.groupId !== undefined ? t.groupId : -1,
-            favIconUrl: t.favIconUrl
+            favIconUrl: t.favIconUrl,
+            ...publicOwner(t.id, client)
         }))
     };
 }
 
-function sessionStore() {
-    try {
-        return (typeof chrome !== "undefined" && chrome.storage?.session) || null;
-    } catch (_) {
-        return null;
-    }
+async function getActiveTab(client = null) {
+    // Lecture seule : l'onglet actif de Julien ne devient jamais l'onglet de l'agent par ce biais.
+    let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab) [tab] = await chrome.tabs.query({ active: true });
+    return { data: tab ? { ...tab, ...publicOwner(tab.id, client) } : null };
 }
-
-let agentTabRestore = null;
 
 /**
- * Relit l'onglet de l'agent mémorisé avant un redémarrage du service worker (une seule fois).
+ * Onglet visé par une commande de page : tab_id explicite OBLIGATOIRE, et onglet du client qui la demande
+ * (authorizeCommand). Trois agents partagent ce Chrome : aucun repli sur un « dernier onglet » ni sur l'onglet actif.
  */
-function restoreAgentTab() {
-    if (!agentTabRestore) {
-        agentTabRestore = (async () => {
-            const store = sessionStore();
-            if (!store?.get) return;
-            try {
-                const saved = await store.get(AGENT_TAB_STORAGE_KEY);
-                const id = saved ? saved[AGENT_TAB_STORAGE_KEY] : undefined;
-                if (lastAgentTabId === null && Number.isInteger(id)) lastAgentTabId = id;
-            } catch (_) {}
-        })();
+const MISSING_TAB_MESSAGE = "Aucun onglet précisé : précisez tab_id ou ouvrez un onglet avec new_tab (browser_new_tab, " +
+    "qui renvoie son id) ; jamais de repli sur l'onglet actif de Julien ni sur l'onglet d'un autre agent.";
+
+// Adresses qu'un agent peut ouvrir ou visiter : jamais un fichier local (file://), une page interne de Chrome ou un
+// script (javascript:), qui donneraient accès aux secrets du poste ou aux réglages du navigateur.
+const NAVIGABLE_URL = /^(https?:\/\/|data:|about:blank$)/i;
+
+function checkNavigableUrl(url) {
+    const text = String(url || "").trim();
+    if (!NAVIGABLE_URL.test(text)) {
+        throw new Error(`Adresse refusée : ${text.slice(0, 80)} (http, https, data: ou about:blank seulement ; jamais file://, chrome://, javascript:).`);
     }
-    return agentTabRestore;
+    return text;
 }
 
-function setAgentTab(tabId) {
-    lastAgentTabId = Number.isInteger(tabId) ? tabId : null;
-    const store = sessionStore();
+async function resolveTargetTab(params = {}) {
+    const id = requestedTabId(params);
+    if (id === null) {
+        const given = params.tabId ?? params.tab_id ?? params.id;
+        if (given !== undefined && given !== null && given !== "") throw new Error(`tab_id invalide : ${given}`);
+        throw new Error(MISSING_TAB_MESSAGE);
+    }
     try {
-        const pending = lastAgentTabId === null
-            ? store?.remove?.(AGENT_TAB_STORAGE_KEY)
-            : store?.set?.({ [AGENT_TAB_STORAGE_KEY]: lastAgentTabId });
+        await chrome.tabs.get(id);
+    } catch (_) {
+        throw new Error(`Target tab ${id} no longer exists`);
+    }
+    return id;
+}
+
+/**
+ * Pastille d'état dans l'onglet (agent qui le pilote et action) : message de l'extension au script de contenu du cadre
+ * principal (chrome.tabs.sendMessage), qu'une page ne peut pas émettre. Aucun événement de fenêtre.
+ */
+function notifyTabStatus(tabId, text, autoHideMs = 3000, agent = undefined) {
+    if (!tabId || typeof chrome === "undefined" || !chrome.tabs?.sendMessage) return;
+    const who = agent === undefined ? (tabOwners.get(tabId)?.agent || "Nexus") : (agent || "Nexus");
+    try {
+        const pending = chrome.tabs.sendMessage(tabId, { nexusPill: { agent: who, text: String(text).slice(0, 80), autoHideMs } }, { frameId: 0 });
         if (pending && typeof pending.catch === "function") pending.catch(() => {});
     } catch (_) {}
 }
 
-async function getActiveTab() {
-    // Lecture seule : l'onglet actif de Julien ne devient jamais l'onglet de l'agent par ce biais.
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tab) {
-        const [anyActive] = await chrome.tabs.query({ active: true });
-        return { data: anyActive || null };
-    }
-    return { data: tab };
-}
-
-/**
- * Onglet visé par une commande : tab_id explicite, sinon l'onglet de l'agent (persisté), sinon l'onglet actif.
- * Une commande destructrice (fermer, naviguer, recharger) sans tab_id ni onglet d'agent connu est REFUSÉE :
- * elle viserait l'onglet de Julien (cas typique : service worker redémarré).
- */
-async function resolveTargetTab(params = {}, options = {}) {
-    const opts = typeof options === "boolean" ? { preferActive: options } : (options || {});
-    await restoreAgentTab();
-    const candidate = params.tabId !== undefined && params.tabId !== null
-        ? params.tabId
-        : (params.id !== undefined && params.id !== null ? params.id : null);
-
-    if (candidate !== null) {
-        const id = parseInt(candidate, 10);
-        if (!isNaN(id)) {
-            try {
-                await chrome.tabs.get(id);
-                setAgentTab(id);
-                return id;
-            } catch (_) {
-                throw new Error(`Target tab ${id} no longer exists`);
-            }
-        }
-    }
-
-    if (!opts.preferActive && lastAgentTabId !== null) {
-        try {
-            await chrome.tabs.get(lastAgentTabId);
-            return lastAgentTabId;
-        } catch (_) {
-            setAgentTab(null);
-        }
-    }
-
-    if (opts.destructive) {
-        throw new Error(
-            `Aucun onglet de l'agent n'est connu (service worker redémarré ou onglet fermé) : '${opts.action || "commande"}' sans tab_id ` +
-            "viserait l'onglet actif de Julien. Précisez tab_id, ou ouvrez un onglet de travail avec new_tab."
-        );
-    }
-
-    const activeRes = await getActiveTab();
-    return activeRes?.data?.id || null;
-}
-
-async function notifyTabStatus(tabId, text, autoHideMs = 3000) {
-    if (!tabId || typeof chrome === "undefined") return;
+/** Point visé par un vrai clic, montré dans l'onglet (même canal que la pastille). */
+function notifyRipple(tabId, x, y) {
+    if (!tabId || typeof chrome === "undefined" || !chrome.tabs?.sendMessage) return;
     try {
-        if (chrome.scripting?.executeScript) {
-            await chrome.scripting.executeScript({
-                target: { tabId },
-                func: (statusText, hideMs) => {
-                    window.dispatchEvent(new CustomEvent("__antigravity_status_pill", {
-                        detail: { text: statusText, autoHideMs: hideMs }
-                    }));
-                },
-                args: [text, autoHideMs]
-            });
-        }
+        const pending = chrome.tabs.sendMessage(tabId, { nexusRipple: { x, y } }, { frameId: 0 });
+        if (pending && typeof pending.catch === "function") pending.catch(() => {});
     } catch (_) {}
 }
 
@@ -2741,18 +3100,15 @@ async function groupTabs(params = {}) {
     let tabIds = [];
     if (Array.isArray(params.tabIds) && params.tabIds.length > 0) {
         tabIds = params.tabIds.map(id => parseInt(id, 10)).filter(id => !isNaN(id));
-    } else if (params.tabId !== undefined && params.tabId !== null) {
-        tabIds = [parseInt(params.tabId, 10)];
     } else {
-        const targetId = await resolveTargetTab(params);
-        if (targetId) tabIds = [targetId];
+        tabIds = [await resolveTargetTab(params)];
     }
 
     if (tabIds.length === 0) {
         throw new Error("No valid tabId specified or found to group");
     }
 
-    const title = params.title || "Antigravity";
+    const title = params.title || "Nexus";
     const color = params.color || "purple";
     const collapsed = Boolean(params.collapsed);
 
@@ -2779,33 +3135,40 @@ async function groupTabs(params = {}) {
         groupId = await chrome.tabs.group({ tabIds });
     }
 
-    let updatedGroup = { id: groupId, title, color, collapsed };
-    if (chrome.tabGroups.update) {
+    // Titre, couleur et repli ne sont annoncés que s'ils ont vraiment été appliqués (relus dans la réponse de Chrome).
+    let updateError = chrome.tabGroups.update ? null : "chrome.tabGroups.update indisponible";
+    let updatedGroup = null;
+    if (!updateError) {
         try {
-            updatedGroup = await chrome.tabGroups.update(groupId, {
-                title,
-                color,
-                collapsed
-            });
-        } catch (_) {}
+            updatedGroup = await chrome.tabGroups.update(groupId, { title, color, collapsed });
+        } catch (error) {
+            updateError = error?.message || String(error);
+        }
     }
-
+    if (!updatedGroup) {
+        return {
+            data: {
+                groupId,
+                tabIds,
+                updated: false,
+                warning: `Onglets regroupés, mais titre, couleur et repli non appliqués (${updateError || "aucune réponse de Chrome"}).`
+            }
+        };
+    }
     return {
         data: {
-            groupId: updatedGroup.id || groupId,
-            title: updatedGroup.title || title,
-            color: updatedGroup.color || color,
-            collapsed: updatedGroup.collapsed !== undefined ? updatedGroup.collapsed : collapsed,
+            groupId: updatedGroup.id ?? groupId,
+            title: updatedGroup.title,
+            color: updatedGroup.color,
+            collapsed: updatedGroup.collapsed,
+            updated: true,
             tabIds
         }
     };
 }
 
 async function selectTab(params) {
-    const tabId = parseInt(params.tabId || params.id);
-    if (!tabId) throw new Error("Missing tabId");
-
-    setAgentTab(tabId);
+    const tabId = await resolveTargetTab(params);
     const tab = await chrome.tabs.update(tabId, { active: true });
     if (tab?.windowId && chrome.windows?.update) {
         await chrome.windows.update(tab.windowId, { focused: true });
@@ -2814,8 +3177,43 @@ async function selectTab(params) {
     return { data: { success: true, tab } };
 }
 
-async function createTab(params) {
-    const url = params.url || "about:blank";
+/**
+ * Fenêtre NORMALE où ouvrir un onglet de fond. Sans windowId, Chrome vise la dernière fenêtre active : si c'est une
+ * fenêtre d'application (PWA, Codex LB), il ne peut pas y ajouter d'onglet et ouvre une nouvelle fenêtre qui prend le
+ * premier plan à Julien. null : aucune fenêtre normale (il faudra en créer une, réduite et sans focus).
+ */
+async function backgroundWindowId() {
+    if (!chrome.windows?.getLastFocused) return undefined;  // API absente : comportement par défaut de Chrome
+    try {
+        const win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+        if (win?.id !== undefined && win.type === "normal") return win.id;
+    } catch (_) {
+        // aucune fenêtre normale
+    }
+    if (chrome.windows.getAll) {
+        const normal = (await chrome.windows.getAll({ windowTypes: ["normal"] })).filter((w) => w.type === "normal");
+        if (normal.length) return normal[0].id;
+    }
+    return null;
+}
+
+/**
+ * Onglet d'une fenêtre que l'on vient de créer : celui que Chrome renvoie, sinon relu par chrome.tabs.query. Jamais
+ * l'identifiant de la FENÊTRE (il désignerait un autre onglet, peut-être celui de Julien).
+ */
+async function tabOfNewWindow(win) {
+    let tab = win?.tabs?.[0] || null;
+    if (!tab && Number.isInteger(win?.id) && chrome.tabs?.query) {
+        try { [tab] = await chrome.tabs.query({ windowId: win.id }); } catch (_) {}
+    }
+    if (!tab || !Number.isInteger(tab.id)) {
+        throw new Error(`Fenêtre ${win?.id ?? "?"} créée, mais son onglet est introuvable : aucun onglet attribué à l'agent.`);
+    }
+    return tab;
+}
+
+async function createTab(params, client = null) {
+    const url = checkNavigableUrl(params.url || "about:blank");
     let active = false;
     if (params.active === true) {
         active = true;
@@ -2823,15 +3221,25 @@ async function createTab(params) {
         active = true;
     }
 
+    const windowId = active ? undefined : await backgroundWindowId();
+    if (windowId === null) {
+        // Seule une fenêtre d'application existe : nouvelle fenêtre normale réduite, sans focus.
+        const win = await chrome.windows.create({ url, focused: false, state: "minimized", type: "normal" });
+        const createdTab = await tabOfNewWindow(win);
+        await rememberTabOwner(createdTab.id, client);
+        notifyTabStatus(createdTab.id, "Onglet créé (fenêtre réduite)", 2500);
+        return { data: { ...createdTab, windowCreated: true, owner: client?.agent || null } };
+    }
+
     try {
-        const tab = await chrome.tabs.create({ url, active });
-        setAgentTab(tab.id);
+        const tab = await chrome.tabs.create(windowId === undefined ? { url, active } : { url, active, windowId });
+        await rememberTabOwner(tab.id, client);
         let assignedGroupId = tab.groupId !== undefined ? tab.groupId : -1;
 
-        const groupParam = params.group !== undefined ? params.group : "Antigravity";
+        const groupParam = params.group !== undefined ? params.group : "Nexus";
         if (groupParam && chrome.tabGroups && chrome.tabs?.group) {
             try {
-                const groupTitle = typeof groupParam === "string" ? groupParam : "Antigravity";
+                const groupTitle = typeof groupParam === "string" ? groupParam : "Nexus";
                 const grpRes = await groupTabs({
                     tabIds: [tab.id],
                     title: groupTitle,
@@ -2842,51 +3250,129 @@ async function createTab(params) {
                     assignedGroupId = grpRes.data.groupId;
                 }
             } catch (grpErr) {
-                console.log("[Antigravity] Auto-group notice:", grpErr.message);
+                console.log("[NexusBrowser] Auto-group notice:", grpErr.message);
             }
         }
 
         notifyTabStatus(tab.id, "Onglet créé", 2500);
-        return { data: { ...tab, groupId: assignedGroupId } };
+        return { data: { ...tab, groupId: assignedGroupId, owner: client?.agent || null } };
     } catch(e) {
-        const win = await chrome.windows.create({ url, focused: active });
-        const createdTab = win.tabs?.[0] || { id: win.id, url, active };
-        if (createdTab.id) setAgentTab(createdTab.id);
-        return { data: createdTab };
+        const win = await chrome.windows.create(active ? { url, focused: true } : { url, focused: false, state: "minimized" });
+        const createdTab = await tabOfNewWindow(win);
+        await rememberTabOwner(createdTab.id, client);
+        return { data: { ...createdTab, windowCreated: true, owner: client?.agent || null } };
     }
 }
 
+/**
+ * Onglet de Julien confié à l'agent qui le demande : refusé par défaut, seulement avec julienAsked=true (Julien l'a
+ * demandé explicitement), jamais l'onglet d'un autre agent. Visible dans le poste de contrôle (« adopté »).
+ */
+async function adoptTab(params = {}, client = null) {
+    const tabId = await resolveTargetTab(params);
+    const owner = tabOwners.get(tabId);
+    if (ownedBy(owner, client)) return { data: { tabId, adopted: !!owner.adopted, already: true, owner: owner.agent } };
+    if (orphanFor(owner, client)) return { data: await reclaimOrphan(tabId, owner, client) };
+    if (owner) return { error: foreignTabMessage(tabId, owner, client) };
+    if (params.julienAsked !== true && params.julien_asked !== true) {
+        return { error: `Adoption de l'onglet ${tabId} refusée par défaut : c'est un onglet de Julien. Seulement s'il l'a demandé explicitement, relancer avec julien_asked=True (affiché dans le poste de contrôle de Chrome).` };
+    }
+    let tab = null;
+    try { tab = await chrome.tabs.get(tabId); } catch (_) {}
+    if (tab && isProtectedUrl(tab.url)) return { error: `Onglet ${tabId} protégé (${tab.url}) : jamais confié à un agent.` };
+    await rememberTabOwner(tabId, client, "adopted");
+    notifyTabStatus(tabId, "Onglet confié à l'agent par Julien", 3500, client.agent);
+    return { data: { tabId, adopted: true, owner: client.agent, title: tab?.title || "", url: maskUrl(tab?.url || "") } };
+}
+
+/**
+ * Onglet orphelin (session morte du même agent) repris par ce client : sans julienAsked, il était déjà à l'agent.
+ * Un onglet de Julien adopté par l'ancienne session le reste (« adopté », rendu à Julien par release_tab).
+ */
+async function reclaimOrphan(tabId, owner, client) {
+    await rememberTabOwner(tabId, client, owner.adopted ? "adopted" : "created");
+    notifyTabStatus(tabId, "Onglet repris par la nouvelle session", 2500, client.agent);
+    return { tabId, reclaimed: true, adopted: !!owner.adopted, owner: client.agent };
+}
+
+/**
+ * Battement d'une session (serveur MCP) : son signe de vie est déjà noté par handleCommand. reclaim=true (premier
+ * battement après démarrage) : si cette session ne possède encore aucun onglet, elle reprend les orphelins de son
+ * agent. Jamais ceux d'un autre agent ni d'une session vivante.
+ */
+async function heartbeat(params = {}, client = null) {
+    const reclaimed = [];
+    if (params.reclaim === true && validClient(client)) {
+        const owners = [...tabOwners.entries()];
+        if (!owners.some(([, owner]) => ownedBy(owner, client))) {
+            for (const [tabId, owner] of owners) {
+                if (orphanFor(owner, client)) { await reclaimOrphan(tabId, owner, client); reclaimed.push(tabId); }
+            }
+        }
+    }
+    return { data: { alive: true, sessionDeadAfterS: Math.round(SESSION_DEAD_MS / 1000), reclaimed } };
+}
+
+/** L'agent rend son onglet à Julien sans le fermer : propriété retirée, débogueur détaché. */
+async function releaseTab(params = {}) {
+    const tabId = requestedTabId(params);
+    networkRecording.delete(tabId);
+    await detachDebugger(tabId);
+    await forgetTabOwner(tabId);
+    notifyTabStatus(tabId, "Onglet rendu à Julien", 2500, null);
+    return { data: { tabId, released: true } };
+}
+
 async function closeTab(params = {}) {
-    let tabId = await resolveTargetTab(params, { destructive: true, action: "close_tab" });
-    if (!tabId) throw new Error("Missing tabId and no agent tab found to close");
+    const tabId = await resolveTargetTab(params);
     await chrome.tabs.remove(tabId);
-    if (lastAgentTabId === tabId) setAgentTab(null);
+    await forgetTabOwner(tabId);
     return { data: { success: true, closedTabId: tabId } };
 }
 
 async function navigateTab(params) {
     if (!params.url) throw new Error("Missing url parameter");
-    let tabId = await resolveTargetTab(params, { destructive: true, action: "navigate" });
-    if (!tabId) throw new Error("No agent tab to navigate");
+    const url = checkNavigableUrl(params.url);
+    const tabId = await resolveTargetTab(params);
 
     resetNetworkTracking(tabId);
-    const updatedTab = await chrome.tabs.update(tabId, { url: params.url });
-    notifyTabStatus(tabId, `Navigation: ${params.url.slice(0, 30)}...`, 2500);
+    const updatedTab = await chrome.tabs.update(tabId, { url });
+    notifyTabStatus(tabId, `Navigation : ${url.slice(0, 30)}…`, 2500);
     return { data: updatedTab };
 }
 
+/** Enregistrement réseau gardé (débogueur attaché) pendant une durée bornée, même sans commande. */
+async function recordNetwork(params = {}) {
+    const tabId = await resolveTargetTab(params);
+    const seconds = Math.max(1, Math.min(NETWORK_RECORD_MAX_S, parseInt(params.durationS ?? params.duration_s, 10) || 120));
+    await ensureDebugger(tabId);
+    const until = Date.now() + seconds * 1000;
+    networkRecording.set(tabId, until);
+    return { data: { tabId, recording: true, until: new Date(until).toISOString(), duration_s: seconds, max_s: NETWORK_RECORD_MAX_S } };
+}
+
+async function stopNetworkRecording(params = {}) {
+    const tabId = await resolveTargetTab(params);
+    const was = networkRecording.delete(tabId);
+    const busy = (tabCommandsInFlight.get(tabId) || 0) > 1 || activeUploads.has(tabId) || pendingDialogs.has(tabId);
+    if (!busy) await detachDebugger(tabId);
+    return { data: { tabId, recording: false, wasRecording: was, detached: !busy, buffered: networkLog(tabId).records.length } };
+}
+
 async function reloadTab(params) {
-    let tabId = await resolveTargetTab(params, { destructive: true, action: "reload" });
-    if (!tabId) throw new Error("No agent tab to reload");
+    const tabId = await resolveTargetTab(params);
     resetNetworkTracking(tabId);
     await chrome.tabs.reload(tabId, { bypassCache: params.bypassCache || false });
     notifyTabStatus(tabId, "Rechargement", 2000);
     return { data: { success: true } };
 }
 
+/**
+ * browser_eval : expression de l'AGENT dans le MONDE DE LA PAGE (ses variables, comme la console DevTools). Seul
+ * chemin de l'extension vers ce monde, avec la transcription YouTube (qui lit le lecteur de la page).
+ */
 async function evaluateScript(params) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     const code = params.code || params.script || params.expression;
     if (!code) throw new Error("Missing code/expression to evaluate");
 
@@ -2907,9 +3393,52 @@ async function evaluateScript(params) {
     return { data: result?.result?.value !== undefined ? result.result.value : result?.result };
 }
 
+/**
+ * Script de l'EXTENSION (lecture, carte des éléments, capture, exports) dans le monde isolé « nexus-browser » du cadre
+ * principal : DOM partagé, mais ni ses variables (marqueurs, sondes) ni les fonctions qu'il appelle ne sont visibles
+ * ou remplaçables par la page. Contexte recréé une fois s'il a disparu (navigation).
+ */
+async function evaluateIsolated(params) {
+    const tabId = await resolveTargetTab(params);
+    const code = params.code;
+    const target = await ensureDebugger(tabId);
+    const root = rootOf(target);
+    for (let attempt = 0; ; attempt++) {
+        let result;
+        try {
+            const contextId = await rootContextId(root, attempt > 0);
+            result = await sendCommandWatchingDialogs(target, "Runtime.evaluate", {
+                expression: code, contextId, returnByValue: true, awaitPromise: true
+            });
+        } catch (error) {
+            if (attempt === 0 && isContextLost(error)) continue;
+            throw error;
+        }
+        if (result?.__dialog) return { data: dialogInterruption(result.__dialog) };
+        if (result?.exceptionDetails) {
+            const desc = result.exceptionDetails.exception?.description || result.exceptionDetails.text;
+            throw new Error(desc || "Erreur du script de l'extension dans la page");
+        }
+        return { data: result?.result?.value !== undefined ? result.result.value : result?.result };
+    }
+}
+
+// Champ sensible (kit de localisation) d'après les attributs du nœud DOM ; nœud illisible : masqué par prudence.
+async function axNodeSensitive(target, backendNodeId) {
+    try {
+        const { node } = await chrome.debugger.sendCommand(target, "DOM.describeNode", { backendNodeId });
+        if (!node) return false;
+        const attrs = {};
+        const list = node.attributes || [];
+        for (let i = 0; i + 1 < list.length; i += 2) attrs[String(list[i]).toLowerCase()] = list[i + 1];
+        return LK.sensitiveField({ tagName: node.nodeName, getAttribute: (name) => (name in attrs ? attrs[name] : null) });
+    } catch (_) {
+        return true;
+    }
+}
+
 async function getAccessibilityTree(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
 
     const target = await ensureDebugger(tabId);
     await chrome.debugger.sendCommand(target, "Accessibility.enable");
@@ -2917,30 +3446,48 @@ async function getAccessibilityTree(params = {}) {
         max_depth: params.maxDepth || 15
     });
 
-    const nodes = (axResult.nodes || []).map(n => ({
-        nodeId: n.nodeId,
-        role: n.role?.value,
-        name: n.name?.value,
-        value: n.value?.value,
-        description: n.description?.value,
-        ignored: n.ignored,
-        backendDOMNodeId: n.backendDOMNodeId
-    })).filter(n => !n.ignored && (n.name || n.value || n.role === "button" || n.role === "link"));
+    // Champ sensible (carte, code ; Chrome ne masque que les mots de passe) : sa valeur et celle de ses nœuds de texte
+    // descendants (StaticText, InlineTextBox, qui la répètent comme nom) remplacées par le marqueur.
+    const raw = axResult.nodes || [];
+    const byId = new Map(raw.map(n => [n.nodeId, n]));
+    const masked = new Set();
+    for (const n of raw) {
+        if (n.ignored || !n.backendDOMNodeId || !n.value || n.value.value === undefined || n.value.value === "") continue;
+        if (!(await axNodeSensitive(target, n.backendDOMNodeId))) continue;
+        const stack = [n.nodeId];
+        while (stack.length) {
+            const id = stack.pop();
+            if (masked.has(id)) continue;
+            masked.add(id);
+            for (const child of byId.get(id)?.childIds || []) stack.push(child);
+        }
+    }
+    const nodes = raw.map(n => {
+        const hide = masked.has(n.nodeId);
+        const isText = hide && n.role?.value !== "textbox";
+        return {
+            nodeId: n.nodeId,
+            role: n.role?.value,
+            name: isText && n.name?.value ? LK.MASKED_VALUE : n.name?.value,
+            value: hide && n.value?.value ? LK.MASKED_VALUE : n.value?.value,
+            description: n.description?.value,
+            ignored: n.ignored,
+            backendDOMNodeId: n.backendDOMNodeId
+        };
+    }).filter(n => !n.ignored && (n.name || n.value || n.role === "button" || n.role === "link"));
 
     return { data: { nodeCount: nodes.length, nodes: nodes.slice(0, 100) } };
 }
 
 async function getConsoleLogs(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     return { data: tabConsoleLogs.get(tabId) || [] };
 }
 
 async function getPageContent(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     const mode = String(params.mode || "interactive");
-    const top = await evaluateScript({ tabId, code: pageContentScript(params) });
+    const top = await evaluateIsolated({ tabId, code: pageContentScript(params) });
     if (mode === "html" || !top || top.error || (top.data && top.data.dialogOpened)) return top;
     // Cadres d'une autre origine : texte ajouté sous un en-tête, éléments interactifs avec leur cadre.
     for (const { root, value } of await crossOriginFrameEvaluations(tabId, pageContentScript(params))) {
@@ -2966,11 +3513,25 @@ async function getPageContent(params = {}) {
     return top;
 }
 
+// Valeur d'un mot de passe, d'un code à usage unique ou d'une carte bancaire : jamais renvoyée (marqueur à la place).
+// Une seule définition (kit de localisation), injectée dans les scripts de page écrits en gabarit texte.
+const SENSITIVE_FIELD_EXPR = `(${LOCATOR_KIT_SOURCE})()`;
+
 function pageContentScript(params) {
     return `(() => {
             const mode = ${JSON.stringify(String(params.mode || "interactive"))};
             if (mode === "text") return document.body ? document.body.innerText : "";
-            if (mode === "html") return document.documentElement ? document.documentElement.outerHTML : "";
+            const lk = ${SENSITIVE_FIELD_EXPR};
+            if (mode === "html") {
+                if (!document.documentElement) return "";
+                // Attribut value d'un champ sensible (React le recopie depuis la saisie), composants compris, masqué dans
+                // une copie du DOM.
+                const copy = document.documentElement.cloneNode(true);
+                for (const el of copy.querySelectorAll ? copy.querySelectorAll("[value]") : []) {
+                    if (lk.sensitiveField(el)) el.setAttribute("value", lk.MASKED_VALUE);
+                }
+                return copy.outerHTML;
+            }
             
             function scanNode(doc, prefix = "") {
                 const elements = [];
@@ -2982,7 +3543,8 @@ function pageContentScript(params) {
                         elements.push({
                             index: idx,
                             tag: el.tagName.toLowerCase(),
-                            text: (el.innerText || el.value || el.placeholder || (el.getAttribute ? el.getAttribute("aria-label") : "") || "").trim().slice(0, 80),
+                            text: ((lk.sensitiveField(el) ? "" : (el.innerText || el.value)) || el.placeholder || (el.getAttribute ? el.getAttribute("aria-label") : "") || "").trim().slice(0, 80),
+                            ...(lk.sensitiveField(el) ? { value: lk.MASKED_VALUE } : {}),
                             type: el.type || null,
                             id: el.id || null,
                             className: typeof el.className === "string" ? el.className : (el.className?.baseVal || null),
@@ -3147,6 +3709,8 @@ function parseKeyCombo(combo) {
 }
 
 async function sendKeyEvent(target, params) {
+    // Frappe touche par touche : chaque touche vérifie l'arrêt d'urgence (frappe interrompue au caractère suivant).
+    assertNotStopped();
     const call = sendCommandWatchingDialogs(target, "Input.dispatchKeyEvent", params);
     call.catch(() => {});
     return await withTimeout(call, KEY_COMMAND_TIMEOUT_MS, `Input.dispatchKeyEvent ${params.type} sans réponse après ${KEY_COMMAND_TIMEOUT_MS} ms`);
@@ -3205,16 +3769,27 @@ async function pressKeyCombo(target, combo) {
     }
     const commands = SHORTCUT_COMMANDS[[...modifiers, def.key.length === 1 ? def.key.toLowerCase() : def.key].join("+")];
     if (commands) down.commands = commands;
-    const res = await sendKeyEvent(target, down);
-    if (res?.__dialog) {
-        releaseKeyQuietly(target, { type: "keyUp", ...fields });
+    let sentDown = false;
+    try {
+        const res = await sendKeyEvent(target, down);
+        sentDown = true;
+        if (res?.__dialog) {
+            releaseKeyQuietly(target, { type: "keyUp", ...fields });
+            releaseAll();
+            return { dialog: res.__dialog };
+        }
+        await sendKeyEvent(target, { type: "keyUp", ...fields });
+        sentDown = false;
+        for (const mod of [...held].reverse()) {
+            bits &= ~MODIFIER_BITS[mod];
+            await sendKeyEvent(target, { type: "keyUp", ...keyFields(KEY_DEFINITIONS[mod], bits) });
+            held.splice(held.indexOf(mod), 1);
+        }
+    } catch (error) {
+        // Arrêt d'urgence ou erreur : jamais une touche laissée enfoncée.
+        if (sentDown) releaseKeyQuietly(target, { type: "keyUp", ...fields });
         releaseAll();
-        return { dialog: res.__dialog };
-    }
-    await sendKeyEvent(target, { type: "keyUp", ...fields });
-    for (const mod of [...held].reverse()) {
-        bits &= ~MODIFIER_BITS[mod];
-        await sendKeyEvent(target, { type: "keyUp", ...keyFields(KEY_DEFINITIONS[mod], bits) });
+        throw error;
     }
     return { dialog: null, key: def.key, modifiers };
 }
@@ -3239,7 +3814,12 @@ async function typeCharacters(target, text) {
             releaseKeyQuietly(target, { type: "keyUp", ...fields });
             return { dialog: down.__dialog, typed };
         }
-        await sendKeyEvent(target, { type: "keyUp", ...fields });
+        try {
+            await sendKeyEvent(target, { type: "keyUp", ...fields });
+        } catch (error) {
+            releaseKeyQuietly(target, { type: "keyUp", ...fields });
+            throw error;
+        }
         typed++;
     }
     return { dialog: null, typed };
@@ -3264,6 +3844,17 @@ function shortValue(value) {
     return text.length > 500 ? `${text.slice(0, 500)}…` : text;
 }
 
+// Valeur relue d'un champ, telle que l'agent la reçoit : marqueur pour un champ sensible (mot de passe, code, carte).
+function shownValue(value, sensitive) {
+    return sensitive ? LK.MASKED_VALUE : shortValue(value);
+}
+
+// Résultat d'une opération du kit de saisie (état, coche, option) : valeur masquée pour un champ sensible.
+function maskEditState(state) {
+    if (!state || typeof state !== "object" || !state.sensitive) return state;
+    return { ...state, value: LK.MASKED_VALUE };
+}
+
 /**
  * Repli sans débogueur : setter natif injecté par chrome.scripting (cadre principal), signalé comme tel.
  */
@@ -3274,7 +3865,7 @@ async function editJsFallback(tabId, locate, opts, reason) {
     if (result.data) {
         const expected = opts.replace ? opts.value : null;
         result.data.verified = expected === null ? null : sameText(result.data.value, expected, result.data.kind);
-        result.data.value = shortValue(result.data.value);
+        result.data.value = shownValue(result.data.value, result.data.sensitive);
         result.data.trusted_input = false;
         result.data.warning = "Débogueur indisponible : valeur posée par le setter natif et des événements synthétiques (isTrusted=false). Vérifier l'effet.";
         if (opts.keys.length) result.data.keys_not_sent = opts.keys;
@@ -3349,7 +3940,7 @@ async function typeWithDebugger(target, locate, opts) {
             return {
                 data: {
                     success: true, ...base, method: "native_setter_fallback", fallback_reason: reason,
-                    verified: sameText(res?.value, expected, state.kind), value: shortValue(res?.value),
+                    verified: sameText(res?.value, expected, state.kind), value: shownValue(res?.value, state.sensitive),
                     trusted_input: probe ? probe.seen.includes("input") : null,
                     ...(opts.keys.length ? { keys_not_sent: opts.keys } : {}),
                     warning: "Repli : valeur posée par le setter natif et des événements synthétiques (isTrusted=false), que certains sites ignorent. Vérifier l'effet."
@@ -3398,6 +3989,7 @@ async function typeWithDebugger(target, locate, opts) {
                 const r = await typeCharacters(target, opts.value);
                 if (r.dialog) return { data: { ...dialogInterruption(r.dialog), ...base, method: "cdp", typedLength: r.typed } };
             } else {
+                assertNotStopped();
                 const r = await sendCommandWatchingDialogs(target, "Input.insertText", { text: opts.value });
                 if (r?.__dialog) return { data: { ...dialogInterruption(r.__dialog), ...base, method: "cdp" } };
             }
@@ -3425,12 +4017,12 @@ async function typeWithDebugger(target, locate, opts) {
         }
         const data = {
             success: true, ...base, method: "cdp", typing: opts.perKey ? "keys" : "insertText", focus, selection,
-            verified, value: shortValue(after.value), trusted_input: trustedInput,
+            verified, value: shownValue(after.value, state.sensitive || after.sensitive), trusted_input: trustedInput,
             trusted_events: probe ? [...new Set(probe.seen)] : null
         };
         if (pressed.length) data.keys = pressed;
         if (!verified) {
-            data.expected = shortValue(expected);
+            data.expected = shownValue(expected, state.sensitive || after.sensitive);
             data.warning = "Valeur relue différente de la valeur attendue (masque de saisie, filtre ou éditeur qui réécrit le texte) : vérifier.";
         }
         return await finish(data);
@@ -3458,7 +4050,6 @@ function boolParam(value, fallback) {
  */
 async function fillElement(params, defaults = {}) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     const value = params.value !== undefined && params.value !== null
         ? String(params.value)
         : (params.text !== undefined && params.text !== null ? String(params.text) : "");
@@ -3478,7 +4069,6 @@ async function fillElement(params, defaults = {}) {
  */
 async function typeKeys(params) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     const text = params.text !== undefined && params.text !== null ? String(params.text) : "";
     const locate = targetLocate(params, { allowText: false });
     if (locate) {
@@ -3500,13 +4090,12 @@ async function typeKeys(params) {
 
 async function scrollPage(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
 
     const sign = params.direction === "up" ? -1 : 1;
     const dy = sign * Math.abs(params.y !== undefined && params.y !== null ? Number(params.y) : 500);
     const dx = Number(params.x || 0);
 
-    return await evaluateScript({
+    return await evaluateIsolated({
         tabId,
         code: `(() => {
             window.scrollBy({ left: ${dx}, top: ${dy}, behavior: ${JSON.stringify(String(params.behavior || "instant"))} });
@@ -3515,15 +4104,68 @@ async function scrollPage(params = {}) {
     });
 }
 
+const SCREENSHOT_FORMATS = { png: "image/png", jpeg: "image/jpeg", jpg: "image/jpeg", webp: "image/webp" };
+
+/**
+ * Boîte d'un élément (repère de la vue, getBoundingClientRect) -> zone de Page.captureScreenshot, en repère de la
+ * PAGE : défilement ajouté (Page.getLayoutMetrics, comme Puppeteer), sinon la capture d'une page défilée rognait
+ * à côté de l'élément. Partie hors du document (x ou y négatif) retirée.
+ */
+async function pageClip(target, rect) {
+    let pageX = 0;
+    let pageY = 0;
+    try {
+        const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+        const view = metrics?.cssVisualViewport || metrics?.visualViewport || metrics?.cssLayoutViewport || metrics?.layoutViewport || {};
+        pageX = Number(view.pageX) || 0;
+        pageY = Number(view.pageY) || 0;
+    } catch (_) {}
+    let x = Number(rect.x) + pageX;
+    let y = Number(rect.y) + pageY;
+    let width = Number(rect.width);
+    let height = Number(rect.height);
+    if (x < 0) { width += x; x = 0; }
+    if (y < 0) { height += y; y = 0; }
+    return {
+        x: Math.round(x), y: Math.round(y),
+        width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)), scale: 1
+    };
+}
+
+/**
+ * Page.captureScreenshot d'un onglet de fond, sans le mettre au premier plan. Onglet caché : après un défilement ou
+ * un changement, Chrome ne dessine plus d'image et la capture attendait 12 à 20 s (mesuré le 18/10 : 11 gels sur 20).
+ * Un flux d'images (Page.startScreencast, minuscule, jamais lu) tenu le temps de la capture garde le rendu actif.
+ */
+async function captureScreenshot(target, params) {
+    let screencast = false;
+    try {
+        await chrome.debugger.sendCommand(target, "Page.startScreencast", {
+            format: "jpeg", quality: 1, maxWidth: 16, maxHeight: 16
+        });
+        screencast = true;
+    } catch (_) {
+        // Flux indisponible : capture directe (onglet visible, ou Chrome qui refuse le flux).
+    }
+    try {
+        return await chrome.debugger.sendCommand(target, "Page.captureScreenshot", params);
+    } finally {
+        if (screencast) await chrome.debugger.sendCommand(target, "Page.stopScreencast").catch(() => {});
+    }
+}
+
 async function takeScreenshot(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab to capture");
+    const format = String(params.format || "png").toLowerCase();
+    const mimeType = SCREENSHOT_FORMATS[format];
+    if (!mimeType) throw new Error(`Format de capture inconnu : ${params.format} (png, jpeg ou webp)`);
+    const cdpFormat = format === "jpg" ? "jpeg" : format;
 
     const target = await ensureDebugger(tabId);
     
     if (params.selector) {
         const sel = JSON.stringify(params.selector);
-        const elRect = await evaluateScript({
+        const elRect = await evaluateIsolated({
             tabId,
             code: `(() => {
                 const selector = ${sel};
@@ -3531,8 +4173,8 @@ async function takeScreenshot(params = {}) {
                     if (!root) return null;
                     if (typeof selector === "string" && selector.startsWith("#") && /^[0-9]+$/.test(selector.slice(1))) {
                         const markNum = parseInt(selector.slice(1));
-                        if (window.__antigravity_som_elements && window.__antigravity_som_elements.has(markNum)) {
-                            return window.__antigravity_som_elements.get(markNum);
+                        if (window.__nexus_som_elements && window.__nexus_som_elements.has(markNum)) {
+                            return window.__nexus_som_elements.get(markNum);
                         }
                     }
                     if (root.querySelectorAll) {
@@ -3556,24 +4198,24 @@ async function takeScreenshot(params = {}) {
                 el.scrollIntoView({ behavior: "instant", block: "center" });
                 const r = el.getBoundingClientRect();
                 if (r.width <= 0 || r.height <= 0) return null;
-                return { x: Math.max(0, Math.round(r.x)), y: Math.max(0, Math.round(r.y)), width: Math.max(1, Math.round(r.width)), height: Math.max(1, Math.round(r.height)), scale: 1 };
+                return { x: r.x, y: r.y, width: r.width, height: r.height };
             })()`
         });
         if (elRect?.data) {
-            const shot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
-                format: params.format || "png",
-                clip: elRect.data
+            const clip = await pageClip(target, elRect.data);
+            const shot = await captureScreenshot(target, {
+                format: cdpFormat,
+                clip,
+                captureBeyondViewport: true
             });
-            return { data: { dataUrl: `data:image/png;base64,${shot.data}`, mimeType: "image/png" } };
+            return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip } };
         } else {
             return { error: "Element not found for screenshot selector: " + params.selector };
         }
     }
 
-    const shot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
-        format: params.format || "png"
-    });
-    return { data: { dataUrl: `data:image/png;base64,${shot.data}`, mimeType: "image/png" } };
+    const shot = await captureScreenshot(target, { format: cdpFormat });
+    return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType } };
 }
 
 /**
@@ -3581,7 +4223,6 @@ async function takeScreenshot(params = {}) {
  */
 async function printToPdf(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab to print");
 
     const target = await ensureDebugger(tabId);
     const pdfData = await chrome.debugger.sendCommand(target, "Page.printToPDF", {
@@ -3597,14 +4238,8 @@ async function printToPdf(params = {}) {
 }
 
 async function handleJsDialog(params = {}) {
-    let tabId = null;
-    const explicit = params.tabId !== undefined && params.tabId !== null;
-    if (!explicit && pendingDialogs.size === 1) {
-        tabId = [...pendingDialogs.keys()][0];  // une seule boîte ouverte : c'est elle
-    } else {
-        tabId = await resolveTargetTab(params);
-    }
-    if (!tabId) throw new Error("No tab with a JavaScript dialog");
+    // tab_id obligatoire : sans lui, l'agent répondrait peut-être à la boîte d'un autre agent ou de Julien.
+    const tabId = await resolveTargetTab(params);
     const dialog = pendingDialogs.get(tabId) || null;
     const accept = params.accept !== false;
     const promptText = params.promptText !== undefined && params.promptText !== null
@@ -3618,11 +4253,90 @@ async function handleJsDialog(params = {}) {
     return { data: { success: true, tabId, accepted: accept, dialog: dialog ? publicDialog(dialog) : null } };
 }
 
+// Commandes CDP brutes PERMISES (browser_cdp_send) : lecture de la page, captures, entrées et affichage de l'onglet de
+// l'agent. Tout le reste est refusé (liste fermée, nom exact) : cookies et stockage (Storage.clearDataForOrigin
+// déconnecterait Julien), corps et données POST des requêtes (mots de passe), Network.loadNetworkResource / IO.read,
+// Fetch (onglet bloqué), scripts injectés à chaque document (Page.addScriptToEvaluateOnNewDocument), navigation
+// (file://), téléchargements, fichiers téléversés, autres cibles et réglages du navigateur.
+const CDP_ALLOWED = new Set([
+    // DOM et styles, en lecture
+    "DOM.enable", "DOM.disable", "DOM.getDocument", "DOM.querySelector", "DOM.querySelectorAll", "DOM.describeNode",
+    "DOM.getBoxModel", "DOM.getContentQuads", "DOM.getOuterHTML", "DOM.getNodeForLocation", "DOM.getFrameOwner",
+    "DOM.requestChildNodes", "DOM.performSearch", "DOM.getSearchResults", "DOM.discardSearchResults",
+    "DOM.scrollIntoViewIfNeeded", "CSS.enable", "CSS.disable", "CSS.getComputedStyleForNode",
+    // Accessibilité
+    "Accessibility.enable", "Accessibility.disable", "Accessibility.getFullAXTree", "Accessibility.getPartialAXTree",
+    "Accessibility.queryAXTree", "Accessibility.getChildAXNodes", "Accessibility.getRootAXNode",
+    // Exécution : Runtime.evaluate dans le monde isolé par défaut, monde de la page sur demande (world: "page")
+    "Runtime.enable", "Runtime.evaluate",
+    // Page : captures, mesures, cadres, rechargement de SON onglet
+    "Page.enable", "Page.captureScreenshot", "Page.getLayoutMetrics", "Page.printToPDF", "Page.getFrameTree",
+    "Page.getNavigationHistory", "Page.reload", "Page.stopLoading",
+    // Entrées (onglet de l'agent seulement : vérifié avant toute commande)
+    "Input.dispatchMouseEvent", "Input.dispatchKeyEvent", "Input.insertText", "Input.dispatchTouchEvent",
+    "Input.dispatchDragEvent", "Input.synthesizeScrollGesture", "Input.imeSetComposition",
+    // Affichage
+    "Emulation.setDeviceMetricsOverride", "Emulation.clearDeviceMetricsOverride", "Emulation.setEmulatedMedia",
+    "Emulation.setEmulatedVisionDeficiency", "Emulation.setTouchEmulationEnabled", "Emulation.setEmitTouchEventsForMouse",
+    "Emulation.setFocusEmulationEnabled", "Emulation.setDefaultBackgroundColorOverride", "Emulation.setScrollbarsHidden",
+    "Emulation.setPageScaleFactor", "Emulation.setAutoDarkModeOverride",
+    "Overlay.enable", "Overlay.disable", "Overlay.highlightNode", "Overlay.highlightRect", "Overlay.hideHighlight",
+    // Réseau : activation seulement (le journal et les corps passent par les outils dédiés, secrets masqués)
+    "Network.enable", "Network.disable", "Network.setCacheDisabled",
+    // Console et performances
+    "Log.enable", "Log.disable", "Log.clear", "Console.enable", "Console.disable", "Console.clearMessages",
+    "Performance.enable", "Performance.disable", "Performance.getMetrics"
+]);
+
+// Paramètres refusés sur une commande permise : Page.reload(scriptToEvaluateOnLoad) injecterait un script dans le
+// monde de la page avant ses propres scripts, comme Page.addScriptToEvaluateOnNewDocument (refusée).
+const CDP_REFUSED_PARAMS = { "Page.reload": ["scriptToEvaluateOnLoad"] };
+
+function cdpRefusal(method, commandParams) {
+    const name = String(method || "").trim();
+    if (!name) return "Missing CDP method";
+    const refusedParam = (CDP_REFUSED_PARAMS[name] || []).find(key =>
+        commandParams && typeof commandParams === "object" && Object.prototype.hasOwnProperty.call(commandParams, key));
+    if (refusedParam) {
+        return `Commande CDP refusée : ${name} avec ${refusedParam} (script injecté dans la page à son chargement). ` +
+            `Recharger sans ce paramètre, puis exécuter le script par browser_eval.`;
+    }
+    if (CDP_ALLOWED.has(name)) return null;
+    return `Commande CDP refusée : ${name} n'est pas dans la liste des commandes permises (lecture de la page, ` +
+        "captures, entrées et affichage de l'onglet de l'agent). Cookies, stockage, corps de requêtes, Fetch, IO, " +
+        "scripts injectés, navigation et téléchargements passent par les outils dédiés (browser_get_cookies, " +
+        "browser_network_response, browser_navigate...).";
+}
+
+const CDP_WORLDS = new Set(["isolated", "page"]);
+
 async function sendCdpCommand(params) {
-    let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab for CDP command");
+    const refusal = cdpRefusal(params.method, params.commandParams);
+    if (refusal) throw new Error(refusal);
+    const method = String(params.method).trim();
+    const world = params.world === undefined || params.world === null || params.world === "" ? "isolated" : String(params.world);
+    if (!CDP_WORLDS.has(world)) throw new Error(`world invalide : ${world.slice(0, 40)} ("isolated" par défaut, ou "page").`);
+    if (world !== "isolated" && method !== "Runtime.evaluate") {
+        throw new Error(`world="${world}" ne vaut que pour Runtime.evaluate (pas pour ${method}).`);
+    }
+    const tabId = await resolveTargetTab(params);
     const target = await ensureDebugger(tabId);
-    const result = await chrome.debugger.sendCommand(target, params.method, params.commandParams || {});
+    let commandParams = params.commandParams && typeof params.commandParams === "object" && !Array.isArray(params.commandParams)
+        ? { ...params.commandParams } : {};
+    if (method === "Runtime.evaluate") {
+        // Contexte imposé (jamais celui choisi par l'agent) et aucune API de la console (copy() écrirait le
+        // presse-papiers) : monde isolé de l'extension par défaut ; monde de la PAGE sur demande explicite (comme
+        // browser_eval et la console DevTools), pour lire l'état d'une application (store, __INITIAL_STATE__).
+        delete commandParams.uniqueContextId;
+        delete commandParams.contextId;
+        commandParams.includeCommandLineAPI = false;
+        if (world === "isolated") commandParams.contextId = await rootContextId(rootOf(target));
+        const result = await sendCommandWatchingDialogs(target, method, commandParams);
+        if (result?.__dialog) return { data: dialogInterruption(result.__dialog) };
+        return { data: { ...result, world } };
+    }
+    if (method.startsWith("Input.")) assertNotStopped();
+    const result = await chrome.debugger.sendCommand(target, method, commandParams);
     return { data: result };
 }
 
@@ -3635,7 +4349,6 @@ async function sendCdpCommand(params) {
  */
 async function uploadFiles(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab to upload files");
     if (!params.files || !Array.isArray(params.files) || params.files.length === 0) {
         throw new Error("Missing 'files' parameter (array of absolute file paths)");
     }
@@ -3692,21 +4405,21 @@ async function uploadFiles(params = {}) {
  */
 async function visionInspect(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab for vision inspect");
 
     const target = await ensureDebugger(tabId);
 
     // 1. Inject SoM markers and register elements in page context
     markRoots.delete(tabId);  // marqueurs de vision : cadre principal seulement
-    const markerData = await evaluateScript({
+    const markerData = await evaluateIsolated({
         tabId,
         code: `(() => {
-            if (!window.__antigravity_som_elements) {
-                window.__antigravity_som_elements = new Map();
+            const lk = ${SENSITIVE_FIELD_EXPR};
+            if (!window.__nexus_som_elements) {
+                window.__nexus_som_elements = new Map();
             } else {
-                window.__antigravity_som_elements.clear();
+                window.__nexus_som_elements.clear();
             }
-            document.querySelectorAll(".__antigravity_som_marker").forEach(m => {
+            document.querySelectorAll(".__nexus_som_marker").forEach(m => {
                 if (m && typeof m.remove === "function") m.remove();
                 else if (m?.parentNode) m.parentNode.removeChild(m);
             });
@@ -3754,7 +4467,7 @@ async function visionInspect(params = {}) {
                 if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) continue;
 
                 const badge = document.createElement("div");
-                badge.className = "__antigravity_som_marker";
+                badge.className = "__nexus_som_marker";
                 badge.innerText = String(markerId);
                 badge.style.position = "fixed";
                 badge.style.left = Math.max(0, Math.round(rect.left)) + "px";
@@ -3772,7 +4485,7 @@ async function visionInspect(params = {}) {
                 badge.style.fontFamily = "monospace";
 
                 document.documentElement.appendChild(badge);
-                window.__antigravity_som_elements.set(markerId, el);
+                window.__nexus_som_elements.set(markerId, el);
 
                 const ymin = Math.max(0, Math.min(1000, Math.round((rect.top / h) * 1000)));
                 const xmin = Math.max(0, Math.min(1000, Math.round((rect.left / w) * 1000)));
@@ -3784,7 +4497,8 @@ async function visionInspect(params = {}) {
                     tag: el.tagName ? el.tagName.toLowerCase() : "element",
                     role: (el.getAttribute ? el.getAttribute("role") : null) || null,
                     type: el.type || null,
-                    text: (el.innerText || el.value || el.placeholder || (el.getAttribute ? el.getAttribute("aria-label") : "") || "").trim().slice(0, 80),
+                    text: ((lk.sensitiveField(el) ? "" : (el.innerText || el.value)) || el.placeholder || (el.getAttribute ? el.getAttribute("aria-label") : "") || "").trim().slice(0, 80),
+                    ...(lk.sensitiveField(el) ? { value: lk.MASKED_VALUE } : {}),
                     rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
                     box_2d: [ymin, xmin, ymax, xmax]
                 });
@@ -3795,18 +4509,18 @@ async function visionInspect(params = {}) {
         })()`
     });
 
-    // 2. Short render stabilization delay (50ms)
+    // 2. Court délai de rendu des badges (lecture : permise pendant l'arrêt d'urgence, donc pas sleepMs)
     await new Promise(r => setTimeout(r, 50));
 
     // 3. High-res visual screenshot
-    const shot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
+    const shot = await captureScreenshot(target, {
         format: "png"
     });
 
-    // 4. Clean up visual marker badges from DOM (keeps window.__antigravity_som_elements for clickMark)
-    await evaluateScript({
+    // 4. Clean up visual marker badges from DOM (keeps window.__nexus_som_elements for clickMark)
+    await evaluateIsolated({
         tabId,
-        code: `document.querySelectorAll(".__antigravity_som_marker").forEach(m => {
+        code: `document.querySelectorAll(".__nexus_som_marker").forEach(m => {
             if (m && typeof m.remove === "function") m.remove();
             else if (m?.parentNode) m.parentNode.removeChild(m);
         })`
@@ -3859,7 +4573,6 @@ async function semanticClick(params = {}) {
  */
 async function semanticFill(params = {}) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     let locator = parseLocator(params.locator);
     if (!locator) {
         const label = params.label || params.placeholder;
@@ -3885,9 +4598,8 @@ async function semanticFill(params = {}) {
  */
 async function checkHandoff(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
 
-    return await evaluateScript({
+    return await evaluateIsolated({
         tabId,
         code: `(() => {
             const bodyText = (document.body ? document.body.innerText : "").toLowerCase();
@@ -3932,7 +4644,10 @@ async function getDownloadStatus(params = {}) {
 // -----------------------------------------------------------------------------
 const NETWORK_BUFFER_SIZE = 500;
 const tabNetwork = new Map();
-const SECRET_HEADER = /^(cookie|set-cookie|set-cookie2|authorization|proxy-authorization|x-api-key|x-auth-token|x-csrf-token|x-xsrf-token)$/i;
+// En-têtes secrets : noms connus, et tout nom qui évoque un jeton, une clé, une session ou une signature.
+const SECRET_HEADER = /^(cookie|set-cookie|set-cookie2)$|authorization|token|key|secret|csrf|xsrf|session|signature|password|auth/i;
+// Paramètres d'URL secrets (requête et fragment) : jetons OAuth, clés d'API, signatures d'URL présignées (S3, GCS).
+const SECRET_URL_PARAM = /^(code|key|sig|auth|x-amz-.+|x-goog-(signature|credential).*)$|token|secret|passw|signature|credential|session|api[_-]?key/i;
 const TEXTUAL_MIME = /^(text\/|application\/(json|ld\+json|javascript|ecmascript|xml|xhtml\+xml|x-www-form-urlencoded|graphql|problem\+json|manifest\+json)|image\/svg\+xml)|\+json\b|\+xml\b/i;
 
 function networkLog(tabId) {
@@ -3948,11 +4663,41 @@ function networkKey(source, requestId) {
     return source?.sessionId ? `${source.sessionId}:${requestId}` : String(requestId);
 }
 
+/** Masque la valeur des paramètres sensibles d'une chaîne de requête ou de fragment (« a=1&b=2 »), sans réencoder. */
+function maskParams(text) {
+    return text.split("&").map(part => {
+        const eq = part.indexOf("=");
+        if (eq <= 0) return part;
+        let name = part.slice(0, eq);
+        try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch (_) {}
+        return SECRET_URL_PARAM.test(name) ? `${part.slice(0, eq)}=[masqué]` : part;
+    }).join("&");
+}
+
+/** URL sans les valeurs de ses paramètres sensibles (requête et fragment OAuth « #access_token=... »). */
+function maskUrl(url) {
+    if (typeof url !== "string" || !url) return url ?? null;
+    const hashAt = url.indexOf("#");
+    const beforeHash = hashAt >= 0 ? url.slice(0, hashAt) : url;
+    const queryAt = beforeHash.indexOf("?");
+    let out = queryAt >= 0 ? `${beforeHash.slice(0, queryAt + 1)}${maskParams(beforeHash.slice(queryAt + 1))}` : beforeHash;
+    if (hashAt >= 0) {
+        const hash = url.slice(hashAt + 1);
+        const lead = /^[!/?]*/.exec(hash)[0];
+        out += `#${hash.includes("=") ? lead + maskParams(hash.slice(lead.length)) : hash}`;
+    }
+    return out;
+}
+
+// En-têtes qui portent une URL (redirection OAuth « Location: ...?code=... », référent) : paramètres secrets masqués.
+const URL_HEADER = /^(location|content-location|referer|origin)$/i;
+
 function maskHeaders(headers) {
     if (!headers || typeof headers !== "object") return headers || null;
     const out = {};
     for (const [name, value] of Object.entries(headers)) {
-        out[name] = SECRET_HEADER.test(name) ? `[masqué, ${String(value).length} caractères]` : value;
+        if (SECRET_HEADER.test(name)) out[name] = `[masqué, ${String(value).length} caractères]`;
+        else out[name] = URL_HEADER.test(name) ? maskUrl(String(value)) : value;
     }
     return out;
 }
@@ -4042,7 +4787,7 @@ function recordNetworkEnd(source, method, params) {
 function publicNetworkRecord(rec, includeHeaders) {
     const out = {
         request_id: rec.key,
-        url: rec.url,
+        url: maskUrl(rec.url),
         method: rec.method,
         status: rec.status,
         statusText: rec.statusText || null,
@@ -4057,8 +4802,8 @@ function publicNetworkRecord(rec, includeHeaders) {
     };
     if (rec.failed) Object.assign(out, { errorText: rec.errorText, canceled: rec.canceled, blockedReason: rec.blockedReason || null });
     if (rec.fromCache) out.fromCache = true;
-    if (rec.redirectedFrom) out.redirectedFrom = rec.redirectedFrom;
-    if (rec.redirectedTo) out.redirectedTo = rec.redirectedTo;
+    if (rec.redirectedFrom) out.redirectedFrom = maskUrl(rec.redirectedFrom);
+    if (rec.redirectedTo) out.redirectedTo = maskUrl(rec.redirectedTo);
     if (includeHeaders) {
         out.requestHeaders = maskHeaders(rec.requestHeaders);
         out.responseHeaders = maskHeaders(rec.responseHeaders);
@@ -4083,7 +4828,6 @@ function statusMatches(status, wanted) {
  */
 async function getNetworkRequests(params = {}) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     // Attacher (si besoin) démarre l'enregistrement : seules les requêtes vues par le débogueur sont connues.
     const wasAttached = attachedDebuggers.has(tabId);
     await ensureDebugger(tabId);
@@ -4113,7 +4857,9 @@ async function getNetworkRequests(params = {}) {
         recording_since: new Date(log.since).toISOString(),
         requests
     };
-    if (!wasAttached) data.note = "Débogueur attaché par cet appel : seules les requêtes à partir de maintenant seront enregistrées (enregistrement interrompu après 30 s d'inactivité du débogueur).";
+    const recordingUntil = networkRecording.get(tabId) || 0;
+    data.recording_until = recordingUntil > Date.now() ? new Date(recordingUntil).toISOString() : null;
+    if (!wasAttached) data.note = "Débogueur attaché par cet appel : seules les requêtes à partir de maintenant seront enregistrées (débogueur détaché après 30 s d'inactivité ; browser_network_record pour le garder pendant une durée bornée).";
     return { data };
 }
 
@@ -4123,7 +4869,6 @@ async function getNetworkRequests(params = {}) {
  */
 async function getNetworkResponse(params = {}) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     const id = String(params.requestId || params.request_id || "").trim();
     if (!id) throw new Error("Missing request_id (champ request_id de browser_network_requests)");
     const log = networkLog(tabId);
@@ -4145,7 +4890,7 @@ async function getNetworkResponse(params = {}) {
     }
     const maxBytes = Math.max(256, Math.min(5 * 1024 * 1024, parseInt(params.maxBytes !== undefined ? params.maxBytes : params.max_bytes, 10) || 64 * 1024));
     const textual = TEXTUAL_MIME.test(rec.mimeType || "");
-    const data = { request_id: rec.key, url: rec.url, status: rec.status, mimeType: rec.mimeType, base64Encoded: !!res?.base64Encoded };
+    const data = { request_id: rec.key, url: maskUrl(rec.url), status: rec.status, mimeType: rec.mimeType, base64Encoded: !!res?.base64Encoded };
     let body = String(res?.body || "");
     if (res?.base64Encoded && !textual) {
         const bytes = Math.floor(body.length * 3 / 4) - (body.endsWith("==") ? 2 : (body.endsWith("=") ? 1 : 0));
@@ -4168,8 +4913,133 @@ async function getNetworkResponse(params = {}) {
             body = new TextDecoder("utf-8").decode(bytes);
         } catch (_) {}
     }
-    Object.assign(data, { binary: false, size: body.length, truncated: body.length > maxBytes, body: body.slice(0, maxBytes) });
+    // Secrets masqués AVANT la troncature (une coupe ne laisse jamais passer la fin d'un jeton).
+    const masked = maskSecretBody(body, rec.mimeType);
+    body = masked.text;
+    Object.assign(data, { binary: false, size: body.length, truncated: body.length > maxBytes, body: body.slice(0, maxBytes), masked: masked.count });
     return { data };
+}
+
+// -----------------------------------------------------------------------------
+// Corps de réponse : champs secrets masqués à toute profondeur (JSON, formulaires, et motifs "clé": "valeur" d'un
+// texte non analysable : JSON tronqué, script, HTML). Mêmes noms que les en-têtes et paramètres d'URL sensibles.
+// -----------------------------------------------------------------------------
+//
+// Trois classes de clés :
+// - liste blanche (jamais masquées, sauf valeur au format d'un identifiant connu) : pagination (nextPageToken,
+//   pageToken, continuation_token, cursor, syncToken...) et métadonnées (token_type, expires_*, tokenizer...) ;
+// - compteurs (total_tokens, prompt_tokens, max_tokens, promptTokenCount, tokens_used...) : un nombre passe tel quel,
+//   toute autre valeur est jugée sur sa forme ;
+// - clés ambiguës (« token » ou « session » au milieu d'un autre mot : resumeToken, sessionState...) : seule une
+//   valeur qui RESSEMBLE à un secret est masquée. Toutes les autres clés de SECRET_BODY_KEY : toujours masquées.
+const SECRET_BODY_KEY = /token|secret|passw|pwd|api[_-]?key|apikey|authori[sz]ation|session|cookie|credential|private[_-]?key|csrf|xsrf|signature|^auth$|^(sid|ssid|hsid|apisid|sapisid)$/i;
+// Clés qui nomment un secret sans ambiguïté (le reste de SECRET_BODY_KEY ne tient qu'à « token » ou « session »).
+const STRONG_SECRET_KEY = /secret|passw|pwd|api[_-]?key|apikey|authori[sz]ation|cookie|credential|private[_-]?key|csrf|xsrf|signature|^auth$|^(sid|ssid|hsid|apisid|sapisid)$|^(token|tokens|session|jwt|bearer)$|(^|[_.-]|[a-z])(access|refresh|id|auth|bearer|session|api|oauth|client|app|install(ation)?|personal|service|push|device|fcm|upload|reset|verification|confirm(ation)?|magic|login|security|secret|private|jwt|sso|saml)[_.-]?tokens?$|^session[_.-]?(id|key|token|cookie)$|session(id|key)$/i;
+// Liste blanche : pagination et métadonnées du jeton.
+const SECRET_BODY_ALLOWED = /^((next|prev|previous)[_-]?(page[_-]?)?token|page[_-]?token|continuation[_-]?token|(next|prev|previous)?[_-]?cursor|(next[_-]?)?sync[_-]?token|token[_-]?type|expires(_?\w*)?|token[_-]?expir\w*|tokeni[sz]er\w*)$/i;
+// Compteurs de jetons de modèle de langue (OpenAI, Anthropic, Gemini, Bedrock...).
+const TOKEN_COUNTER_KEY = /^(\w*_tokens(_details)?|\w*[a-z]Tokens|max_?(\w*_)?tokens|max\w*Tokens|\w*tokens?_?count|tokens?_?used|tokens?_?usage)$/i;
+// Formats d'identifiants connus (jetons OAuth Google, GitHub, OpenAI, Stripe, Slack, AWS, JWT...), masqués partout.
+const KNOWN_SECRET_VALUE = /^(Bearer\s|Basic\s|ya29\.|1\/\/0|gh[pousr]_|github_pat_|glpat-|sk-|sk_(live|test)_|rk_(live|test)_|xox[abprs]-|AKIA[0-9A-Z]{12}|ASIA[0-9A-Z]{12}|AIza[\w-]{30}|eyJ[\w-]+\.[\w-]+\.)/;
+// Préfixes anti-XSSI de certaines API (Google : « )]}' »), gardés tels quels devant le JSON masqué.
+const XSSI_PREFIX = /^(\)\]\}'[^\n]*\n?|for\s*\(;;\);|while\s*\(1\);)/;
+
+/** Valeur qui ressemble à un secret : format d'identifiant connu, ou chaîne opaque longue (lettres et chiffres). */
+function secretLooking(value) {
+    if (typeof value !== "string") return false;
+    const text = value.trim();
+    if (KNOWN_SECRET_VALUE.test(text)) return true;
+    return text.length >= 20 && !/\s/.test(text) && /^[\w+/=.~:-]+$/.test(text) && /[A-Za-z]/.test(text) && /\d/.test(text);
+}
+
+/**
+ * Vrai si la valeur de cette clé doit être masquée. value absente (undefined) : jugement sur le nom seul, pour une
+ * clé ambiguë on masque (texte non analysable).
+ */
+function secretBodyKey(name, value) {
+    const key = String(name ?? "");
+    if (SECRET_BODY_ALLOWED.test(key)) return typeof value === "string" && KNOWN_SECRET_VALUE.test(value.trim());
+    const counter = TOKEN_COUNTER_KEY.test(key);
+    const numeric = value === null || typeof value === "number" || typeof value === "boolean"
+        || (typeof value === "string" && /^\s*\d+(\.\d+)?\s*$/.test(value));
+    if (counter && numeric) return false;
+    if (!SECRET_BODY_KEY.test(key)) return false;
+    if (STRONG_SECRET_KEY.test(key)) return true;
+    // Clé ambiguë (ou compteur dont la valeur n'est pas un nombre) : jugée sur sa valeur.
+    if (value === undefined) return !counter;
+    if (Array.isArray(value)) return value.some(secretLooking);
+    if (value !== null && typeof value === "object") return false;  // contenu parcouru, ses clés jugées une à une
+    return secretLooking(value);
+}
+
+function maskedValue(value) {
+    return typeof value === "string" ? `[masqué, ${value.length} caractères]` : "[masqué]";
+}
+
+function maskJsonValue(value, counter, depth = 0) {
+    if (depth > 64 || value === null || typeof value !== "object") return value;
+    if (Array.isArray(value)) return value.map(item => maskJsonValue(item, counter, depth + 1));
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+        if (item !== null && item !== undefined && item !== "" && secretBodyKey(key, item)) {
+            out[key] = maskedValue(item);
+            counter.count++;
+        } else {
+            out[key] = maskJsonValue(item, counter, depth + 1);
+        }
+    }
+    return out;
+}
+
+function maskFormBody(text, counter) {
+    return text.split("&").map(part => {
+        const eq = part.indexOf("=");
+        if (eq <= 0) return part;
+        let name = part.slice(0, eq);
+        try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch (_) {}
+        let value = part.slice(eq + 1);
+        try { value = decodeURIComponent(value.replace(/\+/g, " ")); } catch (_) {}
+        if (!secretBodyParam(name, value) || eq === part.length - 1) return part;
+        counter.count++;
+        return `${part.slice(0, eq)}=[masqué]`;
+    }).join("&");
+}
+
+/** Paramètre clé=valeur d'un formulaire ou d'une URL citée dans un corps : liste blanche et compteurs compris. */
+function secretBodyParam(name, value) {
+    return secretBodyKey(name, value) || (SECRET_URL_PARAM.test(name) && !SECRET_BODY_KEY.test(name));
+}
+
+/** { text, count } : corps textuel avec ses valeurs secrètes remplacées. */
+function maskSecretBody(text, mimeType = "") {
+    const counter = { count: 0 };
+    const source = String(text ?? "");
+    const prefix = (XSSI_PREFIX.exec(source) || [""])[0];
+    const rest = source.slice(prefix.length);
+    const trimmed = rest.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+            const masked = maskJsonValue(JSON.parse(trimmed), counter);
+            return { text: prefix + JSON.stringify(masked), count: counter.count };
+        } catch (_) {
+            // JSON incomplet ou texte mêlé : motifs ci-dessous.
+        }
+    }
+    const form = /x-www-form-urlencoded/i.test(mimeType || "")
+        || /^[\w.%+\-[\]]+=[^&\s]*(&[\w.%+\-[\]]+=[^&\s]*)+$/.test(trimmed);
+    if (form) return { text: maskFormBody(source, counter), count: counter.count };
+    // "clé" : "valeur" (JSON tronqué, objet dans un script) et clé=valeur dans une requête ou un fragment.
+    let out = source.replace(/("((?:[^"\\]|\\.){1,80})"\s*:\s*)"((?:[^"\\]|\\.)*)"/g, (match, head, key, value) => {
+        if (!value || !secretBodyKey(key, value)) return match;
+        counter.count++;
+        return `${head}"[masqué, ${value.length} caractères]"`;
+    });
+    out = out.replace(/([?&#]([A-Za-z0-9_.%-]{1,80})=)([^&#"'\s<]+)/g, (match, head, key, value) => {
+        if (!secretBodyParam(key, value)) return match;
+        counter.count++;
+        return `${head}[masqué]`;
+    });
+    return { text: out, count: counter.count };
 }
 
 // -----------------------------------------------------------------------------
@@ -4200,10 +5070,8 @@ function publicDownload(d) {
  */
 async function waitForDownload(params = {}) {
     if (!chrome.downloads?.search) throw new Error("API chrome.downloads indisponible");
-    const explicitTab = params.tabId !== undefined && params.tabId !== null;
-    // Sans tab_id : l'onglet de l'agent, s'il est connu (jamais l'onglet actif de Julien).
-    if (!explicitTab) await restoreAgentTab();
-    const tabId = explicitTab ? await resolveTargetTab(params) : lastAgentTabId;
+    // L'onglet de l'agent est obligatoire : sans lui, le téléchargement d'un autre agent pourrait être pris.
+    const tabId = await resolveTargetTab(params);
     const timeoutMs = Math.max(0, parseInt(params.timeoutMs !== undefined ? params.timeoutMs : params.timeout, 10) || 30000);
     const since = params.since !== undefined && params.since !== null
         ? Number(params.since)
@@ -4252,7 +5120,6 @@ async function eraseDownload(params = {}) {
  */
 async function pressKey(params = {}) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab to press key");
     const combo = String(params.key || "Enter").trim();
     parseKeyCombo(combo);  // erreur claire avant toute action
     lastActionAt.set(tabId, Date.now());
@@ -4271,12 +5138,12 @@ async function pressKey(params = {}) {
  */
 async function editOperation(params, locate, op, extra, timeoutMs) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     let target;
     try {
         target = await ensureDebugger(tabId);
     } catch (error) {
-        return await mouseJsFallback(tabId, { phase: "edit", locate, op, ...extra }, error.message || String(error), timeoutMs);
+        const fallback = await mouseJsFallback(tabId, { phase: "edit", locate, op, ...extra }, error.message || String(error), timeoutMs);
+        return fallback.data ? { ...fallback, data: maskEditState(fallback.data) } : fallback;
     }
     try {
         const runEdit = async (root, loc) => {
@@ -4293,7 +5160,7 @@ async function editOperation(params, locate, op, extra, timeoutMs) {
         }
         if (res?.__dialog) return { data: dialogInterruption(res.__dialog) };
         if (!res || !res.success) return { error: prepareError(res, locate) };
-        return { data: res };
+        return { data: maskEditState(res) };
     } finally {
         scheduleDebuggerDetach(tabId);
     }
@@ -4358,7 +5225,6 @@ async function findElements(params = {}) {
     const locator = parseLocator(params.locator);
     if (!locator) return { error: "Missing locator (ex. {\"role\":\"button\",\"name\":\"Valider\"})" };
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     const target = await ensureDebugger(tabId);
     const limit = Math.max(1, Math.min(100, parseInt(params.limit, 10) || 20));
     const found = await findAcrossRoots(target, locator, { limit });
@@ -4398,14 +5264,13 @@ async function findElements(params = {}) {
  */
 async function waitForLoad(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
 
     const timeoutMs = params.timeoutMs || params.timeout || 8000;
     const startTime = Date.now();
 
     while (Date.now() - startTime < timeoutMs) {
         try {
-            const stateRes = await evaluateScript({
+            const stateRes = await evaluateIsolated({
                 tabId,
                 code: `document.readyState`
             });
@@ -4415,7 +5280,7 @@ async function waitForLoad(params = {}) {
         } catch (e) {
             // Execution context destroyed during rapid navigation; continue polling until new context settles
         }
-        await new Promise(r => setTimeout(r, 100));
+        await sleepMs(100);
     }
 
     return { data: { readyState: "timeout", waitedMs: timeoutMs } };
@@ -4426,7 +5291,6 @@ async function waitForLoad(params = {}) {
  */
 async function waitForNetworkIdle(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
 
     const target = await ensureDebugger(tabId);
     await chrome.debugger.sendCommand(target, "Network.enable");
@@ -4447,7 +5311,7 @@ async function waitForNetworkIdle(params = {}) {
         } else {
             idleSince = null;
         }
-        await new Promise(r => setTimeout(r, 50));
+        await sleepMs(50);
     }
 
     return { data: { status: "timeout", inFlight: inFlightSet(tabId).size, waitedMs: timeoutMs } };
@@ -4456,12 +5320,34 @@ async function waitForNetworkIdle(params = {}) {
 /**
  * Retrieve session and domain cookies via CDP Network.getCookies
  */
+/** Hôte local de développement : localhost, 127.0.0.1, [::1], *.localhost, *.test (jamais un autre domaine). */
+function isLocalDevHost(host) {
+    const name = String(host || "").trim().toLowerCase().replace(/^\./, "").replace(/\.$/, "");
+    return name === "localhost" || name === "127.0.0.1" || name === "[::1]" || name === "::1"
+        || name.endsWith(".localhost") || name.endsWith(".test");
+}
+
+function isLocalDevUrl(url) {
+    try {
+        const parsed = new URL(String(url));
+        return (parsed.protocol === "http:" || parsed.protocol === "https:") && isLocalDevHost(parsed.hostname);
+    } catch (_) {
+        return false;
+    }
+}
+
+const LOCAL_COOKIE_REFUSAL = "Valeurs de cookies refusées : seulement pour une origine locale de développement " +
+    "(localhost, 127.0.0.1, [::1], *.localhost, *.test), jamais pour un site réel (secrets de session de Julien). " +
+    "Relancer sans include_values pour les noms et attributs.";
+
+/**
+ * Cookies via CDP Network.getCookies : noms et attributs. Valeurs jamais par défaut ; includeValues=true seulement si
+ * TOUTES les URL visées (l'onglet, ou params.urls) sont locales de développement, refus clair sinon (avant tout appel
+ * à Chrome), et seulement pour les cookies de domaines locaux.
+ */
 async function getCookies(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
-
-    const target = await ensureDebugger(tabId);
-    await chrome.debugger.sendCommand(target, "Network.enable");
+    const asked = params.includeValues === true || params.include_values === true;
 
     let commandParams = {};
     if (params.urls && Array.isArray(params.urls)) {
@@ -4473,17 +5359,20 @@ async function getCookies(params = {}) {
             commandParams.urls = [tab.url];
         }
     }
+    if (asked && !(commandParams.urls?.length && commandParams.urls.every(isLocalDevUrl))) {
+        throw new Error(LOCAL_COOKIE_REFUSAL);
+    }
 
+    const target = await ensureDebugger(tabId);
+    await chrome.debugger.sendCommand(target, "Network.enable");
     const result = await chrome.debugger.sendCommand(target, "Network.getCookies", commandParams);
-    // includeValues: false (panneau latéral) : les valeurs ne quittent jamais le service worker.
-    const withValues = params.includeValues !== false;
     return {
         data: {
             cookieCount: (result.cookies || []).length,
-            valuesIncluded: withValues,
+            valuesIncluded: asked,
             cookies: (result.cookies || []).map(c => ({
                 name: c.name,
-                ...(withValues ? { value: c.value } : {}),
+                ...(asked && isLocalDevHost(c.domain) ? { value: c.value } : {}),
                 domain: c.domain,
                 path: c.path,
                 expires: c.expires,
@@ -4502,9 +5391,8 @@ async function getCookies(params = {}) {
  */
 async function getFormFields(params = {}) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     const limit = Math.max(1, Math.min(200, parseInt(params.limit, 10) || 60));
-    return await evaluateScript({
+    return await evaluateIsolated({
         tabId,
         code: `(() => {
             const limit = ${limit};
@@ -4566,7 +5454,6 @@ function exportError(res) {
 /** Contenu principal de la page (ou d'une zone : selector, locator) en markdown, text ou html, borné. */
 async function exportContent(params = {}) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     const locator = parseLocator(params.locator);
     const spec = {
         format: params.format || "markdown",
@@ -4575,7 +5462,7 @@ async function exportContent(params = {}) {
         maxChars: params.maxChars !== undefined ? params.maxChars : params.max_chars
     };
     const code = `(${EXPORT_KIT_SOURCE})().pageExport(${JSON.stringify(spec)}, ${locator ? `(${LOCATOR_KIT_SOURCE})()` : "null"})`;
-    const res = await evaluateScript({ tabId, code });
+    const res = await evaluateIsolated({ tabId, code });
     return exportError(res) || res;
 }
 
@@ -4587,12 +5474,11 @@ async function exportContent(params = {}) {
  */
 async function exportGsuite(params = {}) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     const tab = await chrome.tabs.get(tabId);
     const plan = EK.gsuitePlan(tab?.url || tab?.pendingUrl || "", params.format, params.gid);
     if (plan.error) return { error: plan.error };
     const opts = { binary: plan.binary, maxBytes: EXPORT_MAX_BYTES, timeoutMs: EXPORT_FETCH_TIMEOUT_MS };
-    const res = await evaluateScript({ tabId, code: `(${EXPORT_KIT_SOURCE})().fetchResource(${JSON.stringify(plan.url)}, ${JSON.stringify(opts)})` });
+    const res = await evaluateIsolated({ tabId, code: `(${EXPORT_KIT_SOURCE})().fetchResource(${JSON.stringify(plan.url)}, ${JSON.stringify(opts)})` });
     if (res?.data?.dialogOpened) return res;
     let fetched = res?.data || null;
     let via = "page";
@@ -4607,7 +5493,7 @@ async function exportGsuite(params = {}) {
         // fetch (page comme extension : « Failed to fetch »). Un téléchargement par Chrome suit la redirection avec la
         // session, comme Fichier > Télécharger : le fichier est lu par le client puis rangé ou supprimé.
         const fetchError = fetched.networkError;
-        fetched = await downloadViaBrowser(plan.url, `nexusagy-exports/${plan.document_id}.${plan.extension}`, EXPORT_FETCH_TIMEOUT_MS);
+        fetched = await downloadViaBrowser(plan.url, `nexus-browser-exports/${plan.document_id}.${plan.extension}`, EXPORT_FETCH_TIMEOUT_MS);
         via = "download";
         if (fetched?.networkError) fetched.networkError = `${fetchError} ; téléchargement : ${fetched.networkError}`;
     }
@@ -4646,7 +5532,7 @@ async function exportGsuite(params = {}) {
 
 /**
  * Téléchargement par Chrome (cookies de la session, redirections suivies), sans boîte « Enregistrer sous », dans
- * Téléchargements\nexusagy-exports\. Rend { ok, status, path, bytes, type, finalUrl, filename, downloadId } ou
+ * Téléchargements\nexus-browser-exports\. Rend { ok, status, path, bytes, type, finalUrl, filename, downloadId } ou
  * { networkError }. L'entrée est retirée de l'historique des téléchargements de Julien (le fichier reste, lu par le
  * client qui le range ou le supprime).
  */
@@ -4702,7 +5588,6 @@ async function discardDownload(id) {
 /** Transcription de la vidéo YouTube ouverte dans l'onglet (piste choisie par langue, json3 ou vtt). */
 async function exportYoutubeTranscript(params = {}) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
     const tab = await chrome.tabs.get(tabId);
     if (!EK.isYoutubeUrl(tab?.url || "")) return { error: `L'onglet n'est pas une page YouTube (${String(tab?.url || "?").slice(0, 120)}).` };
     const spec = {
@@ -4719,20 +5604,19 @@ async function exportYoutubeTranscript(params = {}) {
 /**
  * Token-optimized compact interactive element map
  * Returns numbered interactive elements ([#1], [#2]...) with labels, selectors, and box_2d coordinates.
- * Populates window.__antigravity_som_elements so elements can be targeted directly.
+ * Populates window.__nexus_som_elements so elements can be targeted directly.
  */
 async function getInteractiveMap(params = {}) {
     let tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
 
     const viewportOnly = params.viewportOnly !== false;
     const maxElements = params.maxElements ? parseInt(params.maxElements) : 60;
 
     const buildScript = (startMark, budget) => `(() => {
-        if (!window.__antigravity_som_elements) {
-            window.__antigravity_som_elements = new Map();
+        if (!window.__nexus_som_elements) {
+            window.__nexus_som_elements = new Map();
         } else {
-            window.__antigravity_som_elements.clear();
+            window.__nexus_som_elements.clear();
         }
 
         const selector = "button, a, input, select, textarea, [role='button'], [role='link'], [role='tab'], [role='checkbox'], [role='menuitem'], [onclick], [tabindex]";
@@ -4786,7 +5670,7 @@ async function getInteractiveMap(params = {}) {
                 if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") continue;
             } catch(e) {}
 
-            window.__antigravity_som_elements.set(markId, el);
+            window.__nexus_som_elements.set(markId, el);
 
             const tag = el.tagName ? el.tagName.toLowerCase() : "element";
             const role = el.getAttribute ? el.getAttribute("role") : null;
@@ -4801,12 +5685,16 @@ async function getInteractiveMap(params = {}) {
                 const safeId = (typeof window !== "undefined" && window.CSS && typeof CSS.escape === "function") ? CSS.escape(el.id) : el.id;
                 selectorHint += "#" + safeId;
             } else if (el.name) {
-                const safeName = String(el.name).replace(/'/g, "\\'");
-                selectorHint += "[name='" + safeName + "']";
+                // Gabarit texte : chaque barre oblique inverse est doublée pour survivre à la sérialisation.
+                const rawName = String(el.name);
+                const safeName = (typeof CSS !== "undefined" && typeof CSS.escape === "function")
+                    ? CSS.escape(rawName)
+                    : rawName.replace(/["\\\\]/g, "\\\\$&").replace(/\\n/g, "\\\\a ");
+                selectorHint += '[name="' + safeName + '"]';
             } else {
                 const rawClass = typeof el.className === "string" ? el.className : (el.className?.baseVal || "");
                 if (rawClass) {
-                    const firstClass = rawClass.trim().split(/\s+/)[0];
+                    const firstClass = rawClass.trim().split(/\\s+/)[0];
                     if (firstClass && !firstClass.includes("[") && !firstClass.includes("]") && !firstClass.includes("(") && !firstClass.includes(")") && !firstClass.includes(":") && !firstClass.includes(".") && !firstClass.includes("/") && !firstClass.includes("%")) {
                         const safeClass = (typeof CSS !== "undefined" && typeof CSS.escape === "function") ? CSS.escape(firstClass) : firstClass;
                         selectorHint += "." + safeClass;
@@ -4843,7 +5731,7 @@ async function getInteractiveMap(params = {}) {
         };
     })()`;
 
-    const top = await evaluateScript({ tabId, code: buildScript(1, maxElements) });
+    const top = await evaluateIsolated({ tabId, code: buildScript(1, maxElements) });
     markRoots.delete(tabId);
     if (!top?.data || top.data.dialogOpened || !Array.isArray(top.data.elements)) return top;
     // Cadres d'une autre origine : marqueurs à la suite, boîtes ramenées au viewport principal, cadre indiqué.
@@ -4922,7 +5810,6 @@ async function crossOriginFrameEvaluations(tabId, codeFor, onResult) {
  */
 async function dragAndDrop(params = {}) {
     const tabId = await resolveTargetTab(params);
-    if (!tabId) throw new Error("No active tab");
 
     const side = (selector, mark, coords, locator) => {
         const loc = parseLocator(locator);

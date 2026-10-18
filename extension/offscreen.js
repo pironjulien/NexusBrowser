@@ -61,7 +61,7 @@ function connectWS() {
     }
 }
 
-// Événement à signer pour le service worker quand sa propre liaison n'est pas prête (demande du panneau latéral).
+// Événement à signer pour le service worker quand sa propre liaison n'est pas prête (STOP du poste de contrôle).
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message || message.target !== "offscreen" || !message.bridgeEvent) return;
     if (sender.id !== chrome.runtime.id || sender.tab) return;

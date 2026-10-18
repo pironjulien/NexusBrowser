@@ -1,5 +1,5 @@
 /**
- * Antigravity Browser Bridge - localisateurs par rôle et libellé (inspirés de Playwright getByRole, getByLabel,
+ * Nexus Browser Bridge - localisateurs par rôle et libellé (inspirés de Playwright getByRole, getByLabel,
  * getByText, getByPlaceholder, getByTestId), côté page.
  *
  * Vraie fonction autonome : sérialisée pour Runtime.evaluate (monde principal ou monde isolé d'un cadre), ou injectée
@@ -24,6 +24,25 @@ function agyLocatorKit(install) {
         try { return el && typeof el.getAttribute === "function" ? el.getAttribute(name) : null; } catch (_) { return null; }
     }
     function has(el, name) { const v = attr(el, name); return v !== null && v !== undefined; }
+    // Champ dont la valeur ne sort jamais de la page (mot de passe, code à usage unique, carte bancaire) : type
+    // password, jeton autocomplete correspondant, ou champ nommé comme un mot de passe (un bouton « afficher » le
+    // passe en type=text, souvent sans autocomplete ; revue d'Antigravity du 18/10).
+    const SENSITIVE_AUTOCOMPLETE = new Set(["current-password", "new-password", "one-time-code", "cc-number", "cc-csc",
+        "cc-exp", "cc-exp-month", "cc-exp-year"]);
+    const SENSITIVE_NAME = /passw|pwd|passcode|mot.?de.?passe|mdp|(^|[^a-z])(cvc|cvv|csc)([^a-z]|$)/i;
+    const MASKED_VALUE = "[valeur masquée]";
+    function sensitiveField(el) {
+        if (!el || typeof el !== "object") return false;
+        let type = "";
+        try { type = String(el.type || attr(el, "type") || "").toLowerCase(); } catch (_) {}
+        if (type === "password") return true;
+        let auto = "";
+        try { auto = String(attr(el, "autocomplete") || el.autocomplete || ""); } catch (_) {}
+        if (auto.toLowerCase().split(/\s+/).some(t => SENSITIVE_AUTOCOMPLETE.has(t))) return true;
+        const tag = tagOf(el);
+        if (tag && tag !== "INPUT" && tag !== "TEXTAREA") return false;
+        return SENSITIVE_NAME.test(String(attr(el, "name") || "") + " " + String(attr(el, "id") || ""));
+    }
     function norm(value) {
         return String(value === undefined || value === null ? "" : value).replace(/[\s ]+/g, " ").trim();
     }
@@ -176,6 +195,7 @@ function agyLocatorKit(install) {
     function controlText(el) {
         const role = roleOf(el);
         if (role === "textbox" || role === "searchbox" || role === "spinbutton") {
+            if (sensitiveField(el)) return "";
             return el.isContentEditable ? norm(el.textContent) : norm(el.value);
         }
         if (role === "combobox" || role === "listbox") {
@@ -521,7 +541,8 @@ function agyLocatorKit(install) {
         const selected = selectedOf(el);
         if (selected !== null) out.selected = selected;
         if (role === "heading") out.level = levelOf(el);
-        if (typeof el.value === "string" && tagOf(el) !== "BUTTON" && tagOf(el) !== "OPTION") out.value = el.value.slice(0, 120);
+        if (sensitiveField(el)) out.value = MASKED_VALUE;
+        else if (typeof el.value === "string" && tagOf(el) !== "BUTTON" && tagOf(el) !== "OPTION") out.value = el.value.slice(0, 120);
         else if (el.isContentEditable) out.value = norm(el.innerText !== undefined ? el.innerText : el.textContent).slice(0, 120);
         const testId = attr(el, "data-testid");
         if (testId) out.testId = testId;
@@ -544,9 +565,9 @@ function agyLocatorKit(install) {
     }
 
     const api = { norm, pattern, matches, isVisible, roleOf, implicitRole, accessibleName, labelTexts, checkedOf, disabledOf,
-        collect, query, describe, frameOfEl, walk, contentText };
+        collect, query, describe, frameOfEl, walk, contentText, sensitiveField, MASKED_VALUE };
     // install=true (repli chrome.scripting sans débogueur) : rangé dans la page, renvoie true (sérialisable).
     if (!install) return api;
-    try { (typeof window !== "undefined" ? window : globalThis).__nexusagyLocatorKit = api; } catch (_) {}
+    try { (typeof window !== "undefined" ? window : globalThis).__nexusBrowserLocatorKit = api; } catch (_) {}
     return true;
 }
