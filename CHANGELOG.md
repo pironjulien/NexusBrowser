@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- `.github/workflows/registry.yml`: after each release reaches PyPI, `server.json` is published to the official MCP
+  registry by GitHub OIDC (no token, no manual login), as NexusAndroid does.
+
 ## [2.10.0] - 2026-10-19
 
 ### Changed (neutral texts for any client, 2026-10-19)
