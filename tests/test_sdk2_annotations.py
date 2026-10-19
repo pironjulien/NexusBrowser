@@ -36,6 +36,9 @@ def test_server_runs_on_mcp_sdk_2():
 def test_every_tool_has_its_four_annotations():
     tools = _tools()
     assert len(tools) == 48
+    # Même nombre dans le contrôle de la roue publiée (publish.yml) : 2.10.0 a d'abord échoué sur un 47 resté là.
+    publish = (REPO_ROOT / ".github" / "workflows" / "publish.yml").read_text(encoding="utf-8")
+    assert f"assert len(tools) == {len(tools)}, len(tools)" in publish
     for name, tool in tools.items():
         hints = tool.annotations
         assert hints is not None, name

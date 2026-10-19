@@ -28,7 +28,7 @@ jobs:
           fi
           grep -q 'mcp-name: io.github.pironjulien/nexus-browser' README.md
       - run: uv build
-      - name: Startup check from the built wheel (initialize, 47 tools, clear error without the bridge)
+      - name: Startup check from the built wheel (initialize, 48 tools, clear error without the bridge)
         shell: bash
         run: |
           uv venv --python 3.12 /tmp/wheel
@@ -43,7 +43,7 @@ jobs:
                   init = await s.initialize()
                   assert init.server_info.name == "nexus-browser", init.server_info
                   tools = (await s.list_tools()).tools
-                  assert len(tools) == 47, len(tools)
+                  assert len(tools) == 48, len(tools)
                   print("ok", init.server_info.version, len(tools))
           anyio.run(go)
           PY
