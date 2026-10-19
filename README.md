@@ -19,7 +19,7 @@ the user's own Chrome (their sessions, their extensions) through one shared loca
 `nexus-browser`. Each agent works in its own background tabs, grouped under its name, with real (trusted) mouse
 and keyboard events sent through the Chrome DevTools Protocol, while the user keeps working in their own tabs.
 
-Version 2.9.0 · Windows 10/11 · Chrome 116+ · Python 3.14 · MIT licence
+Windows 10/11 · Chrome 116+ · Python 3.14 · MIT licence
 
 Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
 ([Claude](https://github.com/pironjulien/NexusWindows-Claude) ·

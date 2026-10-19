@@ -5,6 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- README: the stale version line no longer hardcodes a number (the release and PyPI badges show it).
+
 ## [2.12.1] - 2026-10-20
 
 ### Security
