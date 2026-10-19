@@ -128,31 +128,31 @@ def test_eval_is_documented_as_full_page_access():
     """Audit du 18/10 : la promesse « cookies étanches hors localhost » était fausse pour browser_eval et
     Runtime.evaluate. Dit tel quel partout où un agent le lit (outil, instructions, skill, README)."""
     eval_doc = mcp_server.browser_eval.__doc__ or ""
-    assert "ACCÈS COMPLET" in eval_doc and "document.cookie" in eval_doc and "localStorage" in eval_doc
+    assert "FULL PAGE ACCESS" in eval_doc and "document.cookie" in eval_doc and "localStorage" in eval_doc
     cdp_doc = mcp_server.browser_cdp_send.__doc__ or ""
-    assert "ACCÈS COMPLET" in cdp_doc and "scriptToEvaluateOnLoad est refusé" in cdp_doc
+    assert "FULL ACCESS" in cdp_doc and "scriptToEvaluateOnLoad is refused" in cdp_doc
     instructions = mcp_server.browser_mcp.instructions or ""
     assert "full access to the page" in instructions and "Password" in instructions
     for skill in SKILLS:
         text = (REPO_ROOT / skill).read_text(encoding="utf-8")
         assert "accès complet à la page" in text, skill
-        assert "[valeur masquée]" in text, skill
+        assert "[masked value]" in text, skill
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "full access to the page" in readme and "[valeur masquée]" in readme
+    assert "full access to the page" in readme and "[masked value]" in readme
     assert (REPO_ROOT / SKILLS[0]).read_text(encoding="utf-8") == (REPO_ROOT / SKILLS[1]).read_text(encoding="utf-8")
 
 
 def test_masked_values_are_announced_to_the_agent(monkeypatch):
     for tool in (mcp_server.browser_content, mcp_server.browser_fill):
-        assert "[valeur masquée]" in (tool.__doc__ or ""), tool.__name__
+        assert "[masked value]" in (tool.__doc__ or ""), tool.__name__
     # Le serveur transmet la réponse de l'extension telle quelle : le marqueur arrive à l'agent, jamais retiré.
     monkeypatch.setattr(
         mcp_server,
         "call_bridge",
-        lambda action, params, timeout=20.0: {"verified": True, "value": "[valeur masquée]"},
+        lambda action, params, timeout=20.0: {"verified": True, "value": "[masked value]"},
     )
     reply = json.loads(mcp_server.browser_fill(selector="#pw", value="secret", tab_id=2))
-    assert reply == {"status": "success", "data": {"verified": True, "value": "[valeur masquée]"}}
+    assert reply == {"status": "success", "data": {"verified": True, "value": "[masked value]"}}
 
 
 def test_every_tool_name_fits_antigravity_once_prefixed():

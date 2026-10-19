@@ -130,12 +130,12 @@ def test_page_tools_require_tab_id_no_last_tab_fallback(monkeypatch):
     with pytest.raises(TypeError):
         mcp_server.browser_click(selector="#a")  # type: ignore[call-arg]
     mcp_server.browser_new_tab("https://a.invalid")
-    assert json.loads(mcp_server.browser_click(selector="#a", tab_id=None))["error"].startswith("tab_id manquant")  # type: ignore[arg-type]
+    assert json.loads(mcp_server.browser_click(selector="#a", tab_id=None))["error"].startswith("Missing tab_id")  # type: ignore[arg-type]
     assert sent == ["create-tab"]
     assert {"browser_adopt_tab", "browser_release_tab", "browser_network_record", "browser_network_stop"} <= set(tools)
     assert not {"browser_sidepanel_requests", "browser_sidepanel_reply"} & set(tools)
     params = inspect.signature(mcp_server.browser_adopt_tab).parameters
-    assert params["user_asked"].default is False and params["julien_asked"].default is False  # ancien nom : alias
+    assert params["user_asked"].default is False and "julien_asked" not in params  # ancien alias retiré (2.11.0)
 
 
 def test_cookie_values_never_requested_by_default(monkeypatch):
@@ -216,9 +216,9 @@ def test_upload_refused_by_the_bridge_itself_for_every_spelling(fake_home):
     for path in _secret_paths(home, onedrive):
         # Un client HTTP qui contourne bridge_client est arrêté au pont (aucune extension n'est même consultée).
         status, payload = command("upload", {"files": [path], "tab_id": 1}, AGENT_A)
-        assert status == 403 and "Téléversement refusé" in payload["error"], path
+        assert status == 403 and "Upload refused" in payload["error"], path
         refusal = bridge_security.upload_refusal([str(home / "Docs" / "ok.pdf"), path])
-        assert refusal and "Téléversement refusé" in refusal, path
+        assert refusal and "Upload refused" in refusal, path
     assert bridge_security.upload_refusal([str(home / "Docs" / "ok.pdf")]) is None
     status, payload = command("upload", {"files": [str(home / "Docs" / "ok.pdf")], "tab_id": 1}, AGENT_A)
     assert status == 400 and "No Chrome browser extension connected" in payload["error"]  # passé au contrôle
@@ -234,15 +234,14 @@ def test_default_cli_identity_is_accepted_by_the_bridge():
     assert bridge_security.check_identity(default["agent"], default["id"]) is not None
 
 
-def test_adopt_tab_user_asked_and_its_former_name(monkeypatch):
-    """user_asked (nom neutre) et julien_asked (ancien nom, alias) envoient le même accord, sous les deux clés lues
-    par l'extension (julienAsked pour une extension d'avant userAsked)."""
+def test_adopt_tab_user_asked(monkeypatch):
+    """user_asked envoie l'accord sous les deux clés lues par l'extension (julienAsked pour une extension d'avant
+    userAsked) ; l'ancien paramètre julien_asked n'est plus exposé aux clients."""
     sent: list[dict] = []
     monkeypatch.setattr(mcp_server, "call_bridge", lambda action, params, timeout=20.0: sent.append(params) or {})
     mcp_server.browser_adopt_tab(7)
     mcp_server.browser_adopt_tab(7, user_asked=True)
-    mcp_server.browser_adopt_tab(7, julien_asked=True)
-    assert [(p["userAsked"], p["julienAsked"]) for p in sent] == [(False, False), (True, True), (True, True)]
+    assert [(p["userAsked"], p["julienAsked"]) for p in sent] == [(False, False), (True, True)]
 
 
 def test_client_texts_name_nobody():
@@ -254,5 +253,11 @@ def test_client_texts_name_nobody():
     seen = instructions + "".join(tool.model_dump_json() for tool in tools)
     assert "Julien" not in seen.replace("julien_asked", "")
     # Règle de l'annuaire Anthropic : aucun texte ne pousse vers ces outils ni ne détourne des outils d'un autre.
-    for steering in ("prefer", "instead of", "rather than", "client's own", "plutôt que", "claude in chrome"):
+    steerings = ("prefer", "instead of", "rather than", "better than", "client's own", "plutôt que", "claude in chrome")
+    for steering in steerings:
         assert steering not in instructions.lower(), steering
+    # Même règle pour chaque description d'outil et de paramètre (tools/list tel que le client le reçoit).
+    for tool in tools:
+        listed = tool.model_dump_json().lower()
+        for steering in steerings:
+            assert steering not in listed, (tool.name, steering)

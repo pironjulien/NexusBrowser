@@ -5,6 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-10-19
+
+### Changed
+- Everything an MCP client receives is now in English: the 48 tool descriptions, parameter descriptions and every
+  message returned to the model (server, bridge, native host, extension: errors, refusals, warnings, reports).
+  Same meaning, same guardrails. Texts shown only to the user (side panel, on-page notices) stay in French.
+- Masked values read `[masked value]` (was a French placeholder).
+- `browser_adopt_tab`: the former `julien_asked` alias is no longer exposed; use `user_asked=True`. A tab nobody
+  drives has state `"user"` in `browser_list_tabs` (was `"julien"`).
+
+### Added
+- `tests/test_english.py`: `tools/list` (descriptions, titles, input schemas) and a series of offline error and
+  refusal responses must contain no French. The anti-steering test now also covers parameter descriptions.
+
 ## [2.10.1] - 2026-10-19
 
 ### Changed

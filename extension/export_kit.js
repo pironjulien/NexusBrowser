@@ -632,30 +632,30 @@ function agyExportKit() {
         spec = spec || {};
         const format = String(spec.format || "markdown").toLowerCase();
         const fmt = format === "md" ? "markdown" : format === "txt" ? "text" : format;
-        if (!["markdown", "text", "html"].includes(fmt)) return { error: `format inconnu « ${format} » : markdown, text ou html` };
+        if (!["markdown", "text", "html"].includes(fmt)) return { error: `Unknown format "${format}": markdown, text or html` };
         const doc = typeof document !== "undefined" ? document : null;
-        if (!doc || !(doc.documentElement || doc.body)) return { error: "Document vide : rien à exporter" };
+        if (!doc || !(doc.documentElement || doc.body)) return { error: "Empty document: nothing to export" };
         const base = String(doc.baseURI || pageLocation() || "");
         let roots;
         let method;
         let main;
         if (spec.selector) {
             let el = null;
-            try { el = doc.querySelector(spec.selector); } catch (e) { return { error: `Sélecteur invalide « ${spec.selector} » : ${e && e.message || e}` }; }
-            if (!el) return { error: `Aucun élément ne correspond au sélecteur « ${spec.selector} »` };
+            try { el = doc.querySelector(spec.selector); } catch (e) { return { error: `Invalid selector "${spec.selector}": ${e && e.message || e}` }; }
+            if (!el) return { error: `No element matches the selector "${spec.selector}"` };
             roots = [el]; method = "selector"; main = el;
         } else if (spec.locator) {
-            if (!locatorKit) return { error: "Localisateur indisponible dans la page" };
+            if (!locatorKit) return { error: "Locator unavailable in the page" };
             const found = locatorKit.query(doc, spec.locator);
             const matches = found.matches || [];
             const nth = spec.locator.nth;
-            if (!matches.length) return { error: `Aucun élément ne correspond au localisateur ${JSON.stringify(spec.locator)}${found.hidden ? ` (${found.hidden} masqué(s))` : ""}` };
+            if (!matches.length) return { error: `No element matches the locator ${JSON.stringify(spec.locator)}${found.hidden ? ` (${found.hidden} hidden)` : ""}` };
             if ((nth === undefined || nth === null) && matches.length > 1) {
-                return { error: `Localisateur ambigu ${JSON.stringify(spec.locator)} : ${matches.length} éléments correspondent (préciser exact:true, nth ou un critère de plus)` };
+                return { error: `Ambiguous locator ${JSON.stringify(spec.locator)}: ${matches.length} elements match (add exact:true, nth or one more criterion)` };
             }
             let index = nth === undefined || nth === null ? 0 : parseInt(nth, 10);
             if (index < 0) index = matches.length + index;
-            if (!matches[index]) return { error: `nth=${nth} hors limites : ${matches.length} élément(s)` };
+            if (!matches[index]) return { error: `nth=${nth} out of range: ${matches.length} element(s)` };
             roots = [matches[index].el]; method = "locator"; main = roots[0];
         } else {
             const found = findMainRoot(doc);
@@ -677,7 +677,7 @@ function agyExportKit() {
         stats.words = (text.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length;
         const full = fmt === "markdown" ? renderMd(blocks) : fmt === "text" ? text : renderHtml(blocks);
         const b = bound(full, maxChars(spec.maxChars));
-        if (!b.total_chars) return { error: "Aucun contenu lisible trouvé dans la zone exportée" };
+        if (!b.total_chars) return { error: "No readable content found in the exported area" };
         const rootEl = main || roots[0];
         return {
             url: pageLocation() || base || null,
@@ -722,17 +722,17 @@ function agyExportKit() {
     }
     function gsuitePlan(url, format, gid) {
         if (/^https:\/\/docs\.google\.com\/(document|spreadsheets|presentation)\/d\/e\//.test(String(url || ""))) {
-            return { error: "Document Google publié sur le Web (/d/e/…) : pas d'URL d'export ; ouvrir le document source (lien /d/<id>/edit)." };
+            return { error: "Google document published to the web (/d/e/…): no export URL; open the source document (link /d/<id>/edit)." };
         }
         const info = parseGoogleUrl(url);
         if (!info) {
-            return { error: `L'onglet n'est pas un Google Docs, Sheets ou Slides ouvert (attendu https://docs.google.com/document|spreadsheets|presentation/d/<id>/…, reçu ${String(url || "?").slice(0, 120)}).` };
+            return { error: `The tab is not an open Google Docs, Sheets or Slides file (expected https://docs.google.com/document|spreadsheets|presentation/d/<id>/…, got ${String(url || "?").slice(0, 120)}).` };
         }
         const kind = GSUITE[info.kind];
         const raw = String(format || kind.def).toLowerCase().replace(/^\./, "");
         const fmt = raw === "markdown" ? "md" : raw === "text" ? "txt" : raw;
         if (!(fmt in kind.formats)) {
-            return { error: `Format « ${raw} » non exportable pour ${kind.label} : ${Object.keys(kind.formats).join(", ")}.` };
+            return { error: `Format "${raw}" cannot be exported for ${kind.label}: ${Object.keys(kind.formats).join(", ")}.` };
         }
         const base = `https://docs.google.com/${info.kind}${info.account}/d/${info.id}`;
         let exportUrl;
@@ -741,7 +741,7 @@ function agyExportKit() {
         else exportUrl = `${base}/export?format=${fmt}`;
         if (info.kind === "spreadsheets") {
             sheet = gid !== undefined && gid !== null && gid !== "" ? String(gid) : info.gid;
-            if (sheet !== null && !/^\d+$/.test(sheet)) return { error: `gid invalide : ${gid}` };
+            if (sheet !== null && !/^\d+$/.test(sheet)) return { error: `Invalid gid: ${gid}` };
             if (sheet !== null) exportUrl += `&gid=${sheet}`;
         }
         return {
@@ -790,7 +790,7 @@ function agyExportKit() {
             return { ...out, bytes: text.length, text };
         } catch (e) {
             const aborted = e && (e.name === "AbortError");
-            return { networkError: aborted ? `délai de ${timeoutMs} ms dépassé` : String((e && e.message) || e) };
+            return { networkError: aborted ? `timeout of ${timeoutMs} ms exceeded` : String((e && e.message) || e) };
         } finally {
             if (timer !== null) clearTimeout(timer);
         }
@@ -799,23 +799,23 @@ function agyExportKit() {
     /** Réponse lue honnêtement : droits, page de connexion, HTML au lieu du fichier, taille. */
     function gsuiteVerdict(plan, fetched) {
         const what = `${plan.label} (${plan.format})`;
-        if (!fetched) return { error: `Export ${what} sans réponse.` };
-        if (fetched.networkError) return { error: `Export ${what} impossible : requête refusée (${fetched.networkError}). Session Google expirée, réseau, ou téléchargement bloqué par le propriétaire.` };
+        if (!fetched) return { error: `Export ${what}: no response.` };
+        if (fetched.networkError) return { error: `Export ${what} impossible: request refused (${fetched.networkError}). Google session expired, network, or download blocked by the owner.` };
         const finalHost = host(fetched.finalUrl);
         if (finalHost === "accounts.google.com" || /ServiceLogin|\/signin\//.test(String(fetched.finalUrl || ""))) {
-            return { error: `Export ${what} refusé : Google demande une connexion. Le compte de cette session n'a pas accès au document (ou la session a expiré).` };
+            return { error: `Export ${what} refused: Google asks for a sign-in. The account of this session has no access to the document (or the session has expired).` };
         }
         if (fetched.status === 401 || fetched.status === 403) {
-            return { error: `Export ${what} refusé (HTTP ${fetched.status}) : droits insuffisants pour ce compte, ou téléchargement, impression et copie désactivés par le propriétaire.` };
+            return { error: `Export ${what} refused (HTTP ${fetched.status}): insufficient rights for this account, or download, print and copy disabled by the owner.` };
         }
-        if (fetched.status === 404) return { error: `Export ${what} introuvable (HTTP 404) : document supprimé, identifiant faux, ou format non disponible pour ce document.` };
-        if (fetched.status === 429) return { error: `Export ${what} limité par Google (HTTP 429) : réessayer dans une minute.` };
-        if (!fetched.ok) return { error: `Export ${what} en échec (HTTP ${fetched.status}).` };
-        if (fetched.tooLarge) return { error: `Export ${what} trop volumineux (${Math.round(fetched.bytes / 1048576 * 10) / 10} Mo ; limite du pont 8 Mo) : le télécharger depuis Google (Fichier > Télécharger).` };
+        if (fetched.status === 404) return { error: `Export ${what} not found (HTTP 404): document deleted, wrong ID, or format not available for this document.` };
+        if (fetched.status === 429) return { error: `Export ${what} rate-limited by Google (HTTP 429): retry in a minute.` };
+        if (!fetched.ok) return { error: `Export ${what} failed (HTTP ${fetched.status}).` };
+        if (fetched.tooLarge) return { error: `Export ${what} too large (${Math.round(fetched.bytes / 1048576 * 10) / 10} MB; bridge limit 8 MB): download it from Google (File > Download).` };
         if (plan.format !== "html" && /text\/html/i.test(fetched.type)) {
-            return { error: `Export ${what} refusé : Google a renvoyé une page HTML au lieu du fichier (droits, téléchargement désactivé par le propriétaire, ou page de connexion).` };
+            return { error: `Export ${what} refused: Google returned an HTML page, not the file (rights, download disabled by the owner, or sign-in page).` };
         }
-        if (!fetched.bytes) return { error: `Export ${what} vide : le document ne contient rien d'exportable dans ce format.` };
+        if (!fetched.bytes) return { error: `Export ${what} empty: the document has nothing exportable in this format.` };
         return { ok: true };
     }
 
@@ -975,9 +975,9 @@ function agyExportKit() {
     async function youtubeTranscript(spec) {
         spec = spec || {};
         const href = pageLocation();
-        if (!isYoutubeUrl(href)) return { error: `L'onglet n'est pas une page YouTube (${href.slice(0, 120) || "?"}).` };
+        if (!isYoutubeUrl(href)) return { error: `The tab is not a YouTube page (${href.slice(0, 120) || "?"}).` };
         const videoId = videoIdFrom(href);
-        if (!videoId) return { error: "Aucune vidéo YouTube ouverte dans l'onglet (attendu /watch?v=…, /shorts/…, /live/…)." };
+        if (!videoId) return { error: "No YouTube video open in the tab (expected /watch?v=…, /shorts/…, /live/…)." };
         const fmt = String(spec.format || "json3").toLowerCase() === "vtt" ? "vtt" : "json3";
         const timeoutMs = Math.max(2000, parseInt(spec.timeoutMs, 10) || 20000);
         let pr = playerResponse(videoId);
@@ -988,19 +988,19 @@ function agyExportKit() {
             if (pr && !(pr.videoDetails && pr.videoDetails.videoId === videoId)) pr = null;
             source = "page_html";
         }
-        if (!pr) return { error: "Données du lecteur YouTube introuvables (ytInitialPlayerResponse) : attendre le chargement de la vidéo puis relancer." };
+        if (!pr) return { error: "YouTube player data not found (ytInitialPlayerResponse): wait for the video to load, then retry." };
         const details = pr.videoDetails || {};
         const renderer = (pr.captions && pr.captions.playerCaptionsTracklistRenderer) || {};
         const tracks = Array.isArray(renderer.captionTracks) ? renderer.captionTracks.filter(t => t && t.baseUrl) : [];
         const available = tracks.map(describeTrack);
         if (!tracks.length) {
             const status = pr.playabilityStatus && pr.playabilityStatus.status;
-            return { error: `Aucune piste de sous-titres pour cette vidéo (ni manuelle ni auto-générée)${status && status !== "OK" ? ` ; lecture : ${status}` : ""}.` };
+            return { error: `No caption track for this video (neither manual nor auto-generated)${status && status !== "OK" ? `; playback: ${status}` : ""}.` };
         }
         const defaultIndex = renderer.audioTracks && renderer.audioTracks[0] ? renderer.audioTracks[0].defaultCaptionTrackIndex : undefined;
         const pick = pickTrack(tracks, spec.lang, defaultIndex);
         if (!pick) {
-            return { error: `Aucune piste en « ${spec.lang} » ni traduisible : pistes disponibles ${available.map(t => `${t.lang}${t.auto ? " (auto)" : ""}`).join(", ")}.` };
+            return { error: `No track in "${spec.lang}" and none translatable: available tracks ${available.map(t => `${t.lang}${t.auto ? " (auto)" : ""}`).join(", ")}.` };
         }
         const track = pick.track;
         let method = "direct";
@@ -1041,8 +1041,8 @@ function agyExportKit() {
             }
         }
         if (!parsed) {
-            const why = fetched && fetched.networkError ? fetched.networkError : fetched && !fetched.ok ? `HTTP ${fetched.status}` : "réponse vide";
-            return { error: `Piste « ${track.languageCode} » illisible (${why}) : YouTube exige peut-être son jeton de lecture. Lancer la lecture de la vidéo avec les sous-titres (CC) une seconde, puis relancer.` };
+            const why = fetched && fetched.networkError ? fetched.networkError : fetched && !fetched.ok ? `HTTP ${fetched.status}` : "empty response";
+            return { error: `Track "${track.languageCode}" unreadable (${why}): YouTube may require its playback token. Play the video with captions (CC) on for a second, then retry.` };
         }
         const max = maxChars(spec.maxChars);
         const timed = bound(parsed.segments.map(s => `[${stamp(s.start)}] ${s.text}`).join("\n"), max);

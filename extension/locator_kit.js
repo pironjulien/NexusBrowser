@@ -42,7 +42,7 @@ function agyLocatorKit(install) {
             .toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
         return words.some((w, i) => SENSITIVE_WORDS.has(w) || (i > 0 && SENSITIVE_WORDS.has(words[i - 1] + w)));
     }
-    const MASKED_VALUE = "[valeur masquée]";
+    const MASKED_VALUE = "[masked value]";
     function sensitiveField(el) {
         if (!el || typeof el !== "object") return false;
         let type = "";
@@ -428,12 +428,12 @@ function agyLocatorKit(install) {
 
     // --- Moteur ----------------------------------------------------------------------------------------------------
     function normalize(locator) {
-        if (!locator || typeof locator !== "object") throw new Error("Localisateur invalide : objet attendu, par ex. {\"role\":\"button\",\"name\":\"Valider\"}");
+        if (!locator || typeof locator !== "object") throw new Error("Invalid locator: object expected, e.g. {\"role\":\"button\",\"name\":\"Submit\"}");
         const loc = Object.assign({}, locator);
         if (loc.testid !== undefined && loc.testId === undefined) loc.testId = loc.testid;
         if (loc.alt !== undefined && loc.altText === undefined) loc.altText = loc.alt;
         if (!KNOWN_KEYS.some(k => loc[k] !== undefined && loc[k] !== null && loc[k] !== "")) {
-            throw new Error("Localisateur sans critère : role, label, text, placeholder, testId, altText ou title requis");
+            throw new Error("Locator without criterion: role, label, text, placeholder, testId, altText or title required");
         }
         if (loc.name !== undefined && loc.name !== null && !loc.role) {
             // name sans rôle : tout élément dont le nom accessible correspond.

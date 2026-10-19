@@ -930,7 +930,7 @@ test('onglets partagés : après new_tab, une commande de page sans tab_id est r
     ];
     for (const [action, params] of pageCommands) {
         const res = await h.run(action, params);
-        assert.match(res.error || '', /précisez tab_id ou ouvrez un onglet avec new_tab/, action);
+        assert.match(res.error || '', /pass tab_id or open a tab with new_tab/, action);
     }
     assert.equal(h.calls.length, 0);  // aucun débogueur attaché, rien n'a touché l'onglet 88 ni l'onglet actif 1
     // Avec son tab_id, chaque agent agit sur SON onglet.
@@ -938,7 +938,7 @@ test('onglets partagés : après new_tab, une commande de page sans tab_id est r
     assert.ok(h.calls.length > 0 && h.calls.every(c => c.target.tabId === 88));
     // Restent permis sans tab_id : ping, liste des onglets, identité de l'onglet actif, nouvel onglet.
     for (const action of ['ping', 'list_tabs', 'active_tab']) assert.equal((await h.run(action, {})).error, undefined, action);
-    assert.match((await h.run('click', {tabId: 'abc', selector: 'button'})).error, /tab_id invalide/);
+    assert.match((await h.run('click', {tabId: 'abc', selector: 'button'})).error, /Invalid tab_id/);
 });
 
 // -----------------------------------------------------------------------------
@@ -1095,12 +1095,12 @@ test('close_tab, navigate et reload sans tab_id ni onglet d\'agent connu sont re
             reload: async () => { reloaded++; }
         }
     });
-    assert.match((await h.run('close_tab', {})).error, /précisez tab_id/);
+    assert.match((await h.run('close_tab', {})).error, /pass tab_id/);
     assert.match((await h.run('navigate', {url: 'https://example.com'})).error, /tab_id/);
     assert.match((await h.run('reload', {})).error, /new_tab/);
     assert.equal(removed + updated + reloaded, 0);
     // Les lectures de page ne visent plus l'onglet actif de Julien non plus.
-    assert.match((await h.run('get_content', {mode: 'text'})).error, /précisez tab_id/);
+    assert.match((await h.run('get_content', {mode: 'text'})).error, /pass tab_id/);
     assert.equal(h.calls.some(c => c.method === 'Runtime.evaluate'), false);
 });
 
@@ -1117,7 +1117,7 @@ test('l\'extension ne mémorise aucun onglet d\'agent (ancien onglet commun igno
             update: async (id, p) => { navigated = id; return {id, ...p}; }
         }
     });
-    assert.match((await restarted.run('navigate', {url: 'https://example.com/next'})).error, /précisez tab_id/);
+    assert.match((await restarted.run('navigate', {url: 'https://example.com/next'})).error, /pass tab_id/);
     assert.equal(navigated, null);
     assert.equal((await restarted.run('navigate', {tabId: 77, url: 'https://example.com/next'})).error, undefined);
     assert.equal(navigated, 77);
@@ -1135,7 +1135,7 @@ test('une boîte de dialogue n\'est jamais acceptée d\'office et se règle par 
     const read = await h.run('get_content', {tabId: 1, mode: 'text'});
     assert.match(read.error, /Supprimer définitivement/);
     // Sans tab_id : refusé, la boîte n'est pas réglée au hasard.
-    assert.match((await h.run('handle_dialog', {accept: true})).error, /précisez tab_id/);
+    assert.match((await h.run('handle_dialog', {accept: true})).error, /pass tab_id/);
     assert.equal(h.calls.some(c => c.method === 'Page.handleJavaScriptDialog'), false);
 
     const handled = await h.run('handle_dialog', {tabId: 1, accept: false});
@@ -1251,7 +1251,7 @@ test('clic droit : bouton right, buttons 2, contextmenu de confiance', async () 
     assert.equal(res.data.trusted_click, true);
     assert.ok(res.data.trusted_events.includes('contextmenu'));
     assert.equal(h.clicks, 0);  // un clic droit n'est pas un click
-    assert.match((await h.run('click', {tabId: 1, selector: 'button', button: 'sideways'})).error, /Bouton de souris inconnu/);
+    assert.match((await h.run('click', {tabId: 1, selector: 'button', button: 'sideways'})).error, /Unknown mouse button/);
 });
 
 test('survol : un seul mouseMoved, aucun bouton, survol de confiance', async () => {
@@ -1380,12 +1380,12 @@ test('élément entièrement couvert : erreur explicite et aucun clic ailleurs',
     const overlay = {tagName: 'DIV', id: 'overlay', className: 'modal backdrop', parentNode: null};
     h.page.document.elementFromPoint = () => overlay;
     const res = await h.run('click', {tabId: 1, selector: 'button', timeoutMs: 0});
-    assert.match(res.error, /couvert par <div#overlay\.modal\.backdrop>/);
-    assert.match(res.error, /aucune action souris envoyée/);
+    assert.match(res.error, /covered by <div#overlay\.modal\.backdrop>/);
+    assert.match(res.error, /no mouse action sent/);
     assert.equal(h.mouse().length, 0);
     assert.equal(h.clicks, 0);
     const hover = await h.run('hover', {tabId: 1, selector: 'button', timeoutMs: 0});
-    assert.match(hover.error, /couvert/);
+    assert.match(hover.error, /covered/);
     assert.equal(h.mouse().length, 0);
 });
 
@@ -1410,7 +1410,7 @@ test('onglet protégé sans injection possible : erreur claire, aucune action', 
         scriptingError: 'Cannot access a chrome:// URL'
     });
     const res = await h.run('click', {tabId: 1, selector: 'button'});
-    assert.match(res.error, /Débogueur indisponible .*Protected internal URL.*injection JavaScript refusée/);
+    assert.match(res.error, /Debugger unavailable .*Protected internal URL.*JavaScript injection refused/);
     assert.equal(h.clicks, 0);
 });
 
@@ -1691,10 +1691,10 @@ const formPage = (h) => [
 test('localisateur strict : homonymes refusés avec la liste des candidats, aucun clic', async () => {
     const {h, dom} = richHarness(formPage);
     const res = await h.run('click', {tabId: 1, locator: {role: 'button', name: 'Valider'}});
-    assert.match(res.error, /Localisateur ambigu/);
-    assert.match(res.error, /2 éléments/);
-    assert.match(res.error, /« Valider »/);
-    assert.match(res.error, /« Valider le panier »/);
+    assert.match(res.error, /Ambiguous locator/);
+    assert.match(res.error, /2 elements/);
+    assert.match(res.error, /"Valider"/);
+    assert.match(res.error, /"Valider le panier"/);
     assert.equal(h.mouse().length, 0);
     assert.equal(dom.trusted.filter(t => t.type === 'click').length, 0);
 });
@@ -1712,13 +1712,13 @@ test('localisateur exact, nth et testId : vrai clic sur le bon élément', async
     assert.equal(testId.data.id, 'send');
     const clicked = dom.trusted.filter(t => t.type === 'click').map(t => t.el.id);
     assert.deepEqual(clicked, ['v1', 'd2', 'd2', 'send']);
-    assert.match((await h.run('click', {tabId: 1, locator: {role: 'button', name: 'Supprimer', nth: 5}})).error, /hors limites/);
+    assert.match((await h.run('click', {tabId: 1, locator: {role: 'button', name: 'Supprimer', nth: 5}})).error, /out of range/);
 });
 
 test('localisateur introuvable : erreur claire, masqués signalés, includeHidden les inclut', async () => {
     const {h} = richHarness(formPage);
     const res = await h.run('click', {tabId: 1, locator: {role: 'button', name: 'Publier'}, timeoutMs: 50});
-    assert.match(res.error, /Aucun élément ne correspond au localisateur/);
+    assert.match(res.error, /No element matches the locator/);
     const found = await h.run('find', {tabId: 1, locator: {role: 'button', name: 'Valider', exact: true}});
     assert.equal(found.data.count, 1);
     assert.equal(found.data.hidden, 1);
@@ -1726,9 +1726,9 @@ test('localisateur introuvable : erreur claire, masqués signalés, includeHidde
     const withHidden = await h.run('find', {tabId: 1, locator: {role: 'button', name: 'Valider', exact: true, includeHidden: true}});
     assert.equal(withHidden.data.count, 2);
     assert.equal(withHidden.data.candidates[1].visible, false);
-    assert.match((await h.run('click', {tabId: 1, locator: {role: 'button'}, timeoutMs: 0})).error, /ambigu/);
-    assert.match((await h.run('click', {tabId: 1, locator: {exact: true}})).error, /sans critère/);
-    assert.match((await h.run('click', {tabId: 1, locator: '{pas du json'})).error, /locator illisible/);
+    assert.match((await h.run('click', {tabId: 1, locator: {role: 'button'}, timeoutMs: 0})).error, /Ambiguous/);
+    assert.match((await h.run('click', {tabId: 1, locator: {exact: true}})).error, /without criterion/);
+    assert.match((await h.run('click', {tabId: 1, locator: '{pas du json'})).error, /Unreadable locator/);
 });
 
 test('rôles implicites et noms accessibles (label, aria-labelledby, aria-label, alt, contenu)', async () => {
@@ -1880,8 +1880,8 @@ test('press_key : raccourci Control+Shift+K, modificateurs enfoncés puis relâc
         ['rawKeyDown', 'Control', 2], ['rawKeyDown', 'Shift', 10], ['rawKeyDown', 'K', 10],
         ['keyUp', 'K', 10], ['keyUp', 'Shift', 2], ['keyUp', 'Control', 0]
     ]);
-    assert.match((await h.run('press_key', {tabId: 1, key: 'Hyper+K'})).error, /Modificateur inconnu/);
-    assert.match((await h.run('press_key', {tabId: 1, key: 'Foo'})).error, /Touche inconnue/);
+    assert.match((await h.run('press_key', {tabId: 1, key: 'Hyper+K'})).error, /Unknown modifier/);
+    assert.match((await h.run('press_key', {tabId: 1, key: 'Foo'})).error, /Unknown key/);
 });
 
 test('champ qui ignore le clavier : repli setter natif signalé ; mode trusted : jamais de repli', async () => {
@@ -1889,7 +1889,7 @@ test('champ qui ignore le clavier : repli setter natif signalé ; mode trusted :
     dom.byId('cp').__ignoreKeyboard = true;
     const res = await h.run('fill', {tabId: 1, locator: {label: 'Code postal'}, value: '69001'});
     assert.equal(res.data.method, 'native_setter_fallback');
-    assert.match(res.data.fallback_reason, /aucun effet/);
+    assert.match(res.data.fallback_reason, /no effect/);
     assert.match(res.data.warning, /isTrusted=false/);
     assert.equal(res.data.verified, true);
     assert.equal(dom.byId('cp').value, '69001');
@@ -1897,7 +1897,7 @@ test('champ qui ignore le clavier : repli setter natif signalé ; mode trusted :
     const strict = await h.run('fill', {tabId: 1, locator: {label: 'Code postal'}, value: '75001', mode: 'trusted'});
     assert.equal(strict.data.method, 'cdp');
     assert.equal(strict.data.verified, false);
-    assert.match(strict.data.warning, /différente/);
+    assert.match(strict.data.warning, /differs/);
     assert.equal(dom.byId('cp').value, '');
 });
 
@@ -1909,7 +1909,7 @@ test('saisie sans débogueur : repli JavaScript signalé ; champ non éditable r
     assert.equal(res.data.trusted_input, false);
     assert.equal(dom.byId('city').value, 'Paris');
     const {h: h2} = richHarness(formPage);
-    assert.match((await h2.run('fill', {tabId: 1, locator: {role: 'heading'}, value: 'x'})).error, /n'est pas un champ de saisie/);
+    assert.match((await h2.run('fill', {tabId: 1, locator: {role: 'heading'}, value: 'x'})).error, /is not an input field/);
 });
 
 test('semantic_fill : libellé puis placeholder, strict, frappe de confiance', async () => {
@@ -1939,7 +1939,7 @@ test('check par vrai clic seulement si l\'état diffère, puis relu ; select_opt
     const sel = await h.run('select_option', {tabId: 1, locator: {label: 'Formule'}, value: 'pro'});
     assert.equal(sel.data.selectedValue, 'pro');
     assert.equal(dom.byId('plan').value, 'pro');
-    assert.match((await h.run('select_option', {tabId: 1, locator: {label: 'Formule'}, text: 'Inconnue'})).error, /Aucune option/);
+    assert.match((await h.run('select_option', {tabId: 1, locator: {label: 'Formule'}, text: 'Inconnue'})).error, /No option/);
 });
 
 test('field_state relit un champ sans aucun geste (browser_fill_form) : texte, option finale, case, champ sensible', async () => {
@@ -1965,7 +1965,7 @@ test('field_state relit un champ sans aucun geste (browser_fill_form) : texte, o
     const secret = await h.run('field_state', {tabId: 1, locator: {label: 'Mot de passe'}, expect: {value: 'Secret!1'}});
     assert.equal(secret.data.verified, true);
     assert.notEqual(secret.data.value, 'Secret!1');  // jamais la valeur d'un champ sensible
-    assert.match((await h.run('field_state', {tabId: 1, locator: {label: 'Formule'}, expect: {}})).error, /une seule clé/);
+    assert.match((await h.run('field_state', {tabId: 1, locator: {label: 'Formule'}, expect: {}})).error, /exactly one key/);
     assert.match((await h.run('field_state', {tabId: 1, expect: {value: 'x'}})).error, /Missing locator/);
     assert.equal(h.mouse().length, before);  // aucune souris pour lire (l'option posée avant passe par la page)
     assert.equal(dom.byId('accept').checked, false);
@@ -1986,7 +1986,7 @@ test("field_state : liste multiple = l'option voulue SEULE sélectionnée ; cham
     dom.byId('ville').value = 'Lyon';
     dom.byId('ville').isConnected = false;  // nœud remplacé par la page (un mark garde l'ancien)
     const gone = await h.run('field_state', {tabId: 1, locator: {label: 'Ville'}, expect: {value: 'Lyon'}});
-    assert.match(gone.error, /retiré ou remplacé/);
+    assert.match(gone.error, /removed or replaced/);
 });
 
 test("field_state et select_option : aucune représentation de la valeur d'un champ sensible ne sort (texte, option)", async () => {
@@ -2085,7 +2085,7 @@ for (const oopif of [false, true]) {
         await attach();
         const res = await h.run('click', {tabId: 1, locator: {role: 'button', name: 'Action cadre', nth: 1}});
         assert.equal(res.data.crossOriginFrame, true);
-        assert.match(res.data.frame, oopif ? /localhost:2 \(iframe hors processus\)/ : /127\.0\.0\.1:2 \(iframe d'une autre origine\)/);
+        assert.match(res.data.frame, oopif ? /localhost:2 \(out-of-process iframe\)/ : /127\.0\.0\.1:2 \(cross-origin iframe\)/);
         // Centre local du bouton (60, 20) + origine du contenu du cadre (100 + 2, 200 + 3).
         assert.deepEqual(plain(res.data.coordinates), {x: 162, y: 223});
         assert.equal(res.data.trusted_click, true);
@@ -2105,11 +2105,11 @@ test('localisateur ambigu entre cadres : candidats listés avec leur cadre', asy
     const {h, attach} = crossOriginHarness();
     await attach();
     const res = await h.run('click', {tabId: 1, locator: {role: 'button', name: 'Action cadre'}});
-    assert.match(res.error, /2 éléments/);
-    assert.match(res.error, /cadre top/);
-    assert.match(res.error, /cadre http:\/\/127\.0\.0\.1:2/);
+    assert.match(res.error, /2 elements/);
+    assert.match(res.error, /frame top/);
+    assert.match(res.error, /frame http:\/\/127\.0\.0\.1:2/);
     const found = await h.run('find', {tabId: 1, locator: {role: 'button', name: 'Action cadre'}});
-    assert.deepEqual(plain(found.data.candidates.map(c => c.frame)), ['top', "http://127.0.0.1:2 (iframe d'une autre origine)"]);
+    assert.deepEqual(plain(found.data.candidates.map(c => c.frame)), ['top', "http://127.0.0.1:2 (cross-origin iframe)"]);
     // Boîte du candidat du cadre dans le repère du viewport principal.
     assert.deepEqual(plain(found.data.candidates[1].box), {x: 112, y: 213, width: 100, height: 20});
 });
@@ -2127,7 +2127,7 @@ test('iframe d\'une autre origine couverte dans la page : erreur, aucune action'
     const {h, frame, attach} = crossOriginHarness({coverFrame: true});
     await attach();
     const res = await h.run('click', {tabId: 1, locator: {role: 'button', name: 'Action cadre', nth: 1}, timeoutMs: 0});
-    assert.match(res.error, /couvert par <div#cover>/);
+    assert.match(res.error, /covered by <div#cover>/);
     assert.equal(h.mouse().length, 0);
     assert.equal(frame.trusted.length, 0);
 });
@@ -2136,7 +2136,7 @@ test('lecture : content et interactive_map indiquent le cadre ; marqueur d\'un c
     const {h, frame, attach} = crossOriginHarness();
     await attach();
     const content = await h.run('content', {tabId: 1, mode: 'text'});
-    assert.match(content.data, /--- cadre http:\/\/127\.0\.0\.1:2 \(iframe d'une autre origine\) ---/);
+    assert.match(content.data, /--- frame http:\/\/127\.0\.0\.1:2 \(cross-origin iframe\) ---/);
     const map = await h.run('interactive_map', {tabId: 1, viewportOnly: false});
     const framed = map.data.elements.filter(e => e.crossOriginFrame);
     assert.ok(framed.length >= 2);
@@ -2164,7 +2164,7 @@ test("interactive_map numérote les éditeurs riches sans leur contenu ; field_s
     const direct = await h.run('field_state', {tabId: 1, mark: field.mark, expect: {value: 'Lyon'}});
     assert.equal(direct.data.verified, true);
     const viaLabel = await h.run('field_state', {tabId: 1, mark: label.mark, expect: {value: 'Lyon'}});
-    assert.match(viaLabel.error, /libellé ou un conteneur/);
+    assert.match(viaLabel.error, /label or a container/);
     const rich = await h.run('field_state', {tabId: 1, mark: editor.mark, expect: {value: 'Texte secret du message'}});
     assert.equal(rich.data.verified, true);
     const plain = map.data.elements.find(e => e.label === 'Note');  // contenteditable="plaintext-only" aussi
@@ -2172,7 +2172,7 @@ test("interactive_map numérote les éditeurs riches sans leur contenu ; field_s
     // Libellé sans champ : il lirait "" et confirmerait un effacement ; refusé.
     const orphan = map.data.elements.find(e => e.label === 'Sans champ');
     const empty = await h.run('field_state', {tabId: 1, mark: orphan.mark, expect: {value: ''}});
-    assert.match(empty.error, /pas un champ de saisie/);
+    assert.match(empty.error, /not an input field/);
 });
 
 test('iframe srcdoc same-origin annoncée avec une origine étrange : parcourue une seule fois', async () => {
@@ -2225,9 +2225,9 @@ test('réseau : requêtes enregistrées (statut, type, taille, durée, échec), 
     const withHeaders = await h.run('network_requests', {tabId: 1, filter: '/data', includeHeaders: true});
     const raw = JSON.stringify(withHeaders);
     assert.equal(withHeaders.data.count, 1);
-    assert.match(withHeaders.data.requests[0].requestHeaders.Authorization, /^\[masqué, 19 caractères\]$/);
-    assert.match(withHeaders.data.requests[0].requestHeaders.Cookie, /^\[masqué/);
-    assert.match(withHeaders.data.requests[0].responseHeaders['Set-Cookie'], /^\[masqué/);
+    assert.match(withHeaders.data.requests[0].requestHeaders.Authorization, /^\[masked, 19 chars\]$/);
+    assert.match(withHeaders.data.requests[0].requestHeaders.Cookie, /^\[masked/);
+    assert.match(withHeaders.data.requests[0].responseHeaders['Set-Cookie'], /^\[masked/);
     assert.equal(withHeaders.data.requests[0].requestHeaders['X-Test'], 'visible');
     assert.ok(!raw.includes('secret-token') && !raw.includes('secret-cookie'));
     assert.equal((await h.run('network_requests', {tabId: 1, status: '4xx'})).data.requests[0].request_id, 'r2');
@@ -2287,11 +2287,11 @@ test('réseau : corps de réponse tronqué, binaire signalé, base64 textuel dé
     const pngB64 = await h.run('network_response', {tabId: 1, request_id: 'png', includeBinary: true});
     assert.equal(pngB64.data.body, bodies.png.body);
     const list = await h.run('network_requests', {tabId: 1, filter: 'b64text'});
-    assert.equal(list.data.requests[0].frame, 'iframe hors processus');
+    assert.equal(list.data.requests[0].frame, 'out-of-process iframe');
     const text = await h.run('network_response', {tabId: 1, request_id: list.data.requests[0].request_id});
     assert.equal(text.data.body, 'Bonjour éàü');
     assert.deepEqual(seen, [null, null, null, 'child-9']);
-    assert.match((await h.run('network_response', {tabId: 1, request_id: 'inconnu'})).error, /absente du journal/);
+    assert.match((await h.run('network_response', {tabId: 1, request_id: 'inconnu'})).error, /not in the network log/);
 });
 
 test('réseau : corps refusé clairement après détachement du débogueur', async () => {
@@ -2301,7 +2301,7 @@ test('réseau : corps refusé clairement après détachement du débogueur', asy
     await h.emit(1, 'Network.loadingFinished', {requestId: 'old', timestamp: 2, encodedDataLength: 1});
     await h.fireIdleTimers();
     const res = await h.run('network_response', {tabId: 1, request_id: 'old'});
-    assert.match(res.error, /détaché puis rattaché/);
+    assert.match(res.error, /detached then reattached/);
     // L'historique reste lisible.
     assert.equal((await h.run('network_requests', {tabId: 1})).data.count, 1);
 });
@@ -2338,11 +2338,11 @@ test('wait_download : interruption, danger et délai rapportés clairement', asy
     const base = {id: 3, url: 'http://127.0.0.1:5/f.exe', referrer: 'http://127.0.0.1:5/', filename: 'C:\\f.exe', startTime: now, totalBytes: 10, bytesReceived: 0};
     const tabs = {get: async (id) => ({id, url: 'http://127.0.0.1:5/', windowId: 10})};
     let h = harness({}, {tabs, virtualTime: true, downloads: downloadsMock([[{...base, state: 'interrupted', error: 'NETWORK_FAILED'}]]).api});
-    assert.match((await h.run('wait_download', {tabId: 1, timeoutMs: 500})).error, /interrompu \(NETWORK_FAILED\)/);
+    assert.match((await h.run('wait_download', {tabId: 1, timeoutMs: 500})).error, /interrupted \(NETWORK_FAILED\)/);
     h = harness({}, {tabs, virtualTime: true, downloads: downloadsMock([[{...base, state: 'in_progress', danger: 'dangerousFile'}]]).api});
-    assert.match((await h.run('wait_download', {tabId: 1, timeoutMs: 300})).error, /dangerousFile.*jamais acceptée/);
+    assert.match((await h.run('wait_download', {tabId: 1, timeoutMs: 300})).error, /dangerousFile.*never accepted/);
     h = harness({}, {tabs, virtualTime: true, downloads: downloadsMock([[]]).api});
-    assert.match((await h.run('wait_download', {tabId: 1, timeoutMs: 300})).error, /Aucun téléchargement venant de http:\/\/127\.0\.0\.1:5/);
+    assert.match((await h.run('wait_download', {tabId: 1, timeoutMs: 300})).error, /No download from http:\/\/127\.0\.0\.1:5/);
 });
 
 
@@ -2549,7 +2549,7 @@ test("poste de contrôle : STOP pose l'arrêt dans Chrome puis l'annonce au pont
         // Plus aucune action, même signée par le pont, tant que l'arrêt tient ; les lectures restent permises.
         server.send({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1'}, client: TEST_CLIENT});
         await until(() => server.replies().some(r => r.requestId === 'r1'), 'refus');
-        assert.match(server.replies().find(r => r.requestId === 'r1').error, /Arrêt d'urgence/);
+        assert.match(server.replies().find(r => r.requestId === 'r1').error, /Emergency stop/);
         assert.equal(evaluations(), 0);
         server.send({requestId: 'r2', action: 'list_tabs', params: {}, client: TEST_CLIENT});
         await until(() => server.replies().some(r => r.requestId === 'r2'), 'lecture');
@@ -2647,7 +2647,7 @@ test('cookies : valeurs jamais par défaut ; demandées sur un site réel : refu
     const before = h.calls.length;
     for (const params of [{includeValues: true}, {include_values: true}, {includeValues: true, urls: ['http://localhost:8000/', 'https://example.invalid/']}]) {
         const refused = await h.run('get_cookies', {tabId: 1, ...params});
-        assert.match(refused.error, /origine locale de développement/, JSON.stringify(params));
+        assert.match(refused.error, /local development origin/, JSON.stringify(params));
         assert.ok(!JSON.stringify(refused).includes('secret-session-123'));
     }
     assert.equal(h.calls.length, before);  // refus avant tout appel à Chrome
@@ -2798,7 +2798,7 @@ test('export : formats text et html nettoyé (aucun attribut, script ni champ)',
     assert.match(html, /<pre><code class="language-python">print\(&quot;bonjour&quot;\)/);
     assert.ok(!/class="post"|<script|<input|<form|SCRIPT_SECRET|Publicité/.test(html));
     const bad = await h.run('export_content', {tabId: 1, format: 'docx'});
-    assert.match(bad.error, /format inconnu/);
+    assert.match(bad.error, /Unknown format/);
 });
 
 test('export : zone par selector ou locator (strict), troncature signalée', async () => {
@@ -2810,9 +2810,9 @@ test('export : zone par selector ou locator (strict), troncature signalée', asy
     assert.equal(byLocator.root.method, 'locator');
     assert.equal(byLocator.content, '1. Nonce de l\'extension\n2. Preuve du pont\n3. Preuve du client');
     const missing = await h.run('export_content', {tabId: 1, selector: '#absent'});
-    assert.match(missing.error, /Aucun élément ne correspond au sélecteur/);
+    assert.match(missing.error, /No element matches the selector/);
     const ambiguous = await h.run('export_content', {tabId: 1, locator: {role: 'list'}});
-    assert.match(ambiguous.error, /Localisateur ambigu .* 2 éléments correspondent/);
+    assert.match(ambiguous.error, /Ambiguous locator .* 2 elements match/);
     const second = (await h.run('export_content', {tabId: 1, locator: {role: 'list', nth: -1}})).data;
     assert.match(second.content, /^1\. Nonce/);
     const cut = (await h.run('export_content', {tabId: 1, maxChars: 120})).data;
@@ -2882,22 +2882,22 @@ test('gsuite : formats binaires en base64 (docx), Sheets avec gid, Slides en ppt
     assert.equal(slides.fetches[0].url, 'https://docs.google.com/presentation/d/1SlIdEsDeCk0123/export/pptx');
     assert.equal(p.kind, 'presentation');
     const bad = await slides.h.run('export_gsuite', {tabId: 1, format: 'xlsx'});
-    assert.match(bad.error, /non exportable pour Google Slides : txt, pdf, pptx, odp/);
+    assert.match(bad.error, /cannot be exported for Google Slides: txt, pdf, pptx, odp/);
 });
 
 test('gsuite : erreurs claires (page non Google, droits, connexion, HTML au lieu du fichier), aucun fetch hors Google', async () => {
     const other = gsuiteHarness('https://example.invalid/document/d/1AbCdEfGhIjKlMnOp/edit', () => fakeResponse());
-    assert.match((await other.h.run('export_gsuite', {tabId: 1})).error, /n'est pas un Google Docs, Sheets ou Slides/);
+    assert.match((await other.h.run('export_gsuite', {tabId: 1})).error, /is not an open Google Docs, Sheets or Slides/);
     assert.equal(other.fetches.length, 0);
     const docUrl = 'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit';
     const denied = gsuiteHarness(docUrl, (u) => fakeResponse({status: 403, url: u}));
-    assert.match((await denied.h.run('export_gsuite', {tabId: 1})).error, /refusé \(HTTP 403\) : droits insuffisants/);
+    assert.match((await denied.h.run('export_gsuite', {tabId: 1})).error, /refused \(HTTP 403\): insufficient rights/);
     const login = gsuiteHarness(docUrl, () => fakeResponse({type: 'text/html', body: '<html>Connexion</html>', url: 'https://accounts.google.com/ServiceLogin?continue=x'}));
-    assert.match((await login.h.run('export_gsuite', {tabId: 1})).error, /Google demande une connexion/);
+    assert.match((await login.h.run('export_gsuite', {tabId: 1})).error, /Google asks for a sign-in/);
     const html = gsuiteHarness(docUrl, (u) => fakeResponse({type: 'text/html; charset=utf-8', body: '<html>Erreur</html>', url: u}));
-    assert.match((await html.h.run('export_gsuite', {tabId: 1, format: 'pdf'})).error, /page HTML au lieu du fichier/);
+    assert.match((await html.h.run('export_gsuite', {tabId: 1, format: 'pdf'})).error, /HTML page, not the file/);
     const published = gsuiteHarness('https://docs.google.com/document/d/e/2PACX-1vabcdefghijkl/pub', () => fakeResponse());
-    assert.match((await published.h.run('export_gsuite', {tabId: 1})).error, /publié sur le Web/);
+    assert.match((await published.h.run('export_gsuite', {tabId: 1})).error, /published to the web/);
     assert.equal(published.fetches.length, 0);
 });
 
@@ -2966,10 +2966,10 @@ test('youtube : piste auto-générée signalée, traduction par tlang, vtt, aucu
     assert.equal(t.track.translated, true);
     assert.equal(t.track.translated_to, 'de');
     const none = youtubeHarness({tracks: null, responder: () => fakeResponse()});
-    assert.match((await none.h.run('export_youtube_transcript', {tabId: 1})).error, /Aucune piste de sous-titres/);
+    assert.match((await none.h.run('export_youtube_transcript', {tabId: 1})).error, /No caption track/);
     assert.equal(none.fetches.length, 0);
     const noTranslate = youtubeHarness({tracks: [{...TRACKS[0], isTranslatable: false}], responder: () => fakeResponse()});
-    assert.match((await noTranslate.h.run('export_youtube_transcript', {tabId: 1, lang: 'ja'})).error, /Aucune piste en « ja » ni traduisible : pistes disponibles fr/);
+    assert.match((await noTranslate.h.run('export_youtube_transcript', {tabId: 1, lang: 'ja'})).error, /No track in "ja" and none translatable: available tracks fr/);
 });
 
 test('youtube : données du lecteur obsolètes (navigation SPA) -> getPlayerResponse de la vidéo ouverte', async () => {
@@ -3003,12 +3003,12 @@ test('youtube : piste vide (jeton pot exigé) -> sous-titres activés un instant
     assert.ok(!/fmt=srv3/.test(fetches[1]));
     assert.deepEqual(plain(options), [['load', 'captions'], ['set', 'fr'], ['unload', 'captions']]);
     const off = youtubeHarness({responder: (u) => fakeResponse({body: '', url: u})});
-    assert.match((await off.h.run('export_youtube_transcript', {tabId: 1, enableCaptions: false})).error, /illisible \(réponse vide\)/);
+    assert.match((await off.h.run('export_youtube_transcript', {tabId: 1, enableCaptions: false})).error, /unreadable \(empty response\)/);
 });
 
 test('youtube : onglet hors YouTube refusé sans rien lire', async () => {
     const {h} = exportHarness();
-    assert.match((await h.run('export_youtube_transcript', {tabId: 1})).error, /n'est pas une page YouTube/);
+    assert.match((await h.run('export_youtube_transcript', {tabId: 1})).error, /is not a YouTube page/);
 });
 
 test('exports annoncés par ping (contrôle préalable de la validation réelle)', async () => {
@@ -3036,7 +3036,7 @@ test('boîtes de dialogue : seule celle de l\'onglet visé est annoncée, et ré
     const tabless = await h.run('active_tab', {});
     assert.equal(tabless.data.pendingDialogs, undefined);
     // handle_dialog sans tab_id : refusé, même avec une seule boîte ouverte ailleurs.
-    assert.match((await h.run('handle_dialog', {accept: true})).error, /précisez tab_id/);
+    assert.match((await h.run('handle_dialog', {accept: true})).error, /pass tab_id/);
     const handled = await h.run('handle_dialog', {tabId: 2, accept: true});
     assert.equal(handled.data.dialog.message, 'Enregistré');
     const answers = h.calls.filter(c => c.method === 'Page.handleJavaScriptDialog');
@@ -3062,7 +3062,7 @@ test('cdp_send : liste de commandes PERMISES, tout le reste refusé avant Chrome
     ];
     for (const method of refused) {
         const res = await h.run('cdp_send', {tabId: 1, method, commandParams: {}});
-        assert.match(res.error || '', method ? /Commande CDP refusée : .*liste des commandes permises/ : /Missing CDP method/, method);
+        assert.match(res.error || '', method ? /CDP command refused: .*list of allowed commands/ : /Missing CDP method/, method);
     }
     assert.equal(h.calls.length, 0);  // rien n'a atteint Chrome
     const allowed = ['DOM.getDocument', 'DOM.querySelector', 'DOM.describeNode', 'DOM.getBoxModel', 'Accessibility.getFullAXTree',
@@ -3110,11 +3110,11 @@ test('réseau : en-têtes masqués par motif de nom et paramètres d\'URL sensib
         assert.ok(!raw.includes(secret), secret);
     }
     const rec = res.data.requests[0];
-    assert.equal(rec.url, 'https://api.example.invalid/cb?code=[masqué]&state=ok&access_token=[masqué]&X-Amz-Signature=[masqué]' +
-        '&X-Amz-Credential=[masqué]&api_key=[masqué]&page=2#id_token=[masqué]&scope=email');
+    assert.equal(rec.url, 'https://api.example.invalid/cb?code=[masked]&state=ok&access_token=[masked]&X-Amz-Signature=[masked]' +
+        '&X-Amz-Credential=[masked]&api_key=[masked]&page=2#id_token=[masked]&scope=email');
     assert.equal(rec.requestHeaders.Accept, 'application/json');
-    assert.equal(rec.requestHeaders['X-Goog-AuthUser'], '[masqué, 1 caractères]');
-    assert.equal(rec.responseHeaders.Location, 'https://app.example.invalid/next?token=[masqué]&lang=fr');
+    assert.equal(rec.requestHeaders['X-Goog-AuthUser'], '[masked, 1 chars]');
+    assert.equal(rec.responseHeaders.Location, 'https://app.example.invalid/next?token=[masked]&lang=fr');
     assert.equal(rec.responseHeaders['Content-Type'], 'text/html');
 });
 
@@ -3140,7 +3140,7 @@ test('group_tabs : titre et couleur annoncés seulement s\'ils ont été appliqu
     assert.equal(res.data.updated, false);
     assert.equal(res.data.title, undefined);
     assert.equal(res.data.color, undefined);
-    assert.match(res.data.warning, /non appliqués.*Grouping is not supported/);
+    assert.match(res.data.warning, /not applied.*Grouping is not supported/);
     const ok = await harness().run('group_tabs', {tabIds: [1], title: 'Nexus', color: 'purple'});
     assert.deepEqual([ok.data.updated, ok.data.title, ok.data.color], [true, 'Nexus', 'purple']);
 });
@@ -3153,7 +3153,7 @@ test('capture : type MIME conforme au format demandé, format inconnu refusé', 
     assert.equal(h.calls.find(c => c.method === 'Page.captureScreenshot').params.format, 'jpeg');
     assert.equal((await h.run('screenshot', {tabId: 1, format: 'webp'})).data.mimeType, 'image/webp');
     assert.equal((await h.run('screenshot', {tabId: 1})).data.mimeType, 'image/png');
-    assert.match((await h.run('screenshot', {tabId: 1, format: 'gif'})).error, /Format de capture inconnu/);
+    assert.match((await h.run('screenshot', {tabId: 1, format: 'gif'})).error, /Unknown screenshot format/);
 });
 
 test('version annoncée lue dans le manifeste, jamais une valeur codée en dur', async () => {
@@ -3184,13 +3184,13 @@ test('propriété : l\'agent A n\'agit ni sur l\'onglet de B ni sur ceux de Juli
         ['group_tabs', (id) => ({tabIds: [id]})], ['export_content', () => ({})], ['type_keys', () => ({text: 'a'})]
     ];
     for (const [action, extra] of pageCommands) {
-        assert.match((await h.run(action, {tabId: b, ...extra(b)}, AGENT_A)).error || '', /est piloté par Codex : refusé/, `${action} sur l'onglet de B`);
-        assert.match((await h.run(action, {tabId: 1, ...extra(1)}, AGENT_A)).error || '', /aucun agent \(onglet de l'utilisateur\)/, `${action} sur l'onglet de Julien`);
+        assert.match((await h.run(action, {tabId: b, ...extra(b)}, AGENT_A)).error || '', /is driven by Codex: refused/, `${action} sur l'onglet de B`);
+        assert.match((await h.run(action, {tabId: 1, ...extra(1)}, AGENT_A)).error || '', /not driven by any agent \(user's tab\)/, `${action} sur l'onglet de Julien`);
     }
     const otherSession = {agent: 'Claude', id: 'claude-autre-session'};
-    assert.match((await h.run('click', {tabId: a, selector: 'button'}, otherSession)).error, /Claude dans une autre session/);
-    assert.match((await h.run('click', {tabId: a, selector: 'button'}, null)).error, /sans identité de client/);
-    assert.match((await h.run('click', {tabId: a, selector: 'button'}, {agent: 'Claude'})).error, /sans identité de client/);
+    assert.match((await h.run('click', {tabId: a, selector: 'button'}, otherSession)).error, /Claude in another session/);
+    assert.match((await h.run('click', {tabId: a, selector: 'button'}, null)).error, /without client identity/);
+    assert.match((await h.run('click', {tabId: a, selector: 'button'}, {agent: 'Claude'})).error, /without client identity/);
     assert.equal(h.calls.length, 0);  // rien n'a touché Chrome
     assert.equal((await h.run('evaluate', {tabId: a, code: '40 + 2'}, AGENT_A)).data, 42);
     assert.ok(h.calls.length > 0 && h.calls.every(c => c.target.tabId === a));
@@ -3210,22 +3210,22 @@ test('propriété : une boîte de dialogue n\'est annoncée qu\'au pilote de l\'
 
 test('adoption : onglet de Julien refusé par défaut, seulement avec julienAsked, visible au poste de contrôle ; jamais celui d\'un autre agent', async () => {
     const h = harness({}, {autoOwn: false, tabs: {query: async () => [{id: 1, title: 'Boîte mail', url: 'https://mail.example.invalid/#inbox?token=jeton-zzz'}]}});
-    assert.match((await h.run('adopt_tab', {tabId: 1}, AGENT_A)).error, /refusée par défaut/);
-    assert.match((await h.run('adopt_tab', {tabId: 1, julienAsked: 'true'}, AGENT_A)).error, /refusée par défaut/);  // booléen strict
+    assert.match((await h.run('adopt_tab', {tabId: 1}, AGENT_A)).error, /refused by default/);
+    assert.match((await h.run('adopt_tab', {tabId: 1, julienAsked: 'true'}, AGENT_A)).error, /refused by default/);  // booléen strict
     assert.equal((await h.run('adopt_tab', {tabId: 1, julienAsked: true}, AGENT_A)).data.adopted, true);
-    assert.match((await h.run('adopt_tab', {tabId: 1, julienAsked: true}, AGENT_B)).error, /piloté par Claude/);
+    assert.match((await h.run('adopt_tab', {tabId: 1, julienAsked: true}, AGENT_B)).error, /driven by Claude/);
     assert.equal((await h.run('evaluate', {tabId: 1, code: '2'}, AGENT_A)).data, 2);
     const state = await h.sendMessage({target: 'background', getControlState: true});
     assert.deepEqual(plain(state.tabs.map(t => [t.tabId, t.agent, t.adopted])), [[1, 'Claude', true]]);
     assert.ok(!JSON.stringify(state).includes('jeton-zzz'));
     assert.equal((await h.run('release_tab', {tabId: 1}, AGENT_A)).data.released, true);
     assert.ok(h.detached.includes(1));
-    assert.match((await h.run('evaluate', {tabId: 1, code: '3'}, AGENT_A)).error, /onglet de l'utilisateur/);
+    assert.match((await h.run('evaluate', {tabId: 1, code: '3'}, AGENT_A)).error, /user's tab/);
     // userAsked : nom neutre de julienAsked (même sens).
     assert.equal((await h.run('adopt_tab', {tabId: 1, userAsked: true}, AGENT_A)).data.adopted, true);
     assert.equal((await h.run('release_tab', {tabId: 1}, AGENT_A)).data.released, true);
     const shielded = harness({}, {autoOwn: false, tabs: {get: async (id) => ({id, url: 'chrome://settings', windowId: 10})}});
-    assert.match((await shielded.run('adopt_tab', {tabId: 9, julienAsked: true}, AGENT_A)).error, /protégé/);
+    assert.match((await shielded.run('adopt_tab', {tabId: 9, julienAsked: true}, AGENT_A)).error, /protected/);
 });
 
 test('propriété conservée après redémarrage du service worker (chrome.storage.session), oubliée si l\'onglet a disparu', async () => {
@@ -3235,9 +3235,9 @@ test('propriété conservée après redémarrage du service worker (chrome.stora
     assert.equal(first.sessionData.nexusBrowserTabOwners['300'].agent, 'Claude');
     const restarted = harness({}, {autoOwn: false, tabs, sessionStorage: first.sessionData});
     assert.equal((await restarted.run('evaluate', {tabId: 300, code: '4'}, AGENT_A)).data, 4);
-    assert.match((await restarted.run('evaluate', {tabId: 300, code: '4'}, AGENT_B)).error, /piloté par Claude/);
+    assert.match((await restarted.run('evaluate', {tabId: 300, code: '4'}, AGENT_B)).error, /driven by Claude/);
     const gone = harness({}, {autoOwn: false, tabs: {...tabs, query: async () => []}, sessionStorage: first.sessionData});
-    assert.match((await gone.run('evaluate', {tabId: 300, code: '4'}, AGENT_A)).error, /onglet de l'utilisateur/);
+    assert.match((await gone.run('evaluate', {tabId: 300, code: '4'}, AGENT_A)).error, /user's tab/);
 });
 
 test('réseau : champs secrets des corps masqués à toute profondeur (JSON, préfixe XSSI, formulaire, JSON tronqué)', async () => {
@@ -3261,19 +3261,19 @@ test('réseau : champs secrets des corps masqués à toute profondeur (JSON, pr�
     const read = async (id) => (await h.run('network_response', {tabId: 1, request_id: id})).data;
     const oauth = await read('oauth');
     const parsed = JSON.parse(oauth.body);
-    assert.equal(parsed.access_token, '[masqué, 12 caractères]');
+    assert.equal(parsed.access_token, '[masked, 12 chars]');
     assert.equal(parsed.token_type, 'Bearer');
     assert.equal(parsed.expires_in, 3599);
     assert.equal(parsed.user.name, 'Julien');
-    assert.equal(parsed.user.session, '[masqué]');
+    assert.equal(parsed.user.session, '[masked]');
     assert.equal(parsed.message, 'ok');
     assert.equal(oauth.masked, 8);
     const xssi = await read('xssi');
     assert.ok(xssi.body.startsWith(")]}'\n"));
     assert.equal(JSON.parse(xssi.body.slice(5)).data.title, 'Doc');
-    assert.equal((await read('form')).body, 'grant_type=refresh_token&refresh_token=[masqué]&client_secret=[masqué]&scope=email');
+    assert.equal((await read('form')).body, 'grant_type=refresh_token&refresh_token=[masked]&client_secret=[masked]&scope=email');
     const cut = await read('cut');
-    assert.match(cut.body, /"access_token":"\[masqué, 8 caractères\]"/);
+    assert.match(cut.body, /"access_token":"\[masked, 8 chars\]"/);
     const page = await read('page');
     assert.match(page.body, /"lang": "fr"/);
     for (const id of Object.keys(bodies)) {
@@ -3290,13 +3290,13 @@ test('arrêt d\'urgence : la frappe touche par touche s\'interrompt au caractèr
     }});
     ref = h;
     const res = await h.run('fill', {tabId: 1, locator: {placeholder: 'Rechercher'}, value: 'Bonjour le monde', perKey: true});
-    assert.match(res.error, /Arrêt d'urgence/);
+    assert.match(res.error, /Emergency stop/);
     const keys = h.keyboard().filter(k => k.method === 'Input.dispatchKeyEvent');
     assert.equal(keys.filter(k => k.type === 'keyDown').length, 3);  // et non 16
     assert.equal(keys.at(-1).type, 'keyUp');
     assert.ok(dom.byId('search').value.length < 'Bonjour le monde'.length);
     // Pendant l'arrêt : actions refusées, lectures permises, débogueurs détachés.
-    assert.match((await h.run('click', {tabId: 1, locator: {testId: 'submit-zone'}})).error, /Arrêt d'urgence/);
+    assert.match((await h.run('click', {tabId: 1, locator: {testId: 'submit-zone'}})).error, /Emergency stop/);
     assert.equal((await h.run('list_tabs', {})).error, undefined);
     assert.ok(h.detached.includes(1));
     assert.ok(h.sessionData.nexusBrowserStopUntil > Date.now());
@@ -3311,7 +3311,7 @@ test('arrêt d\'urgence : le glisser en cours s\'arrête et le bouton est relâc
     }});
     ref = h;
     const res = await h.run('drag_and_drop', {tabId: 1, from_selector: '#source', to_selector: '#zone', steps: 10, delayMs: 0});
-    assert.match(res.error, /Arrêt d'urgence/);
+    assert.match(res.error, /Emergency stop/);
     const mouse = h.mouse();
     assert.equal(mouse.filter(e => e.type === 'mouseMoved' && e.buttons === 1).length, 2);  // et non 10
     assert.deepEqual([mouse.at(-1).type, mouse.at(-1).buttons], ['mouseReleased', 0]);
@@ -3324,7 +3324,7 @@ test('arrêt d\'urgence : une attente (chargement) en cours est interrompue', as
     await settle();
     await h.run('emergency_stop', {hold_s: 120}, null);  // commande signée du pont, sans client
     const res = await waiting;
-    assert.match(res.error, /Arrêt d'urgence/);
+    assert.match(res.error, /Emergency stop/);
 });
 
 test('repli windows.create : id de l\'ONGLET créé (relu par tabs.query), jamais celui de la fenêtre', async () => {
@@ -3338,7 +3338,7 @@ test('repli windows.create : id de l\'ONGLET créé (relu par tabs.query), jamai
     assert.equal(h.owners()['121'].agent, 'Claude');
     assert.equal(h.owners()['12'], undefined);
     const none = harness({}, {autoOwn: false, windows: windows(13), tabs: {create: async () => { throw new Error('x'); }, query: async () => []}});
-    assert.match((await none.run('create_tab', {url: 'https://x.invalid', group: false}, AGENT_A)).error, /onglet est introuvable/);
+    assert.match((await none.run('create_tab', {url: 'https://x.invalid', group: false}, AGENT_A)).error, /tab was not found/);
     assert.deepEqual(none.owners(), {});
 });
 
@@ -3419,8 +3419,8 @@ test('monde isolé : une page qui remplace __nexus_som_elements, __nexusBrowserM
 test('navigation : jamais de fichier local ni de page interne (file://, chrome://, javascript:)', async () => {
     const h = harness();
     for (const url of ['file:///C:/Users/user/.ssh/id_ed25519', 'FILE:///c:/x', 'chrome://settings', 'javascript:alert(1)', 'view-source:https://x.invalid', 'devtools://devtools']) {
-        assert.match((await h.run('navigate', {tabId: 1, url})).error, /Adresse refusée/, url);
-        assert.match((await h.run('create_tab', {url})).error, /Adresse refusée/, url);
+        assert.match((await h.run('navigate', {tabId: 1, url})).error, /URL refused/, url);
+        assert.match((await h.run('create_tab', {url})).error, /URL refused/, url);
     }
     assert.equal(h.focusCalls.tabs, 0);
     assert.equal((await h.run('navigate', {tabId: 1, url: 'https://example.com/'})).error, undefined);
@@ -3441,7 +3441,7 @@ test('poste de contrôle : onglets pilotés par agent, état du débogueur, rend
     const released = await h.sendMessage({target: 'background', panelRelease: 400});
     assert.equal(released.previousOwner, 'Claude');
     assert.ok(h.detached.includes(400));
-    assert.match((await h.run('evaluate', {tabId: 400, code: '1'}, AGENT_A)).error, /onglet de l'utilisateur/);
+    assert.match((await h.run('evaluate', {tabId: 400, code: '1'}, AGENT_A)).error, /user's tab/);
     assert.deepEqual(Object.keys(h.owners()), ['401']);
     // Pastille : message de l'extension au cadre principal (jamais un événement de la page).
     assert.ok(h.tabMessages.some(m => m.tabId === 400 && m.message.nexusPill?.agent === 'Claude' && m.options.frameId === 0));
@@ -3590,7 +3590,7 @@ test('panneau Antigravity : demande → événement signé au pont (identité, i
         // Un agent ne parle jamais à la place d'Antigravity (commande réservée au pont, sans identité de client).
         server.send({requestId: 'u2', action: 'agy_panel_update', params: {reply: {id: 'X', reply_to: 'R1', text: 'faux'}}, client: TEST_CLIENT});
         await until(() => server.replies().some(r => r.requestId === 'u2'), 'refus');
-        assert.match(server.replies().find(r => r.requestId === 'u2').error, /réservée au pont/);
+        assert.match(server.replies().find(r => r.requestId === 'u2').error, /reserved for the bridge/);
         server.send({requestId: 'u3', action: 'agy_panel_update', params: {reply: {id: 'A1', from: 'antigravity', reply_to: 'R1', request_id: asked.localId, text: 'Formulaire rempli.'}}});
         await until(() => server.replies().some(r => r.requestId === 'u3'), 'réponse');
         assert.deepEqual(plain(h.localData.agyChat.map(e => [e.kind, e.status || e.text])), [['ask', 'answered'], ['reply', 'Formulaire rempli.']]);
@@ -3636,20 +3636,20 @@ test('panneau Antigravity : adoption issue du panneau = accord de CETTE demande,
     const adopt = (params) => h.run('adopt_tab', {tabId: 7, ...params}, agy);
     // Route par fragment : #/fiche/B est un autre dossier.
     url = 'https://dossiers.invalid/app#/fiche/B';
-    assert.match((await adopt({panelRequest: asked.localId})).error, /changé de page/);
+    assert.match((await adopt({panelRequest: asked.localId})).error, /moved to another page/);
     url = 'https://dossiers.invalid/app#/fiche/A';
-    assert.match((await adopt({panelRequest: 'autre-demande-0000'})).error, /aucune demande du panneau/);
-    assert.match((await h.run('adopt_tab', {tabId: 8, panelRequest: asked.localId}, agy)).error, /visait l'onglet 7/);
+    assert.match((await adopt({panelRequest: 'autre-demande-0000'})).error, /no pending side panel request/);
+    assert.match((await h.run('adopt_tab', {tabId: 8, panelRequest: asked.localId}, agy)).error, /was for tab 7/);
     assert.equal((await adopt({panelRequest: asked.localId})).data.adopted, true);
     // Déjà adopté puis navigation : le contrôle passe avant « already ».
     url = 'https://dossiers.invalid/app#/fiche/B';
-    assert.match((await adopt({panelRequest: asked.localId})).error, /changé de page/);
+    assert.match((await adopt({panelRequest: asked.localId})).error, /moved to another page/);
     // Accord expiré, ou effacé au rechargement de l'extension : refus explicite.
     h.sessionData.agyGrants[asked.localId].until = 0;
     url = 'https://dossiers.invalid/app#/fiche/A';
-    assert.match((await adopt({panelRequest: asked.localId})).error, /expiré/);
+    assert.match((await adopt({panelRequest: asked.localId})).error, /expired/);
     delete h.sessionData.agyGrants;
-    assert.match((await adopt({panelRequest: asked.localId})).error, /aucune demande du panneau/);
+    assert.match((await adopt({panelRequest: asked.localId})).error, /no pending side panel request/);
     // Hors panneau (Julien l'a demandé ailleurs) : aucun accord du panneau ne s'en mêle.
     assert.equal((await h.run('adopt_tab', {tabId: 12, julienAsked: true}, agy)).data.adopted, true);
 });
@@ -3673,7 +3673,7 @@ test('panneau Antigravity : page changée pendant la frappe → rien ne part ; p
     const agy = {agent: 'Antigravity', id: 'antigravity-aaaa1111'};
     afterReads = reads + 3;  // résolution, lecture avant l'accord, relecture après l'enregistrement
     const res = await h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, agy);
-    assert.match(res.error, /changé de page/);
+    assert.match(res.error, /moved to another page/);
     assert.deepEqual(Object.keys(h.owners()), []);  // propriété retirée
 });
 
@@ -3746,16 +3746,16 @@ test('2.1 orphelins : processus disparu (signalé par le pont) -> onglets repris
     // Serveur MCP redémarré : le pont signale que le processus de l'ancienne session ne tourne plus.
     const listed = (await h.run('list_tabs', {}, fresh, {gone: ['claude-ancienne-1']})).data;
     assert.deepEqual(plain(listed.map(t => [t.id, t.state, t.mine])),
-        [[1, 'julien', false], [500, 'orphan', false], [501, 'orphan', false], [502, 'other', false], [503, 'other', false]]);
+        [[1, 'user', false], [500, 'orphan', false], [501, 'orphan', false], [502, 'other', false], [503, 'other', false]]);
     assert.ok(!JSON.stringify(listed).includes('claude-ancienne-1'));  // jamais l'identifiant d'une session
     // Un autre agent ne prend, ne ferme ni ne rend jamais l'orphelin de Claude.
     assert.deepEqual(plain((await h.run('list_tabs', {}, AGENT_B)).data.map(t => [t.id, t.state])),
-        [[1, 'julien'], [500, 'other'], [501, 'other'], [502, 'other'], [503, 'mine']]);
+        [[1, 'user'], [500, 'other'], [501, 'other'], [502, 'other'], [503, 'mine']]);
     for (const action of ['adopt_tab', 'close_tab', 'release_tab', 'click']) {
-        assert.match((await h.run(action, {tabId: 500, selector: 'b'}, AGENT_B)).error || '', /piloté par Claude : refusé/, action);
+        assert.match((await h.run(action, {tabId: 500, selector: 'b'}, AGENT_B)).error || '', /driven by Claude: refused/, action);
     }
     // Commande de page sur l'orphelin sans le reprendre : refus qui dit comment faire, rien dans Chrome.
-    assert.match((await h.run('click', {tabId: 500, selector: 'button'}, fresh)).error, /orphelin.*browser_adopt_tab\(tab_id\)/);
+    assert.match((await h.run('click', {tabId: 500, selector: 'button'}, fresh)).error, /orphaned.*browser_adopt_tab\(tab_id\)/);
     assert.equal(h.calls.length, 0);
     // Reprise sans julien_asked, puis pilotage normal.
     const reclaimed = (await h.run('adopt_tab', {tabId: 500}, fresh)).data;
@@ -3766,11 +3766,11 @@ test('2.1 orphelins : processus disparu (signalé par le pont) -> onglets repris
     assert.deepEqual(Object.keys(h.owners()).sort(), ['500', '502', '503']);
     // Session vivante du même agent (autre conversation) : toujours protégée.
     for (const action of ['adopt_tab', 'close_tab', 'release_tab', 'evaluate']) {
-        assert.match((await h.run(action, {tabId: 502, code: '1'}, fresh)).error || '', /Claude dans une autre session : refusé/, action);
+        assert.match((await h.run(action, {tabId: 502, code: '1'}, fresh)).error || '', /Claude in another session: refused/, action);
     }
     assert.equal(h.owners()['502'].client, 'claude-vivante-3');
     // L'onglet de Julien reste soumis à julien_asked.
-    assert.match((await h.run('adopt_tab', {tabId: 1}, fresh)).error, /refusée par défaut/);
+    assert.match((await h.run('adopt_tab', {tabId: 1}, fresh)).error, /refused by default/);
 });
 
 test('2.1 orphelins : fermeture permise, mort retenue après redémarrage du service worker, « gone » jamais lu dans les paramètres', async () => {
@@ -3782,11 +3782,11 @@ test('2.1 orphelins : fermeture permise, mort retenue après redémarrage du ser
     await h.run('create_tab', {url: 'https://a.invalid', group: false}, old);
     await h.run('create_tab', {url: 'https://b.invalid', group: false}, old);
     // Paramètre forgé : sans effet (seul le pont pose « gone », à côté de la commande).
-    assert.match((await h.run('close_tab', {tabId: 520, gone: ['codex-ancienne-1']}, fresh)).error, /Codex dans une autre session/);
+    assert.match((await h.run('close_tab', {tabId: 520, gone: ['codex-ancienne-1']}, fresh)).error, /Codex in another session/);
     await h.run('list_tabs', {}, fresh, {gone: ['codex-ancienne-1', 'codex-nouvelle-2']});  // jamais soi-même
     assert.equal((await h.run('close_tab', {tabId: 520}, fresh)).data.closedTabId, 520);
     const restarted = harness({}, {autoOwn: false, tabs, sessionStorage: h.sessionData});
-    assert.deepEqual(plain((await restarted.run('list_tabs', {}, fresh)).data.map(t => [t.id, t.state])), [[520, 'julien'], [521, 'orphan']]);
+    assert.deepEqual(plain((await restarted.run('list_tabs', {}, fresh)).data.map(t => [t.id, t.state])), [[520, 'user'], [521, 'orphan']]);
     assert.equal((await restarted.run('adopt_tab', {tabId: 521}, fresh)).data.reclaimed, true);
     assert.equal((await restarted.run('evaluate', {tabId: 521, code: '1'}, fresh)).data, 1);
 });
@@ -3799,16 +3799,16 @@ test('2.1 orphelins : silence de plus de 1,618 x 60 s -> session morte ; un batt
     const fresh = {agent: 'Antigravity', id: 'antigravity-nouvelle-2'};
     await h.run('create_tab', {url: 'https://a.invalid', group: false}, quiet);
     h.advanceTime(60000);
-    assert.match((await h.run('adopt_tab', {tabId: 600}, fresh)).error, /dans une autre session/);
+    assert.match((await h.run('adopt_tab', {tabId: 600}, fresh)).error, /in another session/);
     assert.equal((await h.run('heartbeat', {}, quiet)).data.alive, true);  // battement à 60 s
     h.advanceTime(80000);  // 140 s depuis l'ouverture, 80 s depuis le battement : encore vivante
-    assert.match((await h.run('adopt_tab', {tabId: 600}, fresh)).error, /dans une autre session/);
+    assert.match((await h.run('adopt_tab', {tabId: 600}, fresh)).error, /in another session/);
     h.advanceTime(30000);  // 110 s sans signe de vie (plus de 97 s) : morte
     assert.equal((await h.run('list_tabs', {}, fresh)).data[0].state, 'orphan');
     assert.equal((await h.run('adopt_tab', {tabId: 600}, fresh)).data.reclaimed, true);
     assert.equal(h.owners()['600'].client, 'antigravity-nouvelle-2');
     // L'ancienne session qui revient (fausse alerte) ne reprend pas l'onglet d'une session vivante.
-    assert.match((await h.run('adopt_tab', {tabId: 600}, quiet)).error, /dans une autre session/);
+    assert.match((await h.run('adopt_tab', {tabId: 600}, quiet)).error, /in another session/);
 });
 
 test('2.1 démarrage : le premier battement reprend les orphelins de l\'agent s\'il n\'en a aucun ; jamais ceux d\'un autre agent ni d\'une session vivante', async () => {
@@ -3858,9 +3858,9 @@ test('2.2 cdp_send Runtime.evaluate : monde de la PAGE sur demande explicite (wo
     assert.equal(call.params.contextId, undefined);  // contexte par défaut du cadre principal : la page
     assert.equal(call.params.uniqueContextId, undefined);
     assert.equal(call.params.includeCommandLineAPI, false);
-    assert.match((await h.run('cdp_send', {tabId: 1, method: 'Runtime.evaluate', world: 'main', commandParams: {expression: '1'}})).error, /world invalide/);
-    assert.match((await h.run('cdp_send', {tabId: 1, method: 'DOM.getDocument', world: 'page'})).error, /ne vaut que pour Runtime.evaluate/);
-    assert.match((await h.run('cdp_send', {tabId: 1, method: 'Page.navigate', world: 'page', commandParams: {url: 'file:///C:/'}})).error, /Commande CDP refusée/);
+    assert.match((await h.run('cdp_send', {tabId: 1, method: 'Runtime.evaluate', world: 'main', commandParams: {expression: '1'}})).error, /Invalid world/);
+    assert.match((await h.run('cdp_send', {tabId: 1, method: 'DOM.getDocument', world: 'page'})).error, /applies only to Runtime.evaluate/);
+    assert.match((await h.run('cdp_send', {tabId: 1, method: 'Page.navigate', world: 'page', commandParams: {url: 'file:///C:/'}})).error, /CDP command refused/);
 });
 
 test('2.3 cookies : include_values seulement pour localhost, 127.0.0.1, [::1], *.localhost, *.test ; valeurs des seuls domaines locaux', async () => {
@@ -3882,10 +3882,10 @@ test('2.3 cookies : include_values seulement pour localhost, 127.0.0.1, [::1], *
         assert.equal((await h.run('get_cookies', {tabId: 1, includeValues: true, urls: [url]})).data.valuesIncluded, true, url);
     }
     for (const url of ['https://localhost.evil.com/', 'http://127.0.0.1.nip.io/', 'https://test.example.com/', 'file:///C:/x', 'http://127.0.0.2/']) {
-        assert.match((await h.run('get_cookies', {tabId: 1, includeValues: true, urls: [url]})).error, /origine locale de développement/, url);
+        assert.match((await h.run('get_cookies', {tabId: 1, includeValues: true, urls: [url]})).error, /local development origin/, url);
     }
     tabUrl = 'https://mail.google.com/';
-    assert.match((await h.run('get_cookies', {tabId: 1, include_values: true})).error, /origine locale de développement/);
+    assert.match((await h.run('get_cookies', {tabId: 1, include_values: true})).error, /local development origin/);
     assert.equal((await h.run('get_cookies', {tabId: 1})).data.valuesIncluded, false);
 });
 
@@ -3926,9 +3926,9 @@ test('2.4 réseau : pagination et compteurs de jetons jamais masqués (Google, O
     const ambiguous = await json('ambiguous');
     assert.deepEqual(plain([ambiguous.sessionCount, ambiguous.sessionState]), [3, {active: true}]);
     assert.equal((await read('ambiguous')).masked, 5);  // resumeToken, pageToken (format GitHub), access_tokens, deviceTokens, token
-    assert.equal((await read('form')).body, 'pageToken=CAUQAA&max_tokens=100&access_token=[masqué]&nextPageToken=CAoQAQ');
+    assert.equal((await read('form')).body, 'pageToken=CAUQAA&max_tokens=100&access_token=[masked]&nextPageToken=CAoQAQ');
     const cut = (await read('cut')).body;
-    assert.match(cut, /"nextPageToken":"CAUQAA","total_tokens":21,"refresh_token":"\[masqué, 7 caractères\]"/);
+    assert.match(cut, /"nextPageToken":"CAUQAA","total_tokens":21,"refresh_token":"\[masked, 7 chars\]"/);
     for (const id of Object.keys(bodies)) {
         const raw = JSON.stringify(await read(id));
         for (const letter of 'ABCDEFGHIJ') assert.ok(!raw.includes(`SECRET${letter}`), `${id} : SECRET${letter}`);
@@ -3963,17 +3963,17 @@ test('2.8 content et vision_inspect : jamais la valeur d\'un mot de passe, d\'un
     const content = await h.run('get_content', {tabId: 1, mode: 'interactive'});
     assert.deepEqual(leaks(content), []);
     const byId = Object.fromEntries(content.data.elements.map(e => [e.id, e]));
-    for (const id of ['pw', 'shown', 'new', 'otp', 'card', 'cvc']) assert.equal(byId[id].value, '[valeur masquée]', id);
+    for (const id of ['pw', 'shown', 'new', 'otp', 'card', 'cvc']) assert.equal(byId[id].value, '[masked value]', id);
     assert.equal(byId.user.text, 'julien');  // champ ordinaire : valeur gardée
     assert.equal(byId.new.text, 'Nouveau');  // libellé à la place de la valeur
     dom.doc.createElement = () => ({style: {}, remove() {}});
     dom.html.appendChild = () => {};
     const vision = await h.run('vision_inspect', {tabId: 1});
     assert.deepEqual(leaks(vision), []);
-    assert.ok(vision.data.markers.filter(m => m.value === '[valeur masquée]').length >= 6);
+    assert.ok(vision.data.markers.filter(m => m.value === '[masked value]').length >= 6);
     const found = await h.run('find', {tabId: 1, locator: {label: 'Mot de passe'}});
     assert.equal(found.data.count, 2);
-    assert.ok(found.data.candidates.every(c => c.value === '[valeur masquée]'));
+    assert.ok(found.data.candidates.every(c => c.value === '[masked value]'));
     assert.deepEqual(leaks(found), []);
     assert.equal((await h.run('find', {tabId: 1, locator: {label: 'Identifiant'}})).data.candidates[0].value, 'julien');
 });
@@ -3990,7 +3990,7 @@ test('2.8 content html : attribut value d\'un champ sensible masqué dans une co
     }}});
     const res = await h.run('get_content', {tabId: 1, mode: 'html'});
     assert.deepEqual(leaks(res), []);
-    assert.match(res.data, /type="password" value="\[valeur masquée\]"/);
+    assert.match(res.data, /type="password" value="\[masked value\]"/);
     assert.match(res.data, /value="julien"/);
     assert.equal(page[0].attrs.value, 'MotDePasse!1');  // la page n'est pas modifiée
 });
@@ -3999,15 +3999,15 @@ test('2.8 fill dans un mot de passe : frappe réelle et relue, valeur jamais ren
     const {h, dom} = richHarness(secretPage);
     const res = await h.run('fill', {tabId: 1, selector: '#pw', value: 'NouveauSecret!7'});
     assert.equal(res.data.verified, true);
-    assert.equal(res.data.value, '[valeur masquée]');
+    assert.equal(res.data.value, '[masked value]');
     assert.equal(dom.byId('pw').value, 'NouveauSecret!7');
     assert.ok(!JSON.stringify(res).includes('NouveauSecret!7'));
     // Valeur réécrite par la page : non vérifiée, ni la valeur relue ni l'attendue ne sortent.
     dom.byId('card').hooks.input = () => { dom.byId('card')._value = dom.byId('card')._value.replace(/\s/g, ''); };
     const card = await h.run('fill', {tabId: 1, selector: '#card', value: '4970 1012'});
     assert.equal(card.data.verified, false);
-    assert.equal(card.data.value, '[valeur masquée]');
-    assert.equal(card.data.expected, '[valeur masquée]');
+    assert.equal(card.data.value, '[masked value]');
+    assert.equal(card.data.expected, '[masked value]');
     assert.ok(!JSON.stringify(card).includes('4970'));
     const plainField = await h.run('fill', {tabId: 1, selector: '#user', value: 'julien.piron'});
     assert.equal(plainField.data.value, 'julien.piron');  // champ ordinaire : valeur relue renvoyée
@@ -4015,7 +4015,7 @@ test('2.8 fill dans un mot de passe : frappe réelle et relue, valeur jamais ren
     const h2 = harness(dom2.page, {attachError: 'Cannot attach to this target.'});
     const fallback = await h2.run('fill', {tabId: 1, selector: '#otp', value: 'Otp999111'});
     assert.equal(fallback.data.method, 'js_fallback');
-    assert.equal(fallback.data.value, '[valeur masquée]');
+    assert.equal(fallback.data.value, '[masked value]');
     assert.equal(dom2.byId('otp').value, 'Otp999111');
     assert.ok(!JSON.stringify(fallback).includes('Otp999111'));
 });
@@ -4024,7 +4024,7 @@ test('2.8 cdp_send Page.reload : scriptToEvaluateOnLoad refusé avant Chrome, re
     const h = harness();
     for (const script of ['alert(document.cookie)', '', null]) {
         const res = await h.run('cdp_send', {tabId: 1, method: 'Page.reload', commandParams: {ignoreCache: true, scriptToEvaluateOnLoad: script}});
-        assert.match(res.error || '', /Commande CDP refusée : Page\.reload avec scriptToEvaluateOnLoad/, String(script));
+        assert.match(res.error || '', /CDP command refused: Page\.reload with scriptToEvaluateOnLoad/, String(script));
     }
     assert.equal(h.calls.length, 0);  // rien n'a atteint Chrome
     assert.equal((await h.run('cdp_send', {tabId: 1, method: 'Page.reload', commandParams: {ignoreCache: true}})).error, undefined);
@@ -4067,11 +4067,11 @@ test('2.8 axtree : valeur d\'une carte ou d\'un code masquée (Chrome ne masque 
     const res = await h.run('axtree', {tabId: 1});
     assert.deepEqual(leaks(res), []);
     assert.deepEqual(plain(res.data.nodes.filter(n => n.nodeId.startsWith('1')).map(n => [n.role, n.name])),
-        [['textbox', 'Carte'], ['StaticText', '[valeur masquée]'], ['InlineTextBox', '[valeur masquée]']]);
+        [['textbox', 'Carte'], ['StaticText', '[masked value]'], ['InlineTextBox', '[masked value]']]);
     assert.equal(res.data.nodes.find(n => n.nodeId === '3a').name, 'Texte de la page');
     const values = Object.fromEntries(res.data.nodes.filter(n => n.role === 'textbox').map(n => [n.name, n.value]));
-    assert.deepEqual(plain(values), {Carte: '[valeur masquée]', Code: '[valeur masquée]', Identifiant: 'julien',
-        'Mot de passe': '[valeur masquée]', Illisible: '[valeur masquée]'});
+    assert.deepEqual(plain(values), {Carte: '[masked value]', Code: '[masked value]', Identifiant: 'julien',
+        'Mot de passe': '[masked value]', Illisible: '[masked value]'});
 });
 
 test('2.8 revue d\'Antigravity : texte rendu d\'un champ sensible, bouton « afficher » sans autocomplete, composants', async () => {
@@ -4096,14 +4096,14 @@ test('2.8 revue d\'Antigravity : texte rendu d\'un champ sensible, bouton « aff
         if (method === 'DOM.describeNode') return {node: {nodeName: 'STRIPE-CARD-NUMBER', attributes: ['autocomplete', 'cc-number']}};
         return undefined;
     }});
-    assert.equal((await h2.run('axtree', {tabId: 1})).data.nodes[0].value, '[valeur masquée]');
+    assert.equal((await h2.run('axtree', {tabId: 1})).data.nodes[0].value, '[masked value]');
     // HTML : attribut value d'un composant sensible.
     const comp = {tagName: 'X-CARD', attrs: {autocomplete: 'cc-csc', value: 'Cvc737'},
         getAttribute(n) { return n in this.attrs ? this.attrs[n] : null; }, setAttribute(n, v) { this.attrs[n] = String(v); }};
     const h3 = harness({document: {documentElement: {cloneNode: () => ({
         querySelectorAll: (sel) => (sel === '[value]' ? [comp] : []), get outerHTML() { return `<x-card value="${comp.attrs.value}">`; }
     })}}});
-    assert.equal((await h3.run('get_content', {tabId: 1, mode: 'html'})).data, '<x-card value="[valeur masquée]">');
+    assert.equal((await h3.run('get_content', {tabId: 1, mode: 'html'})).data, '<x-card value="[masked value]">');
 });
 
 // =============================================================================
@@ -4198,10 +4198,10 @@ test('2.9 journal réseau : carte, cryptogramme, code et IBAN masqués dans les 
     await h.emit(1, 'Network.loadingFinished', {requestId: 'pay', timestamp: 2, encodedDataLength: 10});
     const read = (await h.run('network_response', {tabId: 1, request_id: 'pay'})).data;
     const parsed = JSON.parse(read.body);
-    for (const key of ['cardNumber', 'card_cvc', 'securityCode', 'otp', 'iban', 'pin']) assert.match(String(parsed[key]), /^\[masqué/, key);
+    for (const key of ['cardNumber', 'card_cvc', 'securityCode', 'otp', 'iban', 'pin']) assert.match(String(parsed[key]), /^\[masked/, key);
     assert.equal(parsed.amount, 42);
     const list = (await h.run('network_requests', {tabId: 1})).data.requests;
-    assert.equal(list[0].url, 'https://x.invalid/pay?cc_number=[masqué]&lang=fr');
+    assert.equal(list[0].url, 'https://x.invalid/pay?cc_number=[masked]&lang=fr');
 });
 
 // =============================================================================
@@ -4405,7 +4405,7 @@ test('panneau Antigravity (Codex 5e passe, P1) : Julien change de page pendant l
     listeners.onCommitted[0]({tabId: 7, ...julienTyped});
     await settleWorker();
     gate.release();
-    assert.match((await adoption).error, /changé de page pendant l'adoption/);
+    assert.match((await adoption).error, /moved to another page during the adoption/);
     assert.deepEqual(Object.keys(h.owners()), []);
     assert.ok((await h.run('click', {tabId: 7, selector: 'button'}, agy)).error);
     assert.equal(h.clicks, 0);
@@ -4444,7 +4444,7 @@ test('panneau Antigravity (Codex 5e passe, P1) : refus tardif sur un onglet déj
     const before = h.owners()['7'];
     const asked = await h.sendMessage({target: 'background', agyAsk: {text: 'Remplis', tabId: 7, expectUrl: 'https://a.invalid/a'}});
     bAfter = reads + 3;  // la relecture après l'enregistrement voit une autre page (navigation du travail, pas de Julien)
-    assert.match((await h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, agy)).error, /changé de page/);
+    assert.match((await h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, agy)).error, /moved to another page/);
     assert.deepEqual(h.owners()['7'], before);
 });
 

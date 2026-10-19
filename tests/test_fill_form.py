@@ -31,7 +31,7 @@ class Page:
         mark = params["mark"]
         if action == "field-state":
             if mark in self.detached:
-                raise RuntimeError("Champ retiré ou remplacé par la page depuis le geste")
+                raise RuntimeError("Field removed or replaced by the page since the gesture")
             ((kind, value),) = params["expect"].items()
             current = self.fields.get(mark)
             return {"verified": current == value, "value" if kind != "checked" else "checked": current}
@@ -107,7 +107,7 @@ def test_everything_is_validated_before_the_first_gesture(page):
 def test_a_dialog_stops_the_batch_and_is_reported(page):
     page.dialog_on = 2
     result = run([{"mark": 1, "value": "Marie"}, {"mark": 2, "value": "Lyon"}, {"mark": 3, "value": "1"}])
-    assert result["status"] == "error" and "dialogue" in result["error"]
+    assert result["status"] == "error" and "dialog" in result["error"]
     last = result["data"]["fields"][-1]
     assert last["ok"] is False and last["dialogOpened"] is True and last["dialog"]["message"] == "Sûr ?"
     assert 3 not in page.fields and result["data"]["all_verified"] is False
@@ -116,7 +116,7 @@ def test_a_dialog_stops_the_batch_and_is_reported(page):
 def test_a_refused_value_stops_before_the_next_field(page):
     page.refuse.add(2)
     result = run([{"mark": 2, "value": "Lyon"}, {"mark": 3, "value": "69001"}])
-    assert result["status"] == "error" and "non confirmée" in result["error"]
+    assert result["status"] == "error" and "not confirmed" in result["error"]
     assert 3 not in page.fields
 
 
@@ -130,7 +130,7 @@ def test_an_option_put_back_by_the_page_is_not_verified(page):
 def test_a_field_changed_by_a_later_field_fails_the_final_read(page):
     page.after[3] = (2, "Paris")
     result = run([{"mark": 2, "value": "Lyon"}, {"mark": 3, "value": "69001"}])
-    assert result["status"] == "error" and "relecture finale" in result["error"] and "« #2 »" in result["error"]
+    assert result["status"] == "error" and "Final read-back" in result["error"] and '"#2"' in result["error"]
     ville = result["data"]["fields"][0]
     assert ville["verified"] is True and ville["final_verified"] is False and ville["final"]["value"] == "Paris"
     assert result["data"]["all_verified"] is False
@@ -139,12 +139,12 @@ def test_a_field_changed_by_a_later_field_fails_the_final_read(page):
 def test_a_field_replaced_by_the_page_fails_the_final_read(page):
     page.replaces[3] = 2  # remplir le code postal fait recréer le champ Ville par la page
     result = run([{"mark": 2, "value": "Lyon"}, {"mark": 3, "value": "69001"}])
-    assert result["status"] == "error" and "« #2 »" in result["error"]
-    assert result["data"]["fields"][0]["final"]["error"].startswith("Champ retiré")
+    assert result["status"] == "error" and '"#2"' in result["error"]
+    assert result["data"]["fields"][0]["final"]["error"].startswith("Field removed")
 
 
 def test_the_emergency_stop_is_checked_before_each_field(page, monkeypatch):
-    checks = iter([None, RuntimeError("Arrêt d'urgence de Julien")])
+    checks = iter([None, RuntimeError("Emergency stop requested by the user")])
 
     def stop():
         outcome = next(checks)
@@ -153,7 +153,7 @@ def test_the_emergency_stop_is_checked_before_each_field(page, monkeypatch):
 
     monkeypatch.setattr(mcp_server.emergency_stop, "check", stop)
     result = run([{"mark": 1, "value": "1"}, {"mark": 2, "value": "2"}])
-    assert result["status"] == "error" and "urgence" in result["error"]
+    assert result["status"] == "error" and "Emergency stop" in result["error"]
     assert 1 in page.fields and 2 not in page.fields
 
 
@@ -166,7 +166,7 @@ def test_a_gesture_that_was_not_confirmed_is_never_cleared_by_the_read_back(page
 
     monkeypatch.setattr(mcp_server, "call_bridge", bridge)
     result = run([{"mark": 1, "value": ""}, {"mark": 3, "value": "69001"}])
-    assert result["status"] == "error" and "non confirmée" in result["error"]
+    assert result["status"] == "error" and "not confirmed" in result["error"]
     assert [params["mark"] for action, params in page.calls if action == "fill"] == [1]  # #3 jamais touché
 
 
@@ -174,7 +174,7 @@ def test_after_a_stop_the_fields_before_are_read_again_never_reported_from_their
     page.after[3] = (2, "Paris")  # le code postal remet Ville à Paris...
     page.refuse.add(3)  # ... et refuse sa propre valeur : arrêt
     result = run([{"mark": 2, "value": "Lyon"}, {"mark": 3, "value": "69001"}, {"mark": 6, "value": "Bonjour"}])
-    assert result["status"] == "error" and "« #2 »" in result["error"] and "sont remplis" not in result["error"]
+    assert result["status"] == "error" and '"#2"' in result["error"] and "were filled" not in result["error"]
     ville = result["data"]["fields"][0]
     assert ville["verified"] is True and ville["final_verified"] is False and ville["final"]["value"] == "Paris"
     assert 6 not in page.fields  # aucun geste après l'arrêt, aucun geste rejoué
@@ -184,6 +184,6 @@ def test_after_a_stop_the_fields_before_are_read_again_never_reported_from_their
 def test_after_a_dialog_the_fields_before_are_unknown_not_read(page):
     page.dialog_on = 3
     result = run([{"mark": 2, "value": "Lyon"}, {"mark": 3, "value": "69001"}])
-    assert result["status"] == "error" and "état inconnu" in result["error"]
+    assert result["status"] == "error" and "unknown state" in result["error"]
     assert result["data"]["fields"][0]["final_verified"] is None
     assert page.calls[-1] == ("fill", page.calls[-1][1]) and page.calls[-1][1]["mark"] == 3  # rien lu après la boîte

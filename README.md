@@ -58,7 +58,7 @@ bridge shared by several agents.
 
 ## Tools
 
-48 MCP tools. Tool descriptions and messages are in French; tool and parameter names are in English.
+48 MCP tools.
 
 | Area | Tools |
 | --- | --- |
@@ -117,7 +117,7 @@ points to the one-time install.
 - **Tab ownership**: every bridge client identifies itself (agent + session headers, forwarded by the bridge in the
   signed channel). A tab opened by `browser_new_tab` belongs to that session (`chrome.storage.session`); any page
   command on another tab (the user's, another agent's) is refused. A tab of the user only through
-  `browser_adopt_tab(tab_id, user_asked=True)` (`julien_asked`, its former name, still works as an alias). `tab_id` is mandatory on
+  `browser_adopt_tab(tab_id, user_asked=True)`. `tab_id` is mandatory on
   every page tool. A session whose MCP process is gone (or silent for 1.618 x 60 s; servers beat every 37 s) leaves
   **orphan** tabs: the same agent can reclaim (`browser_adopt_tab`, also automatically at startup), close or release
   them; never another agent.
@@ -128,7 +128,7 @@ points to the one-time install.
   bridge itself from secret folders (normalized paths). The value of a password, one-time code or payment card field
   (`type=password`, `autocomplete` current-password, new-password, one-time-code, cc-number, cc-csc, cc-exp) never
   leaves the page: `browser_content` (html mode included), `browser_vision_inspect`, `browser_find`,
-  `browser_axtree` and the value read back by `browser_fill` return `[valeur masquée]` instead.
+  `browser_axtree` and the value read back by `browser_fill` return `[masked value]` instead.
 - **`browser_eval` is full access to the page, nothing masked**: like `browser_cdp_send(Runtime.evaluate)` (both
   worlds share the document), it reads what the page reads (non-HttpOnly cookies through `document.cookie`,
   localStorage, sessionStorage, IndexedDB, form fields) and its `fetch` carries the user's session. The masking
@@ -182,7 +182,7 @@ Questions or concerns: open an issue on this repository.
   being debugged" banner on the agent tab. Protected pages (`chrome://`, the Web Store) cannot be scripted.
 - Tab ownership is per MCP process: sub-agents of one conversation share it.
 - The YouTube transcript reads the page's own player (page world).
-- Tool descriptions, messages and code comments are in French.
+- Code comments are in French.
 
 ## Licence
 

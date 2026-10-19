@@ -189,7 +189,7 @@ def test_reponse_remise_a_la_liaison_qui_a_envoye_la_demande(relay: Path, monkey
 
 def test_envoi_strict_jamais_vers_une_autre_liaison(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(bridge_server, "active_connections", [object()])
-    with pytest.raises(RuntimeError, match="instance déconnectée"):
+    with pytest.raises(RuntimeError, match="instance disconnected"):
         asyncio.run(bridge_server.send_command_to_chrome("agy_panel_update", {}, 1.0, target=object(), strict=True))
 
 

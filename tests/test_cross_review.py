@@ -102,7 +102,7 @@ def test_cookies_without_values_and_never_a_read(bridge):
     for action in ("get-cookies", "cookies", "get_cookies"):
         assert not bridge_client.is_read_only_action(action)
     package_stop.pressed()
-    assert "Arrêt d'urgence" in json.loads(mcp_server.browser_get_cookies(tab_id=1))["error"]
+    assert "Emergency stop" in json.loads(mcp_server.browser_get_cookies(tab_id=1))["error"]
     assert len(bridge) == 1
 
 
@@ -115,7 +115,7 @@ def test_cookies_are_never_resent_after_a_timeout(monkeypatch):
 
     monkeypatch.setattr(bridge_client.urllib.request, "urlopen", urlopen)
     monkeypatch.setattr(bridge_client, "ensure_bridge_running", lambda: True)
-    with pytest.raises(ConnectionError, match="pas renvoyée"):
+    with pytest.raises(ConnectionError, match="not resent"):
         bridge_client.call_bridge("get-cookies", {"tab_id": 1}, 1.0)
     assert calls == ["get-cookies"]
 
@@ -160,7 +160,7 @@ def test_upload_refuses_secret_folders_before_sending(fake_home, monkeypatch):
     for path in refused:
         payload = json.loads(mcp_server.browser_upload(files=[str(home / "Docs" / "ok.pdf"), str(path)], tab_id=1))
         assert payload["status"] == "error", path
-        assert "Téléversement refusé" in payload["error"]
+        assert "Upload refused" in payload["error"]
     assert reached == []
     with pytest.raises(PermissionError):
         bridge_client.call_bridge("upload_file", {"files": [str(home / ".ssh" / "id")], "tab_id": 1})
@@ -192,7 +192,7 @@ def test_transport_timeout_follows_requested_wait(bridge):
     ]
     for tool, kwargs in waits:
         payload = json.loads(tool(timeout_ms=200000, tab_id=1, **kwargs))
-        assert payload["status"] == "error" and "au plus 115000 ms" in payload["error"]
+        assert payload["status"] == "error" and "at most 115000 ms" in payload["error"]
     assert len(bridge) == 8  # rien envoyé pour les attentes refusées
 
 
@@ -218,7 +218,7 @@ def test_missing_token_is_a_clear_error_not_an_empty_header(tmp_path, monkeypatc
     monkeypatch.setenv("NEXUS_BROWSER_TOKEN_FILE", str(tmp_path / "absent"))
     monkeypatch.setattr(bridge_client, "ensure_bridge_running", lambda: False)
     monkeypatch.setattr(bridge_client.urllib.request, "urlopen", lambda *a, **k: pytest.fail("envoyé sans jeton"))
-    with pytest.raises(ConnectionError, match="jeton absent"):
+    with pytest.raises(ConnectionError, match="token missing"):
         bridge_client.call_bridge("click", {"tab_id": 1}, 1.0)
     source = (REPO_ROOT / "client" / "bridge_client.py").read_text(encoding="utf-8")
     assert "except ImportError" not in source and "X-Nexus-Token" not in source
@@ -243,4 +243,4 @@ def test_chrome_found_in_user_install_and_app_paths(tmp_path, monkeypatch):
 
 def test_versions_bumped_for_changed_tools():
     manifest = json.loads((REPO_ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == bridge_security.VERSION == "2.10.1"
+    assert manifest["version"] == bridge_security.VERSION == "2.11.0"

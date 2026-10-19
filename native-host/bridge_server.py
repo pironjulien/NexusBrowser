@@ -323,7 +323,7 @@ async def cancel_for_stop(left: float) -> int:
             continue
         pending_requests.pop(req_id, None)
         future.set_exception(
-            CommandCancelled(f"Commande « {action} » annulée en cours d'exécution : {emergency_stop.message(left)}")
+            CommandCancelled(f"Command '{action}' cancelled while running: {emergency_stop.message(left)}")
         )
         cancelled += 1
     LOGGER.warning("Emergency stop: %d command(s) cancelled", cancelled)
@@ -502,7 +502,7 @@ async def send_command_to_chrome(action, params=None, timeout=15.0, client=None,
         payload["gone"] = list(gone)
     while True:
         if strict and (target is None or target not in active_connections):
-            raise RuntimeError("Liaison Chrome visée absente (instance déconnectée) : rien envoyé à une autre.")
+            raise RuntimeError("Target Chrome link missing (instance disconnected): nothing sent to another one.")
         chosen = target if target is not None and target in active_connections else select_target()
         if chosen is None:
             raise RuntimeError(
@@ -642,7 +642,7 @@ async def handle_http(reader, writer):
             normalized = normalize_action(action.strip())
             if normalized in RESERVED_ACTIONS:
                 await send_json_response(
-                    writer, 403, {"success": False, "error": f"Action « {action} » réservée au pont lui-même."}
+                    writer, 403, {"success": False, "error": f"Action '{action}' is reserved to the bridge itself."}
                 )
                 return
             client = check_identity(headers.get(AGENT_HEADER.lower()), headers.get(CLIENT_HEADER.lower()))
@@ -653,8 +653,8 @@ async def handle_http(reader, writer):
                     {
                         "success": False,
                         "error": (
-                            f"Identité du client absente ou invalide (en-têtes {AGENT_HEADER} et {CLIENT_HEADER}) : "
-                            "passer par le serveur MCP nexus-browser à jour (ou bridge_client), relancer install.ps1."
+                            f"Missing or invalid client identity ({AGENT_HEADER} and {CLIENT_HEADER} headers): "
+                            "go through an up-to-date nexus-browser MCP server (or bridge_client), rerun install.ps1."
                         ),
                     },
                 )

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-VERSION = "2.10.1"
+VERSION = "2.11.0"
 TOKEN_HEADER = "X-Nexus-Browser-Token"
 # Identité du client du pont (serveur MCP d'un agent, CLI, validation réelle) : nom de l'agent et identifiant de SA
 # session (un par processus MCP). Le pont la transmet à l'extension dans le canal signé ; l'extension s'en sert pour
@@ -311,7 +311,7 @@ def canonical_path(raw: str) -> str:
     résolus, casse ignorée. Rien n'est créé ni modifié (lecture des métadonnées seulement)."""
     text = os.path.expandvars(os.path.expanduser(str(raw).strip().strip('"')))
     if "\x00" in text:
-        raise ValueError("chemin de fichier invalide (caractère nul)")
+        raise ValueError("invalid file path (null character)")
     if os.name == "nt":
         text = text.replace("/", "\\")
         lowered = text.lower()
@@ -339,7 +339,7 @@ def canonical_path(raw: str) -> str:
 def upload_refusal(files: Any) -> str | None:
     """Message de refus si un fichier à téléverser est sous un dossier de secrets (ou si la liste est invalide)."""
     if not isinstance(files, list) or not files or not all(isinstance(item, str) and item.strip() for item in files):
-        return "files doit être une liste non vide de chemins de fichiers"
+        return "files must be a non-empty list of file paths"
     roots = []
     for root in protected_upload_roots():
         try:
@@ -350,12 +350,12 @@ def upload_refusal(files: Any) -> str | None:
         try:
             key = canonical_path(item)
         except (OSError, ValueError) as error:
-            return f"Téléversement refusé : chemin illisible {item!r} ({error})."
+            return f"Upload refused: unreadable path {item!r} ({error})."
         for root, root_key in roots:
             if key == root_key or key.startswith(root_key + os.sep.casefold()):
                 return (
-                    f"Téléversement refusé : {item} est dans un dossier de secrets ({root}). "
-                    "Jamais de jeton, clé, profil Chrome ou configuration d'agent envoyé à une page web."
+                    f"Upload refused: {item} is in a secrets folder ({root}). "
+                    "No token, key, Chrome profile or agent configuration is ever sent to a web page."
                 )
     return None
 
@@ -365,7 +365,7 @@ def check_upload_files(files: Any) -> None:
     refusal = upload_refusal(files)
     if refusal is None:
         return
-    if refusal.startswith("files doit"):
+    if refusal.startswith("files must"):
         raise ValueError(refusal)
     raise PermissionError(refusal)
 

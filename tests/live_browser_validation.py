@@ -772,7 +772,7 @@ def _tab_ids(response, julien_only: bool = False) -> set[int]:
     tabs = parse_response(response).get("data", [])
     if isinstance(tabs, str):
         tabs = json.loads(tabs)
-    return {t["id"] for t in tabs if not julien_only or t.get("state") == "julien"}
+    return {t["id"] for t in tabs if not julien_only or t.get("state") == "user"}
 
 
 def _live(tab_id: int) -> dict:
@@ -1237,9 +1237,7 @@ def run_full_validation() -> dict[str, bool]:
         julien = active_before.get("id")
         if julien and julien != tab_id:
             refused = _error(mcp.browser_eval("1", tab_id=julien))
-            check(
-                "propriete_onglet_de_julien_refuse", "onglet de Julien" in refused or "piloté par" in refused, refused
-            )
+            check("propriete_onglet_de_julien_refuse", "user's tab" in refused or "driven by" in refused, refused)
 
         # --- 1. Localisateurs par rôle et libellé ---------------------------------------------------------------
         found = _data(mcp.browser_find({"role": "button", "name": "Valider"}, tab_id=tab_id))
@@ -1277,7 +1275,7 @@ def run_full_validation() -> dict[str, bool]:
         res = parse_response(mcp.browser_click(locator={"testId": "submit-zone"}, tab_id=tab_id))
         check("clic_test_id", res.get("status") == "success" and page().get("clicks", {}).get("send") == 1, res)
         res = mcp.browser_click(locator={"role": "button", "name": "Inexistant"}, timeout_ms=300, tab_id=tab_id)
-        check("localisateur_introuvable_clair", "Aucun élément ne correspond" in _error(res), _error(res) or res)
+        check("localisateur_introuvable_clair", "No element matches" in _error(res), _error(res) or res)
 
         # --- 2. Frappe de confiance ------------------------------------------------------------------------------
         res = parse_response(
@@ -1433,7 +1431,7 @@ def run_full_validation() -> dict[str, bool]:
             and request.get("method") == "GET"
             and request.get("type") == "Fetch"
             and isinstance(request.get("duration_ms"), int)
-            and str(auth).startswith("[masqué")
+            and str(auth).startswith("[masked")
             and "secret-nexus-token" not in raw
             and "secret-cookie-value" not in raw,
             request or {"journal": raw[:1500], "clic": res},  # échec : ce que le pont a vu, pour le diagnostic
@@ -1467,7 +1465,7 @@ def run_full_validation() -> dict[str, bool]:
             },
         )
         refused = _error(mcp.browser_get_cookies(tab_id=tab_id, urls=["https://www.google.com/"], include_values=True))
-        check("cookies_valeurs_refusees_hors_local", "origine locale de développement" in refused, refused)
+        check("cookies_valeurs_refusees_hors_local", "local development origin" in refused, refused)
         # 2.7.1 : Runtime.evaluate dans le monde isolé par défaut, dans celui de la page sur demande (world="page").
         value_of("window.__nexusEtatSpa = {pret: 42}; 1")
         probe = {
@@ -1507,11 +1505,11 @@ def run_full_validation() -> dict[str, bool]:
         check(
             "secrets_valeurs_masquees_en_lecture",
             not any(leaked.values())
-            and all("[valeur masquée]" in raw for raw in reads.values())
+            and all("[masked value]" in raw for raw in reads.values())
             and parse_response(reads["content"]).get("status") == "success",
             {
                 "fuites": leaked,
-                "marqueur": {name: "[valeur masquée]" in raw for name, raw in reads.items()},
+                "marqueur": {name: "[masked value]" in raw for name, raw in reads.items()},
                 "vision": [(m.get("type"), m.get("rect")) for m in _data(reads["vision"]).get("markers", [])]
                 or reads["vision"][:600],
             },
@@ -1520,7 +1518,7 @@ def run_full_validation() -> dict[str, bool]:
         check(
             "secrets_fill_mot_de_passe_masque",
             _data(filled).get("verified") is True
-            and _data(filled).get("value") == "[valeur masquée]"
+            and _data(filled).get("value") == "[masked value]"
             and "NouveauSecret-Live-2" not in filled
             and value_of("document.getElementById('pw').value") == "NouveauSecret-Live-2",
             filled,
@@ -1747,7 +1745,7 @@ def capture_masking_checks(check, tab_id: int, value_of) -> None:
     check(
         "cadre_autre_origine_lecture_masquee",
         not [x for raw in reads.values() for x in frame_secrets if x in raw]
-        and "[valeur masquée]" in reads["find"]
+        and "[masked value]" in reads["find"]
         and found.get("count") == 1,
         {"fuites": {k: [x for x in frame_secrets if x in v] for k, v in reads.items()}, "find": found},
     )
@@ -1783,7 +1781,7 @@ def orphan_check(check, url: str) -> None:
         state = next((t.get("state") for t in listed if t.get("id") == orphan), None)
         check("orphelin_vu_par_la_nouvelle_session", state == "orphan", state)
         refused = _error(mcp.browser_eval("1", tab_id=orphan))
-        check("orphelin_refuse_avant_reprise", "orphelin" in refused, refused)
+        check("orphelin_refuse_avant_reprise", "orphaned" in refused, refused)
         adopted = _data(mcp.browser_adopt_tab(orphan))
         check("orphelin_repris_sans_julien_asked", adopted.get("reclaimed") is True, adopted)
         check("orphelin_pilotable_apres_reprise", get_eval_val(mcp.browser_eval("6 * 7", tab_id=orphan)) == 42, orphan)

@@ -74,7 +74,7 @@ def set_identity(agent: str, client_id: str | None = None) -> dict[str, str]:
     global _session_pid
     identity = check_identity(agent, client_id or f"{agent.lower().replace(' ', '-')}-{uuid.uuid4().hex[:12]}")
     if identity is None:
-        raise ValueError(f"Identité de client invalide : agent={agent!r}, client={client_id!r}")
+        raise ValueError(f"Invalid client identity: agent={agent!r}, client={client_id!r}")
     _identity.update(identity)
     _session_pid = os.getpid()
     return dict(_identity)
@@ -90,7 +90,7 @@ def session_identity(agent: str, session_id: str) -> dict[str, str]:
     """Identité d'une session MCP du démon : agent de l'URL, identifiant tiré de l'id de session MCP."""
     identity = check_identity(agent, f"{agent.lower().replace(' ', '-')}-{session_id.replace('-', '')[:24]}")
     if identity is None:
-        raise ValueError(f"Identité de session invalide : agent={agent!r}")
+        raise ValueError(f"Invalid session identity: agent={agent!r}")
     return identity
 
 
@@ -346,9 +346,9 @@ def ping_bridge() -> bool:
 
 
 EXTENSION_NOT_CONNECTED = (
-    "L'extension Nexus Browser Bridge ne s'est pas connectée au pont NexusBrowser{detail}. Vérifier qu'elle est "
-    "installée et activée dans chrome://extensions sur le profil Default (Chrome stable n'accepte plus "
-    "--load-extension : elle doit être chargée une fois depuis le dossier extension du dépôt)."
+    "The Nexus Browser Bridge extension did not connect to the NexusBrowser bridge{detail}. Check that it is "
+    "installed and enabled in chrome://extensions on the Default profile (stable Chrome no longer accepts "
+    "--load-extension: it must be loaded once from the repository's extension folder)."
 )
 
 
@@ -393,8 +393,8 @@ def call_bridge(action: str, params: dict[str, Any] | None = None, timeout: floa
         # Jeton pas encore créé : c'est le pont qui le crée (droits restreints) à son démarrage.
         if not (retry and ensure_bridge_running()):
             raise ConnectionError(
-                f"Impossible de joindre le pont NexusBrowser sur {API_URL} : jeton absent et démarrage du pont échoué. "
-                "Pont et extension pas encore installés sur ce PC ? Une fois : install.ps1 "
+                f"Cannot reach the NexusBrowser bridge at {API_URL}: token missing and bridge startup failed. "
+                "Bridge and extension not installed on this PC yet? Once: install.ps1 "
                 "(https://github.com/pironjulien/NexusBrowser#installation)."
             ) from None
         headers = authentication_headers()
@@ -420,7 +420,7 @@ def call_bridge(action: str, params: dict[str, Any] | None = None, timeout: floa
             # Commande non remise : relancer Chrome (normalement) puis la renvoyer une fois est sans risque.
             if retry and ensure_chrome_running():
                 return call_bridge(action, params, timeout, retry=False)
-            detail = "" if is_chrome_running() else " (Chrome n'a pas pu être relancé)"
+            detail = "" if is_chrome_running() else " (Chrome could not be restarted)"
             raise RuntimeError(EXTENSION_NOT_CONNECTED.format(detail=detail)) from error
 
         raise RuntimeError(message) from error
@@ -430,14 +430,14 @@ def call_bridge(action: str, params: dict[str, Any] | None = None, timeout: floa
             return call_bridge(action, params, timeout, retry=False)
         if delivered and not is_read_only_action(action):
             raise ConnectionError(
-                f"Pas de réponse du pont NexusBrowser pour '{action}' dans le délai : la commande a pu être exécutée. "
-                "Elle n'est pas renvoyée automatiquement (risque de double action) ; vérifier l'état de la page "
-                "avant de la relancer."
+                f"No response from the NexusBrowser bridge for '{action}' in time: the command may have run. "
+                "It is not resent automatically (risk of a double action); check the page state before running it "
+                "again."
             ) from error
         raise ConnectionError(
-            f"Impossible de joindre le pont NexusBrowser sur {API_URL}. Le démarrage automatique a échoué."
+            f"Cannot reach the NexusBrowser bridge at {API_URL}. Automatic startup failed."
         ) from error
 
     if not data.get("success"):
-        raise RuntimeError(data.get("error", "Erreur inconnue du pont NexusBrowser"))
+        raise RuntimeError(data.get("error", "Unknown error from the NexusBrowser bridge"))
     return data.get("data")

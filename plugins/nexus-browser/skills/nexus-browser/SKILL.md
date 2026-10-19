@@ -22,14 +22,14 @@ interrompt les commandes en cours.
 * L'extension rattache l'onglet à **cette session d'agent** (agent + identifiant de session, posés par le pont dans le
   canal signé). Toute commande sur un autre onglet est **refusée** : onglets de Julien, d'un autre agent, ou d'une
   autre conversation du même agent.
-* **Onglet de Julien** : seulement s'il l'a demandé explicitement, `browser_adopt_tab(tab_id, julien_asked=True)`
+* **Onglet de Julien** : seulement s'il l'a demandé explicitement, `browser_adopt_tab(tab_id, user_asked=True)`
   (refusé par défaut, affiché « adopté » dans le poste de contrôle), puis `browser_release_tab(tab_id)` à la fin.
 * **Onglets orphelins** (2.7.1) : quand le serveur MCP d'un agent redémarre ou plante, sa session est morte
   (processus disparu, ou aucun signe de vie depuis 1,618 x 60 s ; le serveur bat toutes les 37 s). Ses onglets
   deviennent orphelins : le même agent les reprend au démarrage, ou par `browser_adopt_tab(tab_id)` sans
-  `julien_asked`, et peut les fermer ou les rendre. Jamais un autre agent ; une session vivante reste protégée.
+  `user_asked`, et peut les fermer ou les rendre. Jamais un autre agent ; une session vivante reste protégée.
 * `browser_list_tabs()` indique pour chaque onglet son pilote (`owner`), `mine` et `state` : `mine`, `orphan`
-  (orphelin de mon agent), `other` (autre agent ou session vivante), `julien`. `browser_active_tab()` : identité de
+  (orphelin de mon agent), `other` (autre agent ou session vivante), `user` (onglet de Julien). `browser_active_tab()` : identité de
   l'onglet actif de Julien, en lecture seule.
 * Fermer ses onglets à la fin (`browser_close_tab(tab_id)`).
 * Adresses permises : http, https, data:, about:blank (jamais file://, chrome://, javascript:).
@@ -92,7 +92,7 @@ ni renvoyer un secret que la tâche n'exige pas.
 * **Mots de passe, codes à usage unique, cartes bancaires** (`type=password`, `autocomplete` current-password,
   new-password, one-time-code, cc-number, cc-csc, cc-exp) : valeur jamais renvoyée par `browser_content` (mode html
   compris), `browser_vision_inspect`, `browser_find`, `browser_axtree` ni la relecture de `browser_fill` :
-  `[valeur masquée]` à la place (`verified` reste juste). Réponses brutes de `browser_cdp_send` (`DOM.getOuterHTML`,
+  `[masked value]` à la place (`verified` reste juste). Réponses brutes de `browser_cdp_send` (`DOM.getOuterHTML`,
   `Accessibility.getFullAXTree`, `Runtime.evaluate`) : non masquées, comme `browser_eval`.
 * `browser_get_cookies(tab_id)` : noms, domaines et attributs, **jamais les valeurs par défaut**.
   `include_values=True` seulement pour une origine locale de développement (localhost, 127.0.0.1, [::1],

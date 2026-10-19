@@ -98,7 +98,7 @@ def test_browser_actions_blocked_reads_allowed_during_stop(monkeypatch):
     monkeypatch.setattr(mcp_server, "call_bridge", lambda action, params, timeout=20.0: seen.append(action) or [])
     result = json.loads(mcp_server.browser_click(selector="button", tab_id=1))
     assert result["status"] == "error"
-    assert "Arrêt d'urgence" in result["error"]
+    assert "Emergency stop" in result["error"]
     # Toutes les actions souris réelles (CDP) sont refusées de même, avant d'atteindre le pont.
     for blocked in (
         mcp_server.browser_click(selector="button", tab_id=1, click_count=2),
@@ -143,7 +143,7 @@ def _count_urlopen(monkeypatch, error):
 def test_timed_out_action_is_never_resent(monkeypatch):
     calls = _count_urlopen(monkeypatch, TimeoutError("timed out"))
     for action in ("click", "fill", "navigate", "eval", "press-key", "close-tab"):
-        with pytest.raises(ConnectionError, match="pas renvoyée"):
+        with pytest.raises(ConnectionError, match="not resent"):
             bridge_client.call_bridge(action, {}, 1.0)
     assert calls == ["click", "fill", "navigate", "eval", "press-key", "close-tab"]
 

@@ -253,7 +253,7 @@ def test_mcp_server_starts_its_heartbeat_and_documents_orphans():
     main = source[source.index('if __name__ == "__main__":') :]
     assert "start_heartbeat()" in main
     assert '"orphan"' in (mcp_server.browser_list_tabs.__doc__ or "")
-    assert "sans user_asked" in (mcp_server.browser_adopt_tab.__doc__ or "")
+    assert "without user_asked" in (mcp_server.browser_adopt_tab.__doc__ or "")
 
 
 def test_cdp_send_page_world_only_on_explicit_request(monkeypatch):
@@ -273,7 +273,7 @@ def test_cdp_send_page_world_only_on_explicit_request(monkeypatch):
     ].input_schema
     assert schema["properties"]["world"]["enum"] == ["isolated", "page"]
     assert schema["properties"]["world"]["default"] == "isolated"
-    assert "MONDE DE LA PAGE" in (mcp_server.browser_cdp_send.__doc__ or "")
+    assert "PAGE WORLD" in (mcp_server.browser_cdp_send.__doc__ or "")
 
 
 def test_cookie_values_only_on_explicit_request(monkeypatch):
@@ -282,4 +282,4 @@ def test_cookie_values_only_on_explicit_request(monkeypatch):
     mcp_server.browser_get_cookies(tab_id=4)
     mcp_server.browser_get_cookies(tab_id=4, urls=["http://localhost:8000/"], include_values=True)
     assert sent == [{"tab_id": 4}, {"tab_id": 4, "urls": ["http://localhost:8000/"], "includeValues": True}]
-    assert "origine locale de développement" in (mcp_server.browser_get_cookies.__doc__ or "")
+    assert "local development origin" in (mcp_server.browser_get_cookies.__doc__ or "")

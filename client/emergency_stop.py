@@ -32,7 +32,7 @@ WATCH_S = 0.2
 HEARTBEAT_S = 3.0
 OWNER_STALE_S = 3 * HEARTBEAT_S
 OWNER_NAME = "NexusBrowser"
-HOTKEY_LABEL = "Ctrl+Alt+Maj+Échap"
+HOTKEY_LABEL = "Ctrl+Alt+Shift+Esc"
 STOP_FILE = Path.home() / ".nexus" / "stop"
 OWNER_FILE = STOP_FILE.with_name("stop.owner")
 
@@ -104,8 +104,8 @@ def remaining_s() -> float:
 def message(remaining: float | None = None) -> str:
     left = remaining_s() if remaining is None else remaining
     return (
-        f"Arrêt d'urgence demandé par Julien ({HOTKEY_LABEL}) : plus aucune action pendant encore {left:.0f} s. "
-        "Attendre ses instructions ; ne pas contourner."
+        f"Emergency stop requested by the user ({HOTKEY_LABEL}): no more actions for another {left:.0f} s. "
+        "Wait for the user's instructions; do not work around it."
     )
 
 
@@ -166,8 +166,8 @@ def hotkey_note() -> str:
     if owns_hotkey() or not _tried.is_set() or owner() is not None:
         return ""
     return (
-        f"Arrêt d'urgence {HOTKEY_LABEL} NON GARANTI : NexusBrowser n'a pas obtenu le raccourci (erreur {_failure}) et "
-        "aucun agent à jour ne le détient. Prévenir l'utilisateur."
+        f"Emergency stop {HOTKEY_LABEL} NOT GUARANTEED: NexusBrowser did not get the hotkey (error {_failure}) and "
+        "no up-to-date agent holds it. Tell the user."
     )
 
 

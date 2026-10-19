@@ -174,7 +174,7 @@ async function forgetTabOwner(tabId) {
 }
 
 function ownerLabel(owner) {
-    return owner ? `${owner.agent}${owner.adopted ? " (adopté)" : ""}` : "Utilisateur";
+    return owner ? `${owner.agent}${owner.adopted ? " (adopted)" : ""}` : "User";
 }
 
 // -----------------------------------------------------------------------------
@@ -202,7 +202,7 @@ function stopActive() {
 
 function stopMessage() {
     const left = Math.max(0, Math.round((stoppedUntil - Date.now()) / 1000));
-    return `Arrêt d'urgence demandé par l'utilisateur : plus aucune action pendant encore ${left} s (commande en cours interrompue). Attendre ses instructions ; ne pas contourner.`;
+    return `Emergency stop requested by the user: no more actions for another ${left} s (running command interrupted). Wait for the user's instructions; do not work around it.`;
 }
 
 /** Point de contrôle des boucles et des envois d'entrées : lève une erreur pendant l'arrêt d'urgence. */
@@ -663,11 +663,11 @@ function agyGrant(localId, tabId, url) {
 /** Refus (message) d'une adoption issue du panneau, ou null si l'accord de Julien couvre cet onglet et cette page. */
 async function agyGrantRefusal(panelRequest, tabId, tab) {
     const grant = (await agyGrants())[String(panelRequest)];
-    if (!grant) return `Adoption refusée : aucune demande du panneau « ${panelRequest} » en cours pour cet onglet (accord absent ou effacé au rechargement de l'extension). Le dire à l'utilisateur.`;
-    if (grant.until <= Date.now()) return "Adoption refusée : l'accord de l'utilisateur pour cette demande du panneau a expiré (30 min). Le dire à l'utilisateur.";
-    if (grant.tabId !== tabId) return `Adoption refusée : la demande du panneau visait l'onglet ${grant.tabId}, pas ${tabId}.`;
+    if (!grant) return `Adoption refused: no pending side panel request "${panelRequest}" for this tab (no consent, or cleared when the extension reloaded). Tell the user.`;
+    if (grant.until <= Date.now()) return "Adoption refused: the user's consent for this side panel request has expired (30 min). Tell the user.";
+    if (grant.tabId !== tabId) return `Adoption refused: the side panel request was for tab ${grant.tabId}, not ${tabId}.`;
     if (!tab || tab.url !== grant.url) {
-        return `Adoption refusée : l'onglet ${tabId} a changé de page depuis la demande du panneau (${globalThis.AgyChat.originOf(grant.url)} → ${globalThis.AgyChat.originOf(tab && tab.url)}). L'accord de l'utilisateur portait sur l'autre page : le lui dire.`;
+        return `Adoption refused: tab ${tabId} has moved to another page since the side panel request (${globalThis.AgyChat.originOf(grant.url)} → ${globalThis.AgyChat.originOf(tab && tab.url)}). The user's consent was for the other page: tell the user.`;
     }
     return null;
 }
@@ -755,7 +755,7 @@ async function agyPanelUpdate(params = {}) {
 // (7e relecture de Codex : deux restitutions d'une même navigation, un autre client adopté entre les deux).
 async function releaseTabFromPanel(rawTabId, expected = null) {
     const tabId = Number(rawTabId);
-    if (!Number.isInteger(tabId)) return { error: `Onglet invalide : ${rawTabId}` };
+    if (!Number.isInteger(tabId)) return { error: `Invalid tab: ${rawTabId}` };
     await extensionStateReady;
     const owner = expected || tabOwners.get(tabId) || null;
     if (owner && tabOwners.get(tabId) !== owner) return { tabId, released: false, previousOwner: null };
@@ -924,28 +924,28 @@ function normalizedAction(req) {
 
 function foreignTabMessage(tabId, owner, client) {
     if (orphanFor(owner, client)) {
-        return `L'onglet ${tabId} est orphelin : sa session de ${owner.agent} est terminée (serveur redémarré ou arrêté). ` +
-            "Le reprendre avec browser_adopt_tab(tab_id) (sans user_asked), ou le fermer (browser_close_tab) ou le rendre à l'utilisateur (browser_release_tab).";
+        return `Tab ${tabId} is orphaned: its ${owner.agent} session has ended (server restarted or stopped). ` +
+            "Take it back with browser_adopt_tab(tab_id) (without user_asked), close it (browser_close_tab) or hand it back to the user (browser_release_tab).";
     }
     if (!owner) {
-        return `L'onglet ${tabId} n'est piloté par aucun agent (onglet de l'utilisateur) : refusé. Ouvrir le sien avec browser_new_tab ; ` +
-            "browser_adopt_tab(tab_id, user_asked=True) seulement si l'utilisateur l'a demandé explicitement.";
+        return `Tab ${tabId} is not driven by any agent (user's tab): refused. Open your own with browser_new_tab; ` +
+            "browser_adopt_tab(tab_id, user_asked=True) only if the user explicitly asked for it.";
     }
     const sameAgent = client && owner.agent === client.agent;
-    return `L'onglet ${tabId} est piloté par ${owner.agent}${sameAgent ? " dans une autre session" : ""} : refusé. ` +
-        "Chaque agent n'agit que dans les onglets qu'il a ouverts (browser_new_tab).";
+    return `Tab ${tabId} is driven by ${owner.agent}${sameAgent ? " in another session" : ""}: refused. ` +
+        "Each agent acts only in the tabs it opened (browser_new_tab).";
 }
 
 /** Refus (message) d'une commande, ou null : identité, arrêt d'urgence, propriété de l'onglet visé. */
 function authorizeCommand(action, params, client) {
     if (BRIDGE_ACTIONS.has(action)) return null;
-    if (!client) return "Commande sans identité de client (agent et session posés par le pont) : refusée. Relancer install.ps1 (pont à jour).";
+    if (!client) return "Command without client identity (agent and session set by the bridge): refused. Run install.ps1 again (up-to-date bridge).";
     if (stopActive() && !STOP_ALLOWED_ACTIONS.has(action)) return stopMessage();
     if (TAB_FREE_ACTIONS.has(action)) return null;
     if (action === "group_tabs" && Array.isArray(params.tabIds) && params.tabIds.length) {
         for (const raw of params.tabIds) {
             const tabId = Number(raw);
-            if (!Number.isInteger(tabId)) return `tab_id invalide : ${raw}`;
+            if (!Number.isInteger(tabId)) return `Invalid tab_id: ${raw}`;
             if (!ownedBy(tabOwners.get(tabId), client)) return foreignTabMessage(tabId, tabOwners.get(tabId), client);
         }
         return null;
@@ -953,7 +953,7 @@ function authorizeCommand(action, params, client) {
     const tabId = requestedTabId(params);
     if (tabId === null) {
         const given = params.tabId ?? params.tab_id ?? params.id;
-        if (given !== undefined && given !== null && given !== "") return `tab_id invalide : ${given}`;
+        if (given !== undefined && given !== null && given !== "") return `Invalid tab_id: ${given}`;
         return MISSING_TAB_MESSAGE;
     }
     const owner = tabOwners.get(tabId);
@@ -1016,7 +1016,7 @@ function publicDialog(dialog) {
 }
 
 function describeDialog(dialog) {
-    return `boîte de dialogue JavaScript ${dialog.type} ouverte dans l'onglet ${dialog.tabId} : « ${String(dialog.message).slice(0, 300)} »`;
+    return `JavaScript ${dialog.type} dialog open in tab ${dialog.tabId}: "${String(dialog.message).slice(0, 300)}"`;
 }
 
 /**
@@ -1027,7 +1027,7 @@ function annotatePendingDialogs(result, tabId = null) {
     if (!result || tabId === null || !pendingDialogs.has(tabId)) return result;
     const dialogs = [publicDialog(pendingDialogs.get(tabId))];
     if (result.error) {
-        return { ...result, error: `${result.error} [${dialogs.map(d => describeDialog(d)).join(" ; ")} : répondre avec handle_dialog]` };
+        return { ...result, error: `${result.error} [${dialogs.map(d => describeDialog(d)).join("; ")}: answer with handle_dialog]` };
     }
     if (result.data && typeof result.data === "object" && !Array.isArray(result.data)) {
         return { ...result, data: { ...result.data, pendingDialogs: dialogs } };
@@ -1058,7 +1058,7 @@ function waitForDialog(tabId) {
 async function sendCommandWatchingDialogs(target, method, commandParams) {
     const open = pendingDialogs.get(target.tabId);
     if (open) {
-        throw new Error(`${describeDialog(open)}. La page est bloquée : répondre d'abord avec handle_dialog (browser_handle_dialog).`);
+        throw new Error(`${describeDialog(open)}. The page is blocked: answer it first with handle_dialog (browser_handle_dialog).`);
     }
     const watch = waitForDialog(target.tabId);
     const call = chrome.debugger.sendCommand(target, method, commandParams);
@@ -1081,7 +1081,7 @@ function dialogInterruption(dialog) {
     return {
         dialogOpened: true,
         dialog: publicDialog(dialog),
-        message: `La commande a ouvert une ${describeDialog(dialog)}. Rien n'a été accepté : lire le message puis répondre avec browser_handle_dialog(accept, prompt_text, tab_id).`
+        message: `The command opened a ${describeDialog(dialog)}. Nothing was accepted: read the message, then answer with browser_handle_dialog(accept, prompt_text, tab_id).`
     };
 }
 
@@ -1137,7 +1137,7 @@ async function routeCommand(req, client = null) {
 
             case "agy_panel_update":
                 // Réservée au pont (canal signé, sans identité de client) : jamais un agent ne parle à la place d'AGY.
-                if (client) return { error: "agy_panel_update est réservée au pont." };
+                if (client) return { error: "agy_panel_update is reserved for the bridge." };
                 return { data: await agyPanelUpdate(params) };
 
             case "network_record":
@@ -1558,7 +1558,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
     }
     // Correspondances d'un localisateur dans ce contexte (ce cadre et ses cadres same-origin).
     function locatorMatches(loc) {
-        if (!lk) throw new Error("Moteur de localisation indisponible dans ce contexte");
+        if (!lk) throw new Error("Locator engine unavailable in this context");
         return lk.query(doc0, loc.locator, loc.axToken ? axPool(loc.axToken) : null);
     }
     function locate(loc) {
@@ -1582,7 +1582,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             if (index < 0) index = list.length + index;
             const hit = list[index];
             if (!hit) {
-                locateFailure = { notFound: true, hidden: res.hidden, error: "Aucun élément ne correspond au localisateur " + JSON.stringify(loc.locator) };
+                locateFailure = { notFound: true, hidden: res.hidden, error: "No element matches the locator " + JSON.stringify(loc.locator) };
                 return null;
             }
             return hit.el;
@@ -1624,11 +1624,11 @@ function agyMouseKit(spec, textKit, locatorKit) {
     }
     function notFound(loc) {
         if (locateFailure) {
-            if (locateFailure.ambiguous) return Object.assign({ notFound: false, error: "Localisateur ambigu" }, locateFailure);
+            if (locateFailure.ambiguous) return Object.assign({ notFound: false, error: "Ambiguous locator" }, locateFailure);
             if (locateFailure.invalid) return Object.assign({ notFound: false }, locateFailure);
             return locateFailure;
         }
-        if (loc && loc.active) return { notFound: true, error: "Aucun champ n'a le focus (préciser selector, mark ou locator)" };
+        if (loc && loc.active) return { notFound: true, error: "No field has focus (give selector, mark or locator)" };
         if (loc && loc.mark !== undefined && loc.mark !== null) {
             return { notFound: true, error: "No element registered for mark #" + loc.mark + ". Run vision-inspect or interactive_map first." };
         }
@@ -1695,7 +1695,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
     function project(el, lx, ly) {
         const own = viewOf(el);
         const hit = deepHit(own.doc, lx, ly);
-        if (hit === null) return { ok: false, blocker: null, reason: "hors de la vue" };
+        if (hit === null) return { ok: false, blocker: null, reason: "outside the viewport" };
         if (hit !== undefined && !reaches(hit, el)) return { ok: false, blocker: hit };
         const up2 = climb(own.win, lx, ly, true);
         return up2.ok ? Object.assign(up2, { hit }) : up2;
@@ -1714,7 +1714,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             const parent = viewOf(fe);
             if (check) {
                 const outer = deepHit(parent.doc, x, y);
-                if (outer === null) return { ok: false, blocker: null, reason: "cadre hors de la vue" };
+                if (outer === null) return { ok: false, blocker: null, reason: "frame outside the viewport" };
                 if (outer !== undefined && !within(outer, fe)) return { ok: false, blocker: outer };
             }
             fe = frameOf(parent.win);
@@ -1806,7 +1806,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         }
         const pts = candidates(el);
         let blocker = null;
-        let reason = pts.length ? null : "sans surface visible dans la vue";
+        let reason = pts.length ? null : "no visible area in the viewport";
         let chosen = null;
         const alternatives = [];
         for (const [lx, ly] of pts) {
@@ -1821,7 +1821,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             if (!reason && p.reason) reason = p.reason;
         }
         const base = info(el);
-        const label = describe(el) || "élément";
+        const label = describe(el) || "element";
         if (!chosen) {
             const coveredBy = describe(blocker);
             const failure = {
@@ -1829,8 +1829,8 @@ function agyMouseKit(spec, textKit, locatorKit) {
                 ...base,
                 coveredBy,
                 error: coveredBy
-                    ? "<" + label + "> est couvert par <" + coveredBy + "> : aucun point de l'élément n'est atteignable, aucune action souris envoyée."
-                    : "<" + label + "> n'est pas atteignable (" + (reason || "hors de la vue") + ") : aucune action souris envoyée."
+                    ? "<" + label + "> is covered by <" + coveredBy + ">: no point of the element is reachable, no mouse action sent."
+                    : "<" + label + "> is not reachable (" + (reason || "outside the viewport") + "): no mouse action sent."
             };
             if (!spec.allowUnreachable) return failure;
             // Saisie : le champ peut encore recevoir le focus sans clic (DOM focus).
@@ -1865,7 +1865,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
 
     if (spec.phase === "find") {
         // Candidats d'un localisateur dans ce contexte (sans action) : rôle, nom, état, boîte (repère de ce cadre).
-        if (!lk) return { error: "Moteur de localisation indisponible dans ce contexte" };
+        if (!lk) return { error: "Locator engine unavailable in this context" };
         let res;
         try { res = locatorMatches({ locator: spec.locator, axToken: spec.axToken }); } catch (error) {
             return { invalid: true, error: String(error && error.message || error) };
@@ -1882,7 +1882,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
     if (spec.phase === "reveal" || spec.phase === "hop") {
         // Exécutée sur l'élément <iframe> propriétaire d'un cadre d'une autre origine (Runtime.callFunctionOn).
         const owner = spec.__owner;
-        if (!owner) return { ok: false, reason: "cadre propriétaire introuvable" };
+        if (!owner) return { ok: false, reason: "owner frame not found" };
         if (spec.phase === "reveal") {
             try { owner.scrollIntoView({ behavior: "instant", block: "center", inline: "center" }); } catch (_) {}
             return { ok: true };
@@ -1899,7 +1899,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             const y = off.y + Number(p.y);
             if (spec.check !== false) {
                 const hit = deepHit(own.doc, x, y);
-                if (hit === null) { reason = reason || "cadre hors de la vue"; continue; }
+                if (hit === null) { reason = reason || "frame outside the viewport"; continue; }
                 if (hit !== undefined && !within(hit, owner)) { blocker = blocker || hit; continue; }
             }
             const c = climb(own.win, x, y, spec.check !== false);
@@ -1909,7 +1909,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         }
         if (!mapped.length) {
             const coveredBy = describe(blocker);
-            return { ok: false, coveredBy, reason: reason || (coveredBy ? null : "hors de la vue") };
+            return { ok: false, coveredBy, reason: reason || (coveredBy ? null : "outside the viewport") };
         }
         return { ok: true, points: mapped, depth, owner: describe(owner) };
     }
@@ -1925,7 +1925,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         // Relecture (browser_fill_form) : le mark doit désigner le champ lui-même. Un libellé ou un conteneur serait
         // redirigé à chaque lecture vers son champ du moment, qui peut avoir changé (relecture de Codex, 19/10).
         if (spec.op === "verify" && el !== raw) {
-            return { error: "Le mark désigne un libellé ou un conteneur, pas le champ : viser le mark du champ lui-même (browser_interactive_map)." };
+            return { error: "The mark points to a label or a container, not the field: target the mark of the field itself (browser_interactive_map)." };
         }
         const kind = tagUp(el) === "TEXTAREA" ? "textarea" : (isTextInput(el) ? "input" : (tagUp(el) === "SELECT" ? "select"
             : (el.isContentEditable ? "contenteditable" : "other")));
@@ -2031,7 +2031,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
                 try { options = Array.from(el.querySelectorAll("option")); } catch (_) {}
             }
             if (kind !== "select" && !options.length) {
-                return { error: "<" + (describe(el) || "élément") + "> n'est pas un <select> : cliquer la liste puis l'option (browser_click avec locator role=option)." };
+                return { error: "<" + (describe(el) || "element") + "> is not a <select>: click the list, then the option (browser_click with locator role=option)." };
             }
             const want = spec.option || {};
             const n = (s) => String(s === undefined || s === null ? "" : s).replace(/\s+/g, " ").trim().toLowerCase();
@@ -2042,8 +2042,8 @@ function agyMouseKit(spec, textKit, locatorKit) {
                 || options.find(o => want.text !== undefined && want.text !== null && n(textOf(o)) === n(want.text))
                 || options.find(o => want.text !== undefined && want.text !== null && n(textOf(o)).includes(n(want.text)))
                 || (Number.isInteger(want.index) ? options[want.index] : undefined);
-            if (!match) return { error: "Aucune option ne correspond à " + JSON.stringify(want) + " (options : " + options.slice(0, 15).map(o => JSON.stringify(textOf(o))).join(", ") + ")" };
-            if (match.disabled) return { error: "L'option " + JSON.stringify(textOf(match)) + " est désactivée" };
+            if (!match) return { error: "No option matches " + JSON.stringify(want) + " (options: " + options.slice(0, 15).map(o => JSON.stringify(textOf(o))).join(", ") + ")" };
+            if (match.disabled) return { error: "Option " + JSON.stringify(textOf(match)) + " is disabled" };
             el.value = valueOf(match);
             match.selected = true;
             const Ev = own.win.Event || (typeof Event !== "undefined" ? Event : null);
@@ -2063,7 +2063,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             // pour ce texte doit être l'option sélectionnée maintenant.
             const want = spec.expect || {};
             // Élément remplacé ou retiré par la page (mark d'un nœud détaché) : sa valeur ne dit plus rien du formulaire.
-            if (el.isConnected === false) return { error: "Champ retiré ou remplacé par la page depuis le geste : relancer browser_interactive_map." };
+            if (el.isConnected === false) return { error: "Field removed or replaced by the page since the gesture: run browser_interactive_map again." };
             const n = (v) => String(v === undefined || v === null ? "" : v).replace(/[\s ]+/g, " ").trim();
             if (want.checked !== undefined) {
                 const checked = lk ? lk.checkedOf(el) : (el.checked === undefined ? null : !!el.checked);
@@ -2090,11 +2090,11 @@ function agyMouseKit(spec, textKit, locatorKit) {
             }
             // Un texte ne se relit que dans un champ de saisie : un libellé devenu sans champ lit "" et confirmerait un
             // effacement (relecture de Codex, 19/10).
-            if (kind === "other" || kind === "select") return { error: `<${String(tagUp(el) || "élément").toLowerCase()}> n'est pas un champ de saisie : viser le mark du champ lui-même.` };
+            if (kind === "other" || kind === "select") return { error: `<${String(tagUp(el) || "element").toLowerCase()}> is not an input field: target the mark of the field itself.` };
             const actual = readValue();
             return state({ verified: kind === "contenteditable" ? n(actual) === n(want.value) : actual === String(want.value) });
         }
-        return { error: "Opération de saisie inconnue : " + op };
+        return { error: "Unknown input operation: " + op };
     }
 
     if (spec.phase === "html5drop") {
@@ -2156,7 +2156,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         const view = viewOf(dst).win;
         const DT = view.DataTransfer || (typeof DataTransfer !== "undefined" ? DataTransfer : null);
         const DE = view.DragEvent || (typeof DragEvent !== "undefined" ? DragEvent : null);
-        if (!DT || !DE) return { error: "DragEvent indisponible dans la page" };
+        if (!DT || !DE) return { error: "DragEvent unavailable in the page" };
         const dataTransfer = new DT();
         const fire = (el, type) => el.dispatchEvent(new DE(type, { bubbles: true, cancelable: true, dataTransfer }));
         fire(src, "dragstart");
@@ -2167,7 +2167,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         return { success: true, from: info(src), to: info(dst) };
     }
 
-    return { error: "Phase souris inconnue : " + spec.phase };
+    return { error: "Unknown mouse phase: " + spec.phase };
 }
 
 // -----------------------------------------------------------------------------
@@ -2222,7 +2222,7 @@ function mouseTimeout(params, fallback) {
 function mouseButton(params) {
     const button = String(params.button || "left").toLowerCase();
     if (!Object.prototype.hasOwnProperty.call(MOUSE_PROOF_EVENT, button)) {
-        throw new Error(`Bouton de souris inconnu '${params.button}' (left, right ou middle)`);
+        throw new Error(`Unknown mouse button '${params.button}' (left, right or middle)`);
     }
     return button;
 }
@@ -2231,7 +2231,7 @@ function mouseClickCount(params) {
     const raw = params.clickCount !== undefined ? params.clickCount
         : (params.click_count !== undefined ? params.click_count : (params.double ? 2 : 1));
     const count = parseInt(raw, 10);
-    if (count !== 1 && count !== 2) throw new Error("click_count doit valoir 1 (simple clic) ou 2 (double clic)");
+    if (count !== 1 && count !== 2) throw new Error("click_count must be 1 (single click) or 2 (double click)");
     return count;
 }
 
@@ -2278,7 +2278,7 @@ function mouseDragSequence(from, to, steps) {
 }
 
 function mousePageError(details) {
-    const error = new Error(details?.exception?.description || details?.text || "Erreur du script de page (souris)");
+    const error = new Error(details?.exception?.description || details?.text || "Page script error (mouse)");
     error.pageError = true;
     return error;
 }
@@ -2289,7 +2289,7 @@ function mousePageError(details) {
  * ou { __dialog } si une boîte s'ouvre.
  */
 async function mousePageCall(target, spec, contextId) {
-    if (!contextId) throw new Error("Monde isolé absent : aucun script exécuté dans le monde de la page.");
+    if (!contextId) throw new Error("No isolated world: no script run in the page world.");
     const expression = `(${MOUSE_KIT_SOURCE})(${JSON.stringify(spec)}, (${TEXT_KIT_SOURCE})(false), (${LOCATOR_KIT_SOURCE})())`;
     const commandParams = { expression, returnByValue: true, awaitPromise: false, contextId };
     const result = await sendCommandWatchingDialogs(target, "Runtime.evaluate", commandParams);
@@ -2312,7 +2312,7 @@ async function dispatchMouse(target, params) {
     const call = sendCommandWatchingDialogs(target, "Input.dispatchMouseEvent", params);
     call.catch(() => {});
     return await withTimeout(call, MOUSE_COMMAND_TIMEOUT_MS,
-        `Input.dispatchMouseEvent ${params.type} sans réponse après ${MOUSE_COMMAND_TIMEOUT_MS} ms`);
+        `Input.dispatchMouseEvent ${params.type}: no response after ${MOUSE_COMMAND_TIMEOUT_MS} ms`);
 }
 
 /**
@@ -2525,7 +2525,7 @@ async function listFrameRoots(target) {
                     root = top;
                 } else {
                     root = {
-                        key: `${s.sessionId}:${f.id}`, label: `${origin} (iframe hors processus)`, target: s.target,
+                        key: `${s.sessionId}:${f.id}`, label: `${origin} (out-of-process iframe)`, target: s.target,
                         contextId: null, frameId: f.id, sessionId: s.sessionId, origin, url: f.url, oopif: true,
                         ownerTarget: s.info.parentSessionId ? { tabId, sessionId: s.info.parentSessionId } : target,
                         parentFrameId: s.info.parentFrameId, parentSessionId: s.info.parentSessionId
@@ -2535,7 +2535,7 @@ async function listFrameRoots(target) {
                 sessionRoot.set(s.sessionId || "", root);
             } else if (origin !== parentOrigin && !oopifFrameIds.has(f.id) && !(await frameReachable(s.target, f))) {
                 root = {
-                    key: `${s.sessionId || "main"}:${f.id}`, label: `${origin} (iframe d'une autre origine)`, target: s.target,
+                    key: `${s.sessionId || "main"}:${f.id}`, label: `${origin} (cross-origin iframe)`, target: s.target,
                     contextId: null, frameId: f.id, sessionId: s.sessionId, origin, url: f.url, oopif: false,
                     ownerTarget: s.target, parentFrameId: f.parentId || null
                 };
@@ -2608,7 +2608,7 @@ async function mainFrameId(target, refresh = false) {
     if (!refresh && mainFrames.has(key)) return mainFrames.get(key);
     const tree = (await chrome.debugger.sendCommand(target, "Page.getFrameTree"))?.frameTree;
     const frameId = tree?.frame?.id;
-    if (!frameId) throw new Error("Cadre principal introuvable (Page.getFrameTree) : aucun script exécuté.");
+    if (!frameId) throw new Error("Main frame not found (Page.getFrameTree): no script run.");
     mainFrames.set(key, frameId);
     return frameId;
 }
@@ -2623,7 +2623,7 @@ async function worldFor(target, frameId, refresh = false, label = null) {
     const res = await chrome.debugger.sendCommand(target, "Page.createIsolatedWorld", {
         frameId, worldName: FRAME_WORLD_NAME, grantUniveralAccess: false
     });
-    if (!res?.executionContextId) throw new Error(`Monde isolé indisponible pour le cadre ${label || frameId}`);
+    if (!res?.executionContextId) throw new Error(`Isolated world unavailable for frame ${label || frameId}`);
     isolatedWorlds.set(key, res.executionContextId);
     return res.executionContextId;
 }
@@ -2633,7 +2633,7 @@ async function worldFor(target, frameId, refresh = false, label = null) {
  * de la page, sauf browser_eval et la transcription YouTube, qui lisent la page elle-même).
  */
 async function rootContextId(root, refresh = false) {
-    if (!root?.target) throw new Error("Contexte racine inconnu");
+    if (!root?.target) throw new Error("Unknown root context");
     const frameId = root.key === "top" ? (root.frameId || await mainFrameId(root.target, refresh)) : root.frameId;
     return await worldFor(root.target, frameId, refresh, root.label);
 }
@@ -2665,7 +2665,7 @@ async function ownerCall(root, spec) {
     const ownerTarget = root.ownerTarget || root.target;
     await ensureDomAgent(ownerTarget);
     const owner = await chrome.debugger.sendCommand(ownerTarget, "DOM.getFrameOwner", { frameId: root.frameId });
-    if (!owner?.backendNodeId) throw new Error(`Élément <iframe> propriétaire introuvable pour le cadre ${root.label}`);
+    if (!owner?.backendNodeId) throw new Error(`Owner <iframe> element not found for frame ${root.label}`);
     // <iframe> propriétaire résolu dans le monde isolé de SON cadre (jamais le monde de la page parente).
     const parentContext = root.parent && sessionKey(root.parent.target) === sessionKey(ownerTarget)
         ? await rootContextId(root.parent)
@@ -2673,7 +2673,7 @@ async function ownerCall(root, spec) {
     const resolveParams = { backendNodeId: owner.backendNodeId, executionContextId: parentContext };
     const resolved = await chrome.debugger.sendCommand(ownerTarget, "DOM.resolveNode", resolveParams);
     const objectId = resolved?.object?.objectId;
-    if (!objectId) throw new Error(`Élément <iframe> propriétaire non résolu pour le cadre ${root.label}`);
+    if (!objectId) throw new Error(`Owner <iframe> element not resolved for frame ${root.label}`);
     try {
         const result = await sendCommandWatchingDialogs(ownerTarget, "Runtime.callFunctionOn", {
             objectId,
@@ -2749,7 +2749,7 @@ async function axRegister(root, locator) {
             // origine du même processus. Délai court, puis moteur DOM pour ce cadre jusqu'au détachement.
             ax = await withTimeout(chrome.debugger.sendCommand(root.target, "Accessibility.queryAXTree", {
                 backendNodeId, role: String(locator.role).toLowerCase()
-            }), AX_QUERY_TIMEOUT_MS, "Accessibility.queryAXTree sans réponse");
+            }), AX_QUERY_TIMEOUT_MS, "Accessibility.queryAXTree: no response");
         } catch (error) {
             axUnavailable.add(root.key + "|" + sessionKey(root.target));
             return null;
@@ -2830,28 +2830,28 @@ async function findAcrossRoots(target, locator, options = {}) {
 
 function describeCandidate(c, index) {
     const id = c.id ? `#${c.id}` : "";
-    return `[${index}] ${c.role || c.tag} « ${String(c.name || "").slice(0, 60)} » <${c.tag}${id}> cadre ${c.frame || "top"}`;
+    return `[${index}] ${c.role || c.tag} "${String(c.name || "").slice(0, 60)}" <${c.tag}${id}> frame ${c.frame || "top"}`;
 }
 
 function ambiguityError(locator, total, candidates) {
-    const list = candidates.slice(0, 10).map((c, i) => describeCandidate(c, i)).join(" ; ");
-    return `Localisateur ambigu ${JSON.stringify(locator)} : ${total} éléments correspondent (préciser exact:true, nth ou un critère de plus) : ${list}`;
+    const list = candidates.slice(0, 10).map((c, i) => describeCandidate(c, i)).join("; ");
+    return `Ambiguous locator ${JSON.stringify(locator)}: ${total} elements match (add exact:true, nth or one more criterion): ${list}`;
 }
 
 function notFoundError(locator, hidden) {
-    const extra = hidden ? ` (${hidden} correspondance(s) masquée(s) ignorée(s) : includeHidden:true pour les voir)` : "";
-    return `Aucun élément ne correspond au localisateur ${JSON.stringify(locator)}${extra}`;
+    const extra = hidden ? ` (${hidden} hidden match(es) ignored: includeHidden:true to see them)` : "";
+    return `No element matches the locator ${JSON.stringify(locator)}${extra}`;
 }
 
 /**
  * Message d'erreur d'un échec de préparation (introuvable, ambigu, couvert...).
  */
 function prepareError(prep, locate) {
-    if (!prep) return "Élément introuvable";
+    if (!prep) return "Element not found";
     if (prep.ambiguous && Array.isArray(prep.candidates)) {
         return ambiguityError(locate?.locator, prep.count, prep.candidates);
     }
-    return prep.error || "Élément introuvable";
+    return prep.error || "Element not found";
 }
 
 /**
@@ -2875,9 +2875,9 @@ async function prepareInRoot(root, locate, options) {
     if (proj?.__dialog) return proj;
     if (!proj.ok) {
         const reason = proj.coveredBy
-            ? `le cadre ${proj.frame} est couvert par <${proj.coveredBy}>`
-            : `le cadre ${proj.frame} n'est pas atteignable (${proj.reason || "hors de la vue"})`;
-        const error = `<${String(prep.tagName || "élément").toLowerCase()}> dans ${root.label} : ${reason} : aucune action souris envoyée.`;
+            ? `frame ${proj.frame} is covered by <${proj.coveredBy}>`
+            : `frame ${proj.frame} is not reachable (${proj.reason || "outside the viewport"})`;
+        const error = `<${String(prep.tagName || "element").toLowerCase()}> in ${root.label}: ${reason}: no mouse action sent.`;
         if (options.allowUnreachable) return { ...prep, point: null, unreachable: error };
         await releaseMouseProbes(root, [prep.probeId]);
         return { notReachable: true, error };
@@ -2916,10 +2916,10 @@ async function locateAndRun(target, locate, run) {
             return { ambiguous: true, error: ambiguityError(locate.locator, found.total, candidates) };
         }
         let index = nth === undefined || nth === null ? 0 : parseInt(nth, 10);
-        if (!Number.isInteger(index)) return { invalid: true, error: `nth invalide : ${nth}` };
+        if (!Number.isInteger(index)) return { invalid: true, error: `Invalid nth: ${nth}` };
         if (index < 0) index += found.total;
         if (index < 0 || index >= found.total) {
-            return { notFound: true, error: `nth=${nth} hors limites : ${found.total} élément(s) correspondent au localisateur ${JSON.stringify(locate.locator)}` };
+            return { notFound: true, error: `nth=${nth} out of range: ${found.total} element(s) match the locator ${JSON.stringify(locate.locator)}` };
         }
         for (const part of found.perRoot) {
             if (index < part.count) {
@@ -2932,7 +2932,7 @@ async function locateAndRun(target, locate, run) {
     if (locate.mark !== undefined && locate.mark !== null) {
         const key = markRoots.get(target.tabId)?.get(Number(locate.mark));
         const root = key ? roots.find(r => r.key === key) : top;
-        if (!root) return { notFound: true, error: `Le cadre du marqueur #${locate.mark} a disparu : relancer browser_interactive_map.` };
+        if (!root) return { notFound: true, error: `The frame of mark #${locate.mark} is gone: run browser_interactive_map again.` };
         return await run(root, locate);
     }
     let first = null;
@@ -2948,14 +2948,14 @@ async function locateAndRun(target, locate, run) {
         // Élément actif : dans le cadre principal, un <iframe> focalisé renvoie au cadre qui a vraiment le focus.
         if (locate.active && prep?.success && String(prep.tagName || "").toUpperCase() === "IFRAME" && roots.length > 1) {
             await releaseMouseProbes(root, [prep.probeId]);
-            first = first || { notFound: true, error: "Le focus est dans un cadre d'une autre origine non trouvé" };
+            first = first || { notFound: true, error: "Focus is in a cross-origin frame that was not found" };
             continue;
         }
         if (prep?.success) return prep;
         if (!prep?.notFound) return prep;  // couvert, ambigu... : pas de recherche ailleurs
         first = first || prep;
     }
-    return first || { notFound: true, error: "Élément introuvable" };
+    return first || { notFound: true, error: "Element not found" };
 }
 
 /**
@@ -2993,7 +2993,7 @@ async function runPageScript(tabId, func, args) {
     const [frame] = await withTimeout(
         chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", func, args }),
         MOUSE_COMMAND_TIMEOUT_MS,
-        `injection JavaScript sans réponse après ${MOUSE_COMMAND_TIMEOUT_MS} ms (boîte de dialogue ouverte ?)`
+        `JavaScript injection: no response after ${MOUSE_COMMAND_TIMEOUT_MS} ms (dialog open?)`
     );
     return frame?.result;
 }
@@ -3004,7 +3004,7 @@ async function runPageScript(tabId, func, args) {
  */
 async function mouseJsFallback(tabId, spec, reason, timeoutMs) {
     if (!chrome.scripting?.executeScript) {
-        throw new Error(`Débogueur indisponible (${reason}) et aucun repli JavaScript possible : aucune action.`);
+        throw new Error(`Debugger unavailable (${reason}) and no JavaScript fallback possible: no action.`);
     }
     const start = Date.now();
     let value;
@@ -3017,10 +3017,10 @@ async function mouseJsFallback(tabId, spec, reason, timeoutMs) {
             await sleepMs(MOUSE_RETRY_MS);
         }
     } catch (error) {
-        throw new Error(`Débogueur indisponible (${reason}) et injection JavaScript refusée (${error.message || error}) : aucune action.`);
+        throw new Error(`Debugger unavailable (${reason}) and JavaScript injection refused (${error.message || error}): no action.`);
     }
-    if (!value) return { error: `Repli JavaScript sans résultat (${reason})` };
-    if (value.notFound || value.error) return { error: value.ambiguous ? ambiguityError(spec.locate?.locator, value.count, value.candidates || []) : (value.error || "Élément introuvable") };
+    if (!value) return { error: `JavaScript fallback returned no result (${reason})` };
+    if (value.notFound || value.error) return { error: value.ambiguous ? ambiguityError(spec.locate?.locator, value.count, value.candidates || []) : (value.error || "Element not found") };
     if (spec.phase === "edit") return { data: { ...value, method: "js_fallback", fallback_reason: reason } };
     const proof = spec.action === "hover" ? { trusted_hover: false } : { trusted_click: false };
     return {
@@ -3029,7 +3029,7 @@ async function mouseJsFallback(tabId, spec, reason, timeoutMs) {
             method: "js_fallback",
             ...proof,
             fallback_reason: reason,
-            warning: "Débogueur indisponible : événements JavaScript synthétiques (isTrusted=false), que beaucoup de sites ignorent. Vérifier l'effet."
+            warning: "Debugger unavailable: synthetic JavaScript events (isTrusted=false), which many sites ignore. Check the effect."
         }
     };
 }
@@ -3129,9 +3129,9 @@ async function performMouseAction(params, options) {
         report.trusted_click = probe ? probe.seen.includes(MOUSE_PROOF_EVENT[button]) : null;
         report.trusted_events = probe ? probe.seen.filter(type => type !== "pointerdown") : null;
         if (report.trusted_click === false) {
-            report.warning = "Aucun événement de confiance n'a atteint l'élément (re-rendu pendant le clic ?) : vérifier l'effet.";
+            report.warning = "No trusted event reached the element (re-rendered during the click?): check the effect.";
         } else if (report.trusted_click === null) {
-            report.note = "Effet non relu : la page a changé pendant le clic (navigation ?).";
+            report.note = "Effect not read back: the page changed during the click (navigation?).";
         }
     }
     return { data: report };
@@ -3210,7 +3210,7 @@ async function setupDebuggerSession(target, resumed = false) {
         });
         crossOriginSupport.set(tabId, true);
     } catch (error) {
-        crossOriginSupport.set(tabId, `Target.setAutoAttach refusé : ${error.message || error}`);
+        crossOriginSupport.set(tabId, `Target.setAutoAttach refused: ${error.message || error}`);
     }
 }
 
@@ -3269,11 +3269,11 @@ async function detachDebugger(tabId) {
 
 /**
  * Pilote d'un onglet tel que vu par le client qui demande (jamais l'identifiant d'un autre) : agent, à moi ou non, et
- * état : "mine", "orphan" (orphelin de mon agent, à reprendre), "other" (autre agent ou session vivante), "julien".
+ * état : "mine", "orphan" (orphelin de mon agent, à reprendre), "other" (autre agent ou session vivante), "user".
  */
 function publicOwner(tabId, client) {
     const owner = tabOwners.get(tabId);
-    if (!owner) return { owner: null, mine: false, state: "julien" };
+    if (!owner) return { owner: null, mine: false, state: "user" };
     const mine = ownedBy(owner, client);
     const state = mine ? "mine" : (orphanFor(owner, client) ? "orphan" : "other");
     return { owner: ownerLabel(owner), mine, adopted: !!owner.adopted, state };
@@ -3308,8 +3308,8 @@ async function getActiveTab(client = null) {
  * Onglet visé par une commande de page : tab_id explicite OBLIGATOIRE, et onglet du client qui la demande
  * (authorizeCommand). Trois agents partagent ce Chrome : aucun repli sur un « dernier onglet » ni sur l'onglet actif.
  */
-const MISSING_TAB_MESSAGE = "Aucun onglet précisé : précisez tab_id ou ouvrez un onglet avec new_tab (browser_new_tab, " +
-    "qui renvoie son id) ; jamais de repli sur l'onglet actif de l'utilisateur ni sur l'onglet d'un autre agent.";
+const MISSING_TAB_MESSAGE = "No tab given: pass tab_id or open a tab with new_tab (browser_new_tab, " +
+    "which returns its id); never a fallback to the user's active tab or to another agent's tab.";
 
 // Adresses qu'un agent peut ouvrir ou visiter : jamais un fichier local (file://), une page interne de Chrome ou un
 // script (javascript:), qui donneraient accès aux secrets du poste ou aux réglages du navigateur.
@@ -3318,7 +3318,7 @@ const NAVIGABLE_URL = /^(https?:\/\/|data:|about:blank$)/i;
 function checkNavigableUrl(url) {
     const text = String(url || "").trim();
     if (!NAVIGABLE_URL.test(text)) {
-        throw new Error(`Adresse refusée : ${text.slice(0, 80)} (http, https, data: ou about:blank seulement ; jamais file://, chrome://, javascript:).`);
+        throw new Error(`URL refused: ${text.slice(0, 80)} (http, https, data: or about:blank only; never file://, chrome://, javascript:).`);
     }
     return text;
 }
@@ -3327,7 +3327,7 @@ async function resolveTargetTab(params = {}) {
     const id = requestedTabId(params);
     if (id === null) {
         const given = params.tabId ?? params.tab_id ?? params.id;
-        if (given !== undefined && given !== null && given !== "") throw new Error(`tab_id invalide : ${given}`);
+        if (given !== undefined && given !== null && given !== "") throw new Error(`Invalid tab_id: ${given}`);
         throw new Error(MISSING_TAB_MESSAGE);
     }
     try {
@@ -3404,7 +3404,7 @@ async function groupTabs(params = {}) {
     }
 
     // Titre, couleur et repli ne sont annoncés que s'ils ont vraiment été appliqués (relus dans la réponse de Chrome).
-    let updateError = chrome.tabGroups.update ? null : "chrome.tabGroups.update indisponible";
+    let updateError = chrome.tabGroups.update ? null : "chrome.tabGroups.update unavailable";
     let updatedGroup = null;
     if (!updateError) {
         try {
@@ -3419,7 +3419,7 @@ async function groupTabs(params = {}) {
                 groupId,
                 tabIds,
                 updated: false,
-                warning: `Onglets regroupés, mais titre, couleur et repli non appliqués (${updateError || "aucune réponse de Chrome"}).`
+                warning: `Tabs grouped, but title, color and collapse not applied (${updateError || "no response from Chrome"}).`
             }
         };
     }
@@ -3475,7 +3475,7 @@ async function tabOfNewWindow(win) {
         try { [tab] = await chrome.tabs.query({ windowId: win.id }); } catch (_) {}
     }
     if (!tab || !Number.isInteger(tab.id)) {
-        throw new Error(`Fenêtre ${win?.id ?? "?"} créée, mais son onglet est introuvable : aucun onglet attribué à l'agent.`);
+        throw new Error(`Window ${win?.id ?? "?"} created, but its tab was not found: no tab assigned to the agent.`);
     }
     return tab;
 }
@@ -3548,11 +3548,11 @@ async function adoptTab(params = {}, client = null) {
     if (owner) return { error: foreignTabMessage(tabId, owner, client) };
     // userAsked (julienAsked, julien_asked : anciens noms, même sens).
     if (![params.userAsked, params.user_asked, params.julienAsked, params.julien_asked].includes(true)) {
-        return { error: `Adoption de l'onglet ${tabId} refusée par défaut : c'est un onglet de l'utilisateur. Seulement s'il l'a demandé explicitement, relancer avec user_asked=True (affiché dans le poste de contrôle de Chrome).` };
+        return { error: `Adoption of tab ${tabId} refused by default: it is the user's tab. Only if the user explicitly asked for it, retry with user_asked=True (shown in the Chrome control panel).` };
     }
     let tab = null;
     try { tab = await chrome.tabs.get(tabId); } catch (_) {}
-    if (tab && isProtectedUrl(tab.url)) return { error: `Onglet ${tabId} protégé (${tab.url}) : jamais confié à un agent.` };
+    if (tab && isProtectedUrl(tab.url)) return { error: `Tab ${tabId} is protected (${tab.url}): never handed to an agent.` };
     await rememberTabOwner(tabId, client, "adopted");
     notifyTabStatus(tabId, "Onglet confié à l'agent par l'utilisateur", 3500, client.agent);
     return { data: { tabId, adopted: true, owner: client.agent, title: tab?.title || "", url: maskUrl(tab?.url || "") } };
@@ -3575,7 +3575,7 @@ async function adoptForPanel(tabId, panelRequest, client) {
     const already = ownedBy(previous, client);
     const reclaimed = !already && orphanFor(previous, client);
     if (previous && !already && !reclaimed) return { error: foreignTabMessage(tabId, previous, client) };
-    if (!previous && current && isProtectedUrl(current.url)) return { error: `Onglet ${tabId} protégé (${current.url}) : jamais confié à un agent.` };
+    if (!previous && current && isProtectedUrl(current.url)) return { error: `Tab ${tabId} is protected (${current.url}): never handed to an agent.` };
     // L'objet écrit par cette transaction, gardé avant toute attente (6e relecture de Codex) : jamais relu dans la Map,
     // où une restitution suivie d'une adoption par un autre client a pu le remplacer pendant la sauvegarde.
     const mine = await rememberTabOwner(tabId, client, previous && !previous.adopted ? "created" : "adopted", panelRequest);
@@ -3585,7 +3585,7 @@ async function adoptForPanel(tabId, panelRequest, client) {
     const late = await agyGrantRefusal(panelRequest, tabId, after);
     if ((agyNavGeneration.get(tabId) || 0) !== generation) {
         if (stillMine()) await releaseTabFromPanel(tabId, mine);
-        return { error: "Adoption refusée : l'utilisateur a changé de page pendant l'adoption, l'onglet lui est rendu. Le lui dire." };
+        return { error: "Adoption refused: the user moved to another page during the adoption; the tab is handed back to the user. Tell the user." };
     }
     if (late) {
         if (stillMine()) {
@@ -3599,7 +3599,7 @@ async function adoptForPanel(tabId, panelRequest, client) {
         return { error: late };
     }
     // Propriété changée pendant les attentes (rendue, reprise par un autre) : cette adoption n'a plus rien à elle.
-    if (!stillMine()) return { error: "Adoption refusée : l'onglet a été rendu ou confié à un autre pendant l'adoption. Le dire à l'utilisateur." };
+    if (!stillMine()) return { error: "Adoption refused: the tab was released or handed to someone else during the adoption. Tell the user." };
     if (already) return { data: { tabId, adopted: !!previous.adopted, already: true, owner: client.agent } };
     if (reclaimed) {
         notifyTabStatus(tabId, "Onglet repris par la nouvelle session", 2500, client.agent);
@@ -3742,7 +3742,7 @@ async function evaluateIsolated(params) {
         if (result?.__dialog) return { data: dialogInterruption(result.__dialog) };
         if (result?.exceptionDetails) {
             const desc = result.exceptionDetails.exception?.description || result.exceptionDetails.text;
-            throw new Error(desc || "Erreur du script de l'extension dans la page");
+            throw new Error(desc || "Extension script error in the page");
         }
         return { data: result?.result?.value !== undefined ? result.result.value : result?.result };
     }
@@ -3819,7 +3819,7 @@ async function getPageContent(params = {}) {
     // Cadres d'une autre origine : texte ajouté sous un en-tête, éléments interactifs avec leur cadre.
     for (const { root, value } of await crossOriginFrameEvaluations(tabId, pageContentScript(params))) {
         if (mode === "text") {
-            if (typeof top.data === "string" && value) top.data += `\n\n--- cadre ${root.label} ---\n${value}`;
+            if (typeof top.data === "string" && value) top.data += `\n\n--- frame ${root.label} ---\n${value}`;
         } else if (top.data && Array.isArray(top.data.elements) && value && Array.isArray(value.elements)) {
             let offset = { x: 0, y: 0 };
             try {
@@ -3904,10 +3904,10 @@ function parseLocator(raw) {
     if (raw === undefined || raw === null || raw === "") return null;
     let loc = raw;
     if (typeof raw === "string") {
-        try { loc = JSON.parse(raw); } catch (_) { throw new Error(`locator illisible (objet JSON attendu) : ${raw}`); }
+        try { loc = JSON.parse(raw); } catch (_) { throw new Error(`Unreadable locator (JSON object expected): ${raw}`); }
     }
     if (!loc || typeof loc !== "object" || Array.isArray(loc)) {
-        throw new Error("locator doit être un objet, par exemple {\"role\":\"button\",\"name\":\"Valider\"}");
+        throw new Error("locator must be an object, for example {\"role\":\"button\",\"name\":\"Submit\"}");
     }
     return loc;
 }
@@ -4013,7 +4013,7 @@ function keyDefinition(name) {
     const fn = /^F([1-9]|1[0-2])$/i.exec(raw);
     if (fn) return { key: `F${fn[1]}`, code: `F${fn[1]}`, keyCode: 111 + Number(fn[1]) };
     if ([...raw].length === 1) return characterKey(raw);
-    throw new Error(`Touche inconnue '${name}' (ex. Enter, Tab, Escape, Backspace, ArrowDown, F5, a, Control+A)`);
+    throw new Error(`Unknown key '${name}' (e.g. Enter, Tab, Escape, Backspace, ArrowDown, F5, a, Control+A)`);
 }
 
 /**
@@ -4021,7 +4021,7 @@ function keyDefinition(name) {
  */
 function parseKeyCombo(combo) {
     const text = String(combo === undefined || combo === null ? "" : combo).trim();
-    if (!text) throw new Error("Touche vide");
+    if (!text) throw new Error("Empty key");
     if ([...text].length === 1) return { modifiers: [], key: text };
     let parts = text.split("+");
     if (text.endsWith("++")) parts = [...text.slice(0, -2).split("+"), "+"];
@@ -4029,7 +4029,7 @@ function parseKeyCombo(combo) {
     const modifiers = [];
     for (const part of parts) {
         const mod = KEY_ALIASES[String(part).trim().toLowerCase()] || String(part).trim();
-        if (!Object.prototype.hasOwnProperty.call(MODIFIER_BITS, mod)) throw new Error(`Modificateur inconnu '${part}' dans '${combo}' (Control, Shift, Alt, Meta)`);
+        if (!Object.prototype.hasOwnProperty.call(MODIFIER_BITS, mod)) throw new Error(`Unknown modifier '${part}' in '${combo}' (Control, Shift, Alt, Meta)`);
         if (!modifiers.includes(mod)) modifiers.push(mod);
     }
     return { modifiers, key: key.trim() || key };
@@ -4040,7 +4040,7 @@ async function sendKeyEvent(target, params) {
     assertNotStopped();
     const call = sendCommandWatchingDialogs(target, "Input.dispatchKeyEvent", params);
     call.catch(() => {});
-    return await withTimeout(call, KEY_COMMAND_TIMEOUT_MS, `Input.dispatchKeyEvent ${params.type} sans réponse après ${KEY_COMMAND_TIMEOUT_MS} ms`);
+    return await withTimeout(call, KEY_COMMAND_TIMEOUT_MS, `Input.dispatchKeyEvent ${params.type}: no response after ${KEY_COMMAND_TIMEOUT_MS} ms`);
 }
 
 function releaseKeyQuietly(target, params) {
@@ -4197,7 +4197,7 @@ async function editJsFallback(tabId, locate, opts, reason) {
         result.data.verified = expected === null ? null : sameText(result.data.value, expected, result.data.kind);
         result.data.value = shownValue(result.data.value, result.data.sensitive);
         result.data.trusted_input = false;
-        result.data.warning = "Débogueur indisponible : valeur posée par le setter natif et des événements synthétiques (isTrusted=false). Vérifier l'effet.";
+        result.data.warning = "Debugger unavailable: value set by the native setter and synthetic events (isTrusted=false). Check the effect.";
         if (opts.keys.length) result.data.keys_not_sent = opts.keys;
     }
     return result;
@@ -4215,7 +4215,7 @@ async function typeIntoElement(tabId, locate, opts) {
     try {
         target = await ensureDebugger(tabId);
     } catch (error) {
-        if (opts.mode === "trusted") throw new Error(`Frappe de confiance impossible : débogueur indisponible (${error.message || error})`);
+        if (opts.mode === "trusted") throw new Error(`Trusted typing impossible: debugger unavailable (${error.message || error})`);
         return await editJsFallback(tabId, locate, opts, error.message || String(error));
     }
     try {
@@ -4248,19 +4248,19 @@ async function typeWithDebugger(target, locate, opts) {
     };
     try {
         let state = await edit("state");
-        if (!state?.success) { await releaseMouseProbes(root, [prep.probeId]); return { error: state?.error || "Champ introuvable" }; }
+        if (!state?.success) { await releaseMouseProbes(root, [prep.probeId]); return { error: state?.error || "Field not found" }; }
         base.kind = state.kind;
         if (state.kind === "select") {
             await releaseMouseProbes(root, [prep.probeId]);
-            return { error: `<select> : utiliser browser_select_option (même localisateur).` };
+            return { error: `<select>: use browser_select_option (same locator).` };
         }
         if (state.kind === "other") {
             await releaseMouseProbes(root, [prep.probeId]);
-            return { error: `<${String(state.tagName || "élément").toLowerCase()}> n'est pas un champ de saisie (input, textarea ou contenteditable).` };
+            return { error: `<${String(state.tagName || "element").toLowerCase()}> is not an input field (input, textarea or contenteditable).` };
         }
         if (state.disabled || state.readOnly) {
             await releaseMouseProbes(root, [prep.probeId]);
-            return { error: `Champ ${state.disabled ? "désactivé" : "en lecture seule"} : aucune saisie.` };
+            return { error: `${state.disabled ? "Disabled" : "Read-only"} field: nothing typed.` };
         }
         const before = state.value;
         const expected = opts.replace ? opts.value : before + opts.value;
@@ -4273,11 +4273,11 @@ async function typeWithDebugger(target, locate, opts) {
                     verified: sameText(res?.value, expected, state.kind), value: shownValue(res?.value, state.sensitive),
                     trusted_input: probe ? probe.seen.includes("input") : null,
                     ...(opts.keys.length ? { keys_not_sent: opts.keys } : {}),
-                    warning: "Repli : valeur posée par le setter natif et des événements synthétiques (isTrusted=false), que certains sites ignorent. Vérifier l'effet."
+                    warning: "Fallback: value set by the native setter and synthetic events (isTrusted=false), which some sites ignore. Check the effect."
                 }
             };
         };
-        if (opts.mode === "setter") return await setter("mode setter demandé");
+        if (opts.mode === "setter") return await setter("setter mode requested");
 
         // 1. Focus : vrai clic au point vérifié, sinon DOM focus.
         await ensureFocusEmulation(target);
@@ -4293,8 +4293,8 @@ async function typeWithDebugger(target, locate, opts) {
             if (state.focused) focus = "dom";
         }
         if (!focus) {
-            const reason = `focus impossible${prep.unreachable ? ` (${prep.unreachable})` : ""}`;
-            if (opts.mode === "trusted") { await releaseMouseProbes(root, [prep.probeId]); return { error: `Frappe de confiance impossible : ${reason}` }; }
+            const reason = `focus not possible${prep.unreachable ? ` (${prep.unreachable})` : ""}`;
+            if (opts.mode === "trusted") { await releaseMouseProbes(root, [prep.probeId]); return { error: `Trusted typing impossible: ${reason}` }; }
             return await setter(reason);
         }
 
@@ -4335,7 +4335,7 @@ async function typeWithDebugger(target, locate, opts) {
         const trustedInput = probe ? probe.seen.includes("input") : null;
         const verified = sameText(after.value, expected, state.kind);
         if (!verified && trustedInput === false && sameText(after.value, before, state.kind) && opts.mode !== "trusted") {
-            return await setter("la frappe de confiance n'a eu aucun effet sur le champ");
+            return await setter("trusted typing had no effect on the field");
         }
 
         // 5. Touches spéciales et raccourcis.
@@ -4353,7 +4353,7 @@ async function typeWithDebugger(target, locate, opts) {
         if (pressed.length) data.keys = pressed;
         if (!verified) {
             data.expected = shownValue(expected, state.sensitive || after.sensitive);
-            data.warning = "Valeur relue différente de la valeur attendue (masque de saisie, filtre ou éditeur qui réécrit le texte) : vérifier.";
+            data.warning = "Value read back differs from the expected value (input mask, filter or editor rewriting the text): check.";
         }
         return await finish(data);
     } catch (error) {
@@ -4365,7 +4365,7 @@ async function typeWithDebugger(target, locate, opts) {
 
 function typingMode(params) {
     const mode = String(params.mode || "auto").toLowerCase();
-    if (!["auto", "trusted", "setter"].includes(mode)) throw new Error(`mode de saisie inconnu '${params.mode}' (auto, trusted ou setter)`);
+    if (!["auto", "trusted", "setter"].includes(mode)) throw new Error(`Unknown input mode '${params.mode}' (auto, trusted or setter)`);
     return mode;
 }
 
@@ -4511,8 +4511,8 @@ async function maskSensitiveFields(tabId, on) {
     const top = await evaluateIsolated({ tabId, code });
     if (on && typeof top?.data !== "number") {
         // Boîte de dialogue ou script refusé : aucune image d'une page dont les champs n'ont pas pu être masqués.
-        throw new Error("Capture refusée : champs sensibles impossibles à masquer dans la page " +
-            "(boîte de dialogue ouverte ? browser_handle_dialog)");
+        throw new Error("Screenshot refused: sensitive fields cannot be masked in the page " +
+            "(dialog open? browser_handle_dialog)");
     }
     let count = Number(top?.data) || 0;
     for (const { value } of await crossOriginFrameEvaluations(tabId, code)) count += Number(value) || 0;
@@ -4555,7 +4555,7 @@ async function takeScreenshot(params = {}) {
     let tabId = await resolveTargetTab(params);
     const format = String(params.format || "png").toLowerCase();
     const mimeType = SCREENSHOT_FORMATS[format];
-    if (!mimeType) throw new Error(`Format de capture inconnu : ${params.format} (png, jpeg ou webp)`);
+    if (!mimeType) throw new Error(`Unknown screenshot format: ${params.format} (png, jpeg or webp)`);
     const cdpFormat = format === "jpg" ? "jpeg" : format;
 
     const target = await ensureDebugger(tabId);
@@ -4695,13 +4695,13 @@ function cdpRefusal(method, commandParams) {
     const refusedParam = (CDP_REFUSED_PARAMS[name] || []).find(key =>
         commandParams && typeof commandParams === "object" && Object.prototype.hasOwnProperty.call(commandParams, key));
     if (refusedParam) {
-        return `Commande CDP refusée : ${name} avec ${refusedParam} (script injecté dans la page à son chargement). ` +
-            `Recharger sans ce paramètre, puis exécuter le script par browser_eval.`;
+        return `CDP command refused: ${name} with ${refusedParam} (script injected into the page on load). ` +
+            `Reload without this parameter, then run the script with browser_eval.`;
     }
     if (CDP_ALLOWED.has(name)) return null;
-    return `Commande CDP refusée : ${name} n'est pas dans la liste des commandes permises (lecture de la page, ` +
-        "captures, entrées et affichage de l'onglet de l'agent). Cookies, stockage, corps de requêtes, Fetch, IO, " +
-        "scripts injectés, navigation et téléchargements passent par les outils dédiés (browser_get_cookies, " +
+    return `CDP command refused: ${name} is not in the list of allowed commands (page reading, ` +
+        "screenshots, input and display of the agent's tab). Cookies, storage, request bodies, Fetch, IO, " +
+        "injected scripts, navigation and downloads go through the dedicated tools (browser_get_cookies, " +
         "browser_network_response, browser_navigate...).";
 }
 
@@ -4713,9 +4713,9 @@ async function sendCdpCommand(params) {
     if (refusal) throw new Error(refusal);
     const method = String(params.method).trim();
     const world = params.world === undefined || params.world === null || params.world === "" ? "isolated" : String(params.world);
-    if (!CDP_WORLDS.has(world)) throw new Error(`world invalide : ${world.slice(0, 40)} ("isolated" par défaut, ou "page").`);
+    if (!CDP_WORLDS.has(world)) throw new Error(`Invalid world: ${world.slice(0, 40)} ("isolated" by default, or "page").`);
     if (world !== "isolated" && method !== "Runtime.evaluate") {
-        throw new Error(`world="${world}" ne vaut que pour Runtime.evaluate (pas pour ${method}).`);
+        throw new Error(`world="${world}" applies only to Runtime.evaluate (not to ${method}).`);
     }
     const tabId = await resolveTargetTab(params);
     const target = await ensureDebugger(tabId);
@@ -5070,7 +5070,7 @@ function maskParams(text) {
         if (eq <= 0) return part;
         let name = part.slice(0, eq);
         try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch (_) {}
-        return SECRET_URL_PARAM.test(name) || LK.sensitiveName(name) ? `${part.slice(0, eq)}=[masqué]` : part;
+        return SECRET_URL_PARAM.test(name) || LK.sensitiveName(name) ? `${part.slice(0, eq)}=[masked]` : part;
     }).join("&");
 }
 
@@ -5096,7 +5096,7 @@ function maskHeaders(headers) {
     if (!headers || typeof headers !== "object") return headers || null;
     const out = {};
     for (const [name, value] of Object.entries(headers)) {
-        if (SECRET_HEADER.test(name)) out[name] = `[masqué, ${String(value).length} caractères]`;
+        if (SECRET_HEADER.test(name)) out[name] = `[masked, ${String(value).length} chars]`;
         else out[name] = URL_HEADER.test(name) ? maskUrl(String(value)) : value;
     }
     return out;
@@ -5198,7 +5198,7 @@ function publicNetworkRecord(rec, includeHeaders) {
         state: rec.state,
         failed: rec.failed,
         startedAt: new Date(rec.startedAt).toISOString(),
-        frame: rec.sessionId ? "iframe hors processus" : "page"
+        frame: rec.sessionId ? "out-of-process iframe" : "page"
     };
     if (rec.failed) Object.assign(out, { errorText: rec.errorText, canceled: rec.canceled, blockedReason: rec.blockedReason || null });
     if (rec.fromCache) out.fromCache = true;
@@ -5259,7 +5259,7 @@ async function getNetworkRequests(params = {}) {
     };
     const recordingUntil = networkRecording.get(tabId) || 0;
     data.recording_until = recordingUntil > Date.now() ? new Date(recordingUntil).toISOString() : null;
-    if (!wasAttached) data.note = "Débogueur attaché par cet appel : seules les requêtes à partir de maintenant seront enregistrées (débogueur détaché après 30 s d'inactivité ; browser_network_record pour le garder pendant une durée bornée).";
+    if (!wasAttached) data.note = "Debugger attached by this call: only requests from now on will be recorded (debugger detached after 30 s of inactivity; browser_network_record keeps it attached for a bounded duration).";
     return { data };
 }
 
@@ -5270,23 +5270,23 @@ async function getNetworkRequests(params = {}) {
 async function getNetworkResponse(params = {}) {
     const tabId = await resolveTargetTab(params);
     const id = String(params.requestId || params.request_id || "").trim();
-    if (!id) throw new Error("Missing request_id (champ request_id de browser_network_requests)");
+    if (!id) throw new Error("Missing request_id (request_id field of browser_network_requests)");
     const log = networkLog(tabId);
     let rec = log.byKey.get(id);
     if (!rec) rec = [...log.records].reverse().find(r => r.requestId === id) || null;
-    if (!rec) throw new Error(`Requête ${id} absente du journal réseau de l'onglet ${tabId} (tampon de ${NETWORK_BUFFER_SIZE} requêtes).`);
+    if (!rec) throw new Error(`Request ${id} not in the network log of tab ${tabId} (buffer of ${NETWORK_BUFFER_SIZE} requests).`);
     const target = await ensureDebugger(tabId);
     if (rec.epoch !== log.epoch) {
-        throw new Error(`Corps indisponible : le débogueur a été détaché puis rattaché depuis la requête ${id} (Chrome ne garde les corps que pendant la session de débogage). Relancer l'action puis lire le corps aussitôt.`);
+        throw new Error(`Body unavailable: the debugger was detached then reattached since request ${id} (Chrome keeps bodies only during the debugging session). Run the action again, then read the body right away.`);
     }
-    if (rec.state === "pending") throw new Error(`Requête ${id} encore en cours : attendre browser_wait_network_idle.`);
-    if (rec.failed) throw new Error(`Requête ${id} en échec (${rec.errorText || "sans corps"}) : aucun corps.`);
+    if (rec.state === "pending") throw new Error(`Request ${id} still pending: wait with browser_wait_network_idle.`);
+    if (rec.failed) throw new Error(`Request ${id} failed (${rec.errorText || "no body"}): no body.`);
     const session = rec.sessionId ? { tabId, sessionId: rec.sessionId } : target;
     let res;
     try {
         res = await chrome.debugger.sendCommand(session, "Network.getResponseBody", { requestId: rec.requestId });
     } catch (error) {
-        throw new Error(`Corps indisponible pour ${id} (${error.message || error}) : redirection, réponse sans corps ou ressource déjà libérée par Chrome.`);
+        throw new Error(`Body unavailable for ${id} (${error.message || error}): redirect, response without body, or resource already released by Chrome.`);
     }
     const maxBytes = Math.max(256, Math.min(5 * 1024 * 1024, parseInt(params.maxBytes !== undefined ? params.maxBytes : params.max_bytes, 10) || 64 * 1024));
     const textual = TEXTUAL_MIME.test(rec.mimeType || "");
@@ -5301,7 +5301,7 @@ async function getNetworkResponse(params = {}) {
             data.truncated = body.length > max64;
         } else {
             data.body = null;
-            data.note = "Corps binaire non rendu (include_binary=true pour le base64, tronqué).";
+            data.note = "Binary body not returned (include_binary=true for base64, truncated).";
         }
         return { data };
     }
@@ -5376,7 +5376,7 @@ function secretBodyKey(name, value) {
 }
 
 function maskedValue(value) {
-    return typeof value === "string" ? `[masqué, ${value.length} caractères]` : "[masqué]";
+    return typeof value === "string" ? `[masked, ${value.length} chars]` : "[masked]";
 }
 
 function maskJsonValue(value, counter, depth = 0) {
@@ -5404,7 +5404,7 @@ function maskFormBody(text, counter) {
         try { value = decodeURIComponent(value.replace(/\+/g, " ")); } catch (_) {}
         if (!secretBodyParam(name, value) || eq === part.length - 1) return part;
         counter.count++;
-        return `${part.slice(0, eq)}=[masqué]`;
+        return `${part.slice(0, eq)}=[masked]`;
     }).join("&");
 }
 
@@ -5435,12 +5435,12 @@ function maskSecretBody(text, mimeType = "") {
     let out = source.replace(/("((?:[^"\\]|\\.){1,80})"\s*:\s*)"((?:[^"\\]|\\.)*)"/g, (match, head, key, value) => {
         if (!value || !secretBodyKey(key, value)) return match;
         counter.count++;
-        return `${head}"[masqué, ${value.length} caractères]"`;
+        return `${head}"[masked, ${value.length} chars]"`;
     });
     out = out.replace(/([?&#]([A-Za-z0-9_.%-]{1,80})=)([^&#"'\s<]+)/g, (match, head, key, value) => {
         if (!secretBodyParam(key, value)) return match;
         counter.count++;
-        return `${head}[masqué]`;
+        return `${head}[masked]`;
     });
     return { text: out, count: counter.count };
 }
@@ -5449,7 +5449,7 @@ function maskSecretBody(text, mimeType = "") {
 const EMBEDDED_SECRET = /\b(Bearer|Basic)\s+[\w.~+\/=-]{8,}|\b(ya29\.|gh[pousr]_|github_pat_|glpat-|sk-|sk_(live|test)_|rk_(live|test)_|xox[abprs]-|AIza)[\w.-]{8,}|\b(AKIA|ASIA)[0-9A-Z]{12}\b|\beyJ[\w-]+\.[\w-]+\.[\w-]+/g;
 
 function maskLogText(text) {
-    return maskSecretBody(text).text.replace(EMBEDDED_SECRET, match => `[masqué, ${match.length} caractères]`);
+    return maskSecretBody(text).text.replace(EMBEDDED_SECRET, match => `[masked, ${match.length} chars]`);
 }
 
 /** Entrée de console masquée : textes, clés secrètes, et paires { name, value } des aperçus d'objets CDP. */
@@ -5496,7 +5496,7 @@ function publicDownload(d) {
  * référent ou l'URL a l'origine de l'onglet. Jamais d'acceptation d'un fichier jugé dangereux.
  */
 async function waitForDownload(params = {}) {
-    if (!chrome.downloads?.search) throw new Error("API chrome.downloads indisponible");
+    if (!chrome.downloads?.search) throw new Error("chrome.downloads API unavailable");
     // L'onglet de l'agent est obligatoire : sans lui, le téléchargement d'un autre agent pourrait être pris.
     const tabId = await resolveTargetTab(params);
     const timeoutMs = Math.max(0, parseInt(params.timeoutMs !== undefined ? params.timeoutMs : params.timeout, 10) || 30000);
@@ -5518,17 +5518,17 @@ async function waitForDownload(params = {}) {
             return { data: { success: true, ...publicDownload(chosen), waited_ms: Date.now() - start } };
         }
         if (chosen && chosen.state === "interrupted") {
-            return { error: `Téléchargement interrompu (${chosen.error || "raison inconnue"}) : ${chosen.finalUrl || chosen.url}` };
+            return { error: `Download interrupted (${chosen.error || "unknown reason"}): ${chosen.finalUrl || chosen.url}` };
         }
         if (Date.now() - start >= timeoutMs) break;
         await sleepMs(200);
     }
     if (chosen) {
         const danger = chosen.danger && !["safe", "accepted"].includes(chosen.danger)
-            ? ` ; Chrome le juge « ${chosen.danger} » et attend la décision de l'utilisateur (jamais acceptée par l'agent)` : "";
-        return { error: `Téléchargement non terminé après ${timeoutMs} ms (état ${chosen.state}, ${chosen.bytesReceived}/${chosen.totalBytes} octets${danger}) : ${chosen.filename || chosen.url}` };
+            ? `; Chrome rates it "${chosen.danger}" and waits for the user's decision (never accepted by the agent)` : "";
+        return { error: `Download not finished after ${timeoutMs} ms (state ${chosen.state}, ${chosen.bytesReceived}/${chosen.totalBytes} bytes${danger}): ${chosen.filename || chosen.url}` };
     }
-    return { error: `Aucun téléchargement${origin ? ` venant de ${origin}` : ""} commencé depuis ${new Date(since).toISOString()} (délai ${timeoutMs} ms). Une fenêtre « Enregistrer sous » de Chrome peut attendre l'utilisateur.` };
+    return { error: `No download${origin ? ` from ${origin}` : ""} started since ${new Date(since).toISOString()} (timeout ${timeoutMs} ms). A Chrome "Save as" window may be waiting for the user.` };
 }
 
 /**
@@ -5604,7 +5604,7 @@ async function selectOption(params = {}) {
     if (params.text !== undefined && params.text !== null) option.text = String(params.text);
     if (params.label !== undefined && params.label !== null && !params.locator) option.label = String(params.label);
     if (params.optionIndex !== undefined && params.optionIndex !== null) option.index = parseInt(params.optionIndex, 10);
-    if (!Object.keys(option).length) return { error: "Préciser value, text ou optionIndex de l'option à choisir" };
+    if (!Object.keys(option).length) return { error: "Give value, text or optionIndex of the option to choose" };
     const tabId = await resolveTargetTab(params);
     if (tabId) lastActionAt.set(tabId, Date.now());
     return await editOperation(params, locate, "selectOption", { option }, mouseTimeout(params, 1200));
@@ -5623,7 +5623,7 @@ async function fieldState(params = {}) {
     if (!locate) return { error: "Missing locator, selector or mark of the field to read back" };
     const expect = params.expect && typeof params.expect === "object" ? params.expect : null;
     const kinds = expect ? ["value", "option", "checked"].filter(k => expect[k] !== undefined && expect[k] !== null) : [];
-    if (kinds.length !== 1) return { error: "expect : une seule clé parmi value, option, checked" };
+    if (kinds.length !== 1) return { error: "expect: exactly one key among value, option, checked" };
     return await editOperation(params, locate, "verify", { expect: { [kinds[0]]: expect[kinds[0]] } }, mouseTimeout(params, 1200));
 }
 
@@ -5635,9 +5635,9 @@ async function setChecked(params = {}) {
     const before = await editOperation(params, locate, "check", {}, timeoutMs);
     if (before.error || before.data?.dialogOpened) return before;
     if (before.data.checked === null || before.data.checked === undefined) {
-        return { error: `<${String(before.data.tagName || "élément").toLowerCase()}> n'a pas d'état coché (case, radio, role=checkbox/switch attendu)` };
+        return { error: `<${String(before.data.tagName || "element").toLowerCase()}> has no checked state (checkbox, radio, role=checkbox/switch expected)` };
     }
-    if (before.data.disabled) return { error: "Case désactivée : aucun clic." };
+    if (before.data.disabled) return { error: "Checkbox disabled: no click." };
     if (before.data.checked === wanted) {
         return { data: { success: true, checked: wanted, changed: false, verified: true, method: "none" } };
     }
@@ -5653,7 +5653,7 @@ async function setChecked(params = {}) {
         changed: checked !== before.data.checked,
         verified: checked === wanted
     };
-    if (!data.verified) data.warning = `État relu ${JSON.stringify(checked)} au lieu de ${wanted} après le clic (bouton radio, case contrôlée par la page ?).`;
+    if (!data.verified) data.warning = `State read back ${JSON.stringify(checked)}, expected ${wanted} after the click (radio button, checkbox controlled by the page?).`;
     return { data };
 }
 
@@ -5776,9 +5776,9 @@ function isLocalDevUrl(url) {
     }
 }
 
-const LOCAL_COOKIE_REFUSAL = "Valeurs de cookies refusées : seulement pour une origine locale de développement " +
-    "(localhost, 127.0.0.1, [::1], *.localhost, *.test), jamais pour un site réel (secrets de session de l'utilisateur). " +
-    "Relancer sans include_values pour les noms et attributs.";
+const LOCAL_COOKIE_REFUSAL = "Cookie values refused: only for a local development origin " +
+    "(localhost, 127.0.0.1, [::1], *.localhost, *.test), never for a real site (the user's session secrets). " +
+    "Run again without include_values to get names and attributes.";
 
 /**
  * Cookies via CDP Network.getCookies : noms et attributs. Valeurs jamais par défaut ; includeValues=true seulement si
@@ -5887,7 +5887,7 @@ const EXPORT_FETCH_TIMEOUT_MS = 40000;
 function exportError(res) {
     if (res?.data?.dialogOpened) return res;
     if (res?.data && typeof res.data === "object" && res.data.error) return { error: res.data.error };
-    if (!res?.data) return { error: "La page n'a rien renvoyé (onglet en cours de chargement ou protégé ?)" };
+    if (!res?.data) return { error: "The page returned nothing (tab still loading or protected?)" };
     return null;
 }
 
@@ -5935,7 +5935,7 @@ async function exportGsuite(params = {}) {
         const fetchError = fetched.networkError;
         fetched = await downloadViaBrowser(plan.url, `nexus-browser-exports/${plan.document_id}.${plan.extension}`, EXPORT_FETCH_TIMEOUT_MS);
         via = "download";
-        if (fetched?.networkError) fetched.networkError = `${fetchError} ; téléchargement : ${fetched.networkError}`;
+        if (fetched?.networkError) fetched.networkError = `${fetchError}; download: ${fetched.networkError}`;
     }
     const verdict = EK.gsuiteVerdict(plan, fetched);
     if (verdict.error) {
@@ -5962,7 +5962,7 @@ async function exportGsuite(params = {}) {
     };
     if (plan.kind === "spreadsheets") {
         data.gid = plan.gid;
-        if ((plan.format === "csv" || plan.format === "tsv") && plan.gid === null) data.note = "Sans gid : première feuille du classeur seulement (préciser gid, ou ouvrir la feuille voulue).";
+        if ((plan.format === "csv" || plan.format === "tsv") && plan.gid === null) data.note = "No gid: first sheet of the spreadsheet only (give gid, or open the wanted sheet).";
     }
     if (via === "download") data.download_path = fetched.path;
     else if (plan.binary) data.base64 = fetched.base64;
@@ -5994,7 +5994,7 @@ async function downloadViaBrowser(url, filename, timeoutMs) {
         };
         const timer = setTimeout(async () => {
             await discardDownload(id);
-            finish({ networkError: `téléchargement non terminé en ${timeoutMs} ms` });
+            finish({ networkError: `download not finished within ${timeoutMs} ms` });
         }, timeoutMs);
         async function check() {
             const [item] = await chrome.downloads.search({ id });
@@ -6008,7 +6008,7 @@ async function downloadViaBrowser(url, filename, timeoutMs) {
                 });
             } else if (item.state === "interrupted") {
                 await discardDownload(id);
-                finish({ networkError: `téléchargement interrompu (${item.error || "raison inconnue"})` });
+                finish({ networkError: `download interrupted (${item.error || "unknown reason"})` });
             }
         }
         function onChanged(delta) {
@@ -6029,7 +6029,7 @@ async function discardDownload(id) {
 async function exportYoutubeTranscript(params = {}) {
     const tabId = await resolveTargetTab(params);
     const tab = await chrome.tabs.get(tabId);
-    if (!EK.isYoutubeUrl(tab?.url || "")) return { error: `L'onglet n'est pas une page YouTube (${String(tab?.url || "?").slice(0, 120)}).` };
+    if (!EK.isYoutubeUrl(tab?.url || "")) return { error: `The tab is not a YouTube page (${String(tab?.url || "?").slice(0, 120)}).` };
     const spec = {
         lang: params.lang || null,
         format: params.format || "json3",
@@ -6314,7 +6314,7 @@ async function dragAndDrop(params = {}) {
             if (src?.__dialog) return await fail({ data: { ...dialogInterruption(src.__dialog), method: "cdp" } });
             if (src?.probeId) probes.push({ root: src.root, id: src.probeId });
             if (!src?.success) {
-                return await fail({ error: "Source et destination ne sont pas atteignables dans la même vue : " + prepareError(src, from.locate) });
+                return await fail({ error: "Source and destination are not reachable in the same view: " + prepareError(src, from.locate) });
             }
         }
     } catch (error) {
@@ -6365,7 +6365,7 @@ async function dragAndDrop(params = {}) {
     report.trusted_drop = dstProbe ? dstProbe.drops > 0 : null;
     report.trusted_drag = srcProbe ? srcProbe.trusted > 0 : null;
     if (html5Fallback) {
-        report.warning = "Aucun drop de confiance après la séquence CDP : DragEvent HTML5 synthétique envoyé une fois en repli.";
+        report.warning = "No trusted drop after the CDP sequence: synthetic HTML5 DragEvent sent once as a fallback.";
     }
     return { data: report };
 }

@@ -52,7 +52,7 @@ def test_bridge_refuses_actions_during_emergency_stop():
     for action in ("click", "fill", "eval", "get-cookies", "cdp-send", "upload", "navigate", "adopt-tab"):
         status, payload = post(action)
         assert status == 423, action
-        assert payload["emergency_stop"] is True and "Arrêt d'urgence" in payload["error"]
+        assert payload["emergency_stop"] is True and "Emergency stop" in payload["error"]
     # Une lecture n'est pas bloquée par l'arrêt : elle va jusqu'à l'extension (absente ici).
     status, payload = post("list-tabs")
     assert status == 400 and "No Chrome browser extension connected" in payload["error"]
@@ -90,7 +90,7 @@ def test_stop_cancels_the_command_already_running_and_warns_the_extension():
     asyncio.run(asyncio.wait_for(scenario(), 30))
     assert result["status"] == 423
     assert result["payload"]["emergency_stop"] is True
-    assert "annulée en cours d'exécution" in result["payload"]["error"]
+    assert "cancelled while running" in result["payload"]["error"]
     assert result["elapsed"] < 5
 
 
@@ -112,8 +112,8 @@ def test_identity_is_required_and_reserved_actions_refused():
 
     for headers in ({}, {AGENT_HEADER: "Claude"}, {AGENT_HEADER: "Claude", CLIENT_HEADER: "x"}):
         status, payload = raw("click", headers)
-        assert status == 400 and "Identité du client absente ou invalide" in payload["error"], headers
+        assert status == 400 and "Missing or invalid client identity" in payload["error"], headers
     status, payload = raw("emergency-stop", IDENTITY)
-    assert status == 403 and "réservée au pont" in payload["error"]
+    assert status == 403 and "reserved to the bridge" in payload["error"]
     status, payload = raw("ping", {})  # contrôle de vie (verify.ps1) : seul permis sans identité
-    assert "Identité" not in payload.get("error", "")
+    assert "client identity" not in payload.get("error", "")
