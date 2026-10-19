@@ -12,7 +12,8 @@ function Invoke-RegistreReel([string[]]$Commandes) {
     # Les commandes reg vont dans un fichier .cmd, pas sur la ligne de commande de la tache : Microsoft Defender juge
     # « conhost --headless cmd /c reg add ...\Run » malveillant (Trojan:Win32/Commando.A!ml, au hasard d'un appel sur
     # dix environ) et bloque alors le lancement (0x80070005), sans aucune sortie.
-    $lignes = @("@echo off", "chcp 65001 >nul", "(") + ($Commandes | ForEach-Object { "reg $_" }) + @(") > `"$sortie`" 2>&1")
+    # Dans un fichier .cmd, doubler les '%' pour qu'ils ne soient pas interpretes comme variables ou arguments cmd (%1, etc.).
+    $lignes = @("@echo off", "chcp 65001 >nul", "(") + ($Commandes | ForEach-Object { "reg $($_.Replace('%', '%%'))" }) + @(") > `"$sortie`" 2>&1")
     [IO.File]::WriteAllText($script, ($lignes -join "`r`n") + "`r`n", [Text.UTF8Encoding]::new($false))
     # conhost --headless : aucune fenetre de console visible pendant l'instant de la tache.
     $action = New-ScheduledTaskAction -Execute "conhost.exe" -Argument "--headless cmd.exe /d /c `"$script`""

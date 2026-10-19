@@ -3,5 +3,8 @@
 # l'installation y entre : dépendances (uv.lock), install.ps1, l'hôte natif (installer-hote-natif.ps1) et
 # l'environnement local (runtime.ps1).
 $root = Split-Path -Parent $PSScriptRoot
-$files = 'uv.lock', 'install.ps1', 'scripts\installer-hote-natif.ps1', 'scripts\runtime.ps1'
-($files | ForEach-Object { (Get-FileHash (Join-Path $root $_)).Hash }) -join ' '
+$files = @('uv.lock', 'install.ps1', 'scripts\installer-hote-natif.ps1', 'scripts\runtime.ps1', 'scripts\refresh_extension.py') +
+    @(Get-ChildItem -LiteralPath (Join-Path $root 'client'), (Join-Path $root 'extension') -Recurse -File |
+        Where-Object { $_.FullName -notmatch '\\__pycache__\\' } | Sort-Object FullName |
+        ForEach-Object { $_.FullName.Substring($root.Length + 1) })
+($files | ForEach-Object { (Get-FileHash -LiteralPath (Join-Path $root $_)).Hash }) -join ' '

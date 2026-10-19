@@ -287,7 +287,13 @@ def test_mcp_drag_and_drop_serialization(monkeypatch):
     from client import mcp_server
 
     fake_data = {"success": True, "from": {"x": 10, "y": 20}, "to": {"x": 30, "y": 40}, "steps": 12}
-    monkeypatch.setattr(mcp_server, "call_bridge", lambda action, params, timeout=20.0: fake_data)
+    from conftest import neutral_trigger_read
+
+    def fake(action, params, timeout=20.0):
+        read = neutral_trigger_read(action, params)  # lecture du déclencheur (accord) : rien de sortant
+        return fake_data if read is None else read
+
+    monkeypatch.setattr(mcp_server, "call_bridge", fake)
     result = json.loads(mcp_server.browser_drag_and_drop(from_mark=1, to_mark=2, tab_id=1))
     assert result["status"] == "success"
     assert result["data"]["success"] is True

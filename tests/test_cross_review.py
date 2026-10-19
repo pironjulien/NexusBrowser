@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import neutral_trigger_read
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "client"))
@@ -29,6 +30,8 @@ def bridge(monkeypatch):
     next_tab = iter(range(11, 100))
 
     def fake(action, params, timeout=20.0):
+        if (read := neutral_trigger_read(action, params)) is not None:  # lecture du déclencheur : rien de sortant
+            return read
         sent.append((action, dict(params or {}), timeout))
         if action == "create-tab":
             return {"id": next(next_tab), "url": (params or {}).get("url")}
@@ -243,4 +246,4 @@ def test_chrome_found_in_user_install_and_app_paths(tmp_path, monkeypatch):
 
 def test_versions_bumped_for_changed_tools():
     manifest = json.loads((REPO_ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == bridge_security.VERSION == "2.11.0"
+    assert manifest["version"] == bridge_security.VERSION == "2.12.1"

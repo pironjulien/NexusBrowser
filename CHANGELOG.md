@@ -5,6 +5,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.12.1] - 2026-10-20
+
+### Security
+- GitHub Actions pinned by commit SHA, checkouts without persisted credentials, release metadata passed through the environment (no template expansion in scripts), no build cache in the release workflow. The MCP registry upload is now a job of the PyPI workflow (no more `workflow_run` trigger). Dependabot (actions and uv, 7-day cooldown) and an OpenSSF Scorecard workflow added; `zizmor` reports no finding.
+
+### Fixed
+- Document five historical synthetic network-response fixtures using exact Gitleaks fingerprints; no global rule or path exemption. New changes and history remain scanned.
+- Installation freshness includes extension and client sources. Existing connected extensions are checked and refreshed automatically; the supervised Browser MCP worker is reloaded independently. Installation defers while an agent owns tabs, waits for the bridge's reconnect, and does not record a successful update when refresh fails.
+- Use Chromium's computed full accessibility tree for role/name matching before the existing `queryAXTree` fallback. The latter was measured waiting 1.5 seconds on the main document with iframes; computed accessible names and role filtering remain covered by regression tests.
+- Resolve the outward-action probe in the isolated context that owns a mark, including cross-origin and out-of-process iframes. The existing mark registry selects the context; the accord check remains active. Live ambiguity checks accept both cases in the English error message.
+- Acknowledge the temporary CDP screencast frames used for background screenshots. Unacknowledged frames could stall repeated captures; frame pixels are never retained by the event handler. Loaded-code detection includes `capture-screencast-ack`.
+- Shared daemon (`--http`): a client that resets its connection no longer makes the Windows Proactor loop log a traceback (`ConnectionResetError` in `_call_connection_lost`); only that error is silenced, every other loop error is still logged.
+- `scripts/registre-reel.ps1`: escape `%` as `%%` in generated `.cmd` batch scripts so arguments like `%1` are not swallowed by `cmd.exe` when setting registry values.
+
+## [2.12.0] - 2026-10-19
+
+### Added
+- **Outward gestures need the user's accord for the exact action** (trinity agreement of 2026-10-19,
+  "ameliorations-outils", priority 1). `browser_click`, `browser_semantic_click`, `browser_click_mark`,
+  `browser_press_key` (Enter, Control+Enter, Space), `browser_type_keys` (line break or submitting keys),
+  `browser_fill` and `browser_semantic_fill` (submitting `keys`) and `browser_drag_and_drop` take `confirm` and
+  `accord`. Before the gesture, the server reads the trigger without any gesture, through the bridge's existing read
+  paths only (`find`, and the read-only `client/trigger_probe.js` evaluated by `cdp-send` in the isolated world; no
+  new extension action, works with the extension already loaded): label of the clicked control, or submit buttons of the focused field's form; that form's fields,
+  sensitive values masked; recipients from email/tel/"to" fields and `email` chips; file attachments; tab origin,
+  path and title). When the shared policy sees an outward word (send, pay, buy, order, publish, post, call, transfer,
+  subscribe, book...), the gesture is refused with a summary of the exact action and a one-time token (10 min); it
+  runs only when sent again with `confirm=true` and that token, unchanged. `confirm=true` alone, a token read in a
+  page, a token for another action or a changed field, recipient, typed text or page are refused. Neutral links and
+  buttons stay free. Fails closed only when the read really fails. One `Accords` object per server process.
+- The CLI runs the same check; since each command is its own process it cannot carry a token, so it refuses outward
+  gestures with the summary of the action and points to the MCP server (other gestures stay free).
+- Page text outputs (`browser_content`, `browser_axtree`, `browser_export`, `browser_export_gsuite`,
+  `browser_youtube_transcript`, `browser_network_response`) carry `untrusted_note` when the text looks like
+  instructions aimed at an AI (signal only), and are recorded as text read (provenance of a recipient).
+- The shared guardrail policy ships inside the package (`client/garde_fous.py`, `client/garde-fous.json`, identical
+  copies of NexusHarness/shared; a test checks it when that folder exists).
+- Tests: `tests/test_outward_accord.py` (offline mail page: send refused without confirm, token flow, changed field,
+  Enter toward a Send button, neutral link, concurrent paths, page injection, CLI across processes, embedded policy)
+  and a Node test of `trigger_probe.js` on a fake page (read-only, password never read).
+
+### Changed
+- `browser_eval` and `browser_cdp_send` keep full page access by choice; their descriptions, the server
+  instructions, README and SECURITY.md now say plainly that they do not go through the accord and must never be used
+  for an outward action.
+- The real validation (`test.ps1 -Full`) clicks its "Valider la commande" and "Envoyer" buttons through the accord
+  flow. Extension and bridge code are unchanged (version number only): no reload needed for the check to work.
+
 ## [2.11.0] - 2026-10-19
 
 ### Changed

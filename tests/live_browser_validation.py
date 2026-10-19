@@ -313,6 +313,15 @@ def parse_response(raw_json_or_dict: str | dict) -> dict:
     return json.loads(raw_json_or_dict)
 
 
+def with_accord(call) -> dict:
+    """Geste sortant (2.12.0) : refusé avec un jeton lié à l'action exacte, puis le même geste avec confirm et accord.
+    Valide en réel le contrôle d'accord (lecture du déclencheur par find et cdp-send)."""
+    first = parse_response(call())
+    assert first.get("accord_required"), first
+    token = first["error"].rsplit('accord="', 1)[1].split('"', 1)[0]
+    return parse_response(call(confirm=True, accord=token))
+
+
 def get_eval_val(eval_res: str | dict):
     parsed = parse_response(eval_res)
     d = parsed.get("data")
@@ -500,8 +509,10 @@ def run_live_validation():
 
         # 15. browser_semantic_click
         print("\n--- [15/31] Test: browser_semantic_click ---")
-        sclick_res = parse_response(
-            mcp.browser_semantic_click(role="button", name="Valider la commande", tab_id=test_tab_id)
+        sclick_res = with_accord(
+            lambda tab=test_tab_id, **accord: mcp.browser_semantic_click(
+                role="button", name="Valider la commande", tab_id=tab, **accord
+            )
         )
         assert sclick_res.get("status") == "success"
         order_res = mcp.browser_eval("document.getElementById('btn-result').textContent", tab_id=test_tab_id)
@@ -841,7 +852,7 @@ def run_mouse_validation() -> dict[str, bool]:
         check(
             "element_couvert_refuse",
             res.get("status") == "error"
-            and "couvert" in res.get("error", "")
+            and "covered" in res.get("error", "").lower()
             and live.get("covered") == 0
             and live.get("overlay") == 0,
             {"reponse": res.get("error") or res.get("data"), "page": live},
@@ -1250,7 +1261,7 @@ def run_full_validation() -> dict[str, bool]:
         res = mcp.browser_click(locator={"role": "button", "name": "Valider"}, tab_id=tab_id)
         check(
             "strict_homonymes_refuses",
-            "ambigu" in _error(res) and "Valider le panier" in _error(res) and not page().get("clicks"),
+            "ambigu" in _error(res).lower() and "Valider le panier" in _error(res) and not page().get("clicks"),
             _error(res) or res,
         )
         res = parse_response(
@@ -1272,7 +1283,9 @@ def run_full_validation() -> dict[str, bool]:
             and "del-1" not in page().get("clicks", {}),
             res.get("data") or res,
         )
-        res = parse_response(mcp.browser_click(locator={"testId": "submit-zone"}, tab_id=tab_id))
+        res = with_accord(
+            lambda **accord: mcp.browser_click(locator={"testId": "submit-zone"}, tab_id=tab_id, **accord)
+        )
         check("clic_test_id", res.get("status") == "success" and page().get("clicks", {}).get("send") == 1, res)
         res = mcp.browser_click(locator={"role": "button", "name": "Inexistant"}, timeout_ms=300, tab_id=tab_id)
         check("localisateur_introuvable_clair", "No element matches" in _error(res), _error(res) or res)
@@ -1364,7 +1377,7 @@ def run_full_validation() -> dict[str, bool]:
             found,
         )
         res = mcp.browser_click(locator={"role": "button", "name": "Action commune"}, tab_id=tab_id)
-        check("strict_entre_cadres", "ambigu" in _error(res), _error(res) or res)
+        check("strict_entre_cadres", "ambigu" in _error(res).lower(), _error(res) or res)
         for name in ("A", "B"):
             res = parse_response(mcp.browser_click(locator={"role": "button", "name": f"Action {name}"}, tab_id=tab_id))
             time.sleep(0.3)

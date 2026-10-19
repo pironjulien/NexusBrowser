@@ -1,0 +1,20 @@
+# Dependabot: weekly updates of the pinned GitHub Actions (SHA + version comment) and of the project's dependencies.
+# A 7-day cooldown lets a compromised release be caught before it is proposed (zizmor dependabot-cooldown).
+# Keep the ecosystem matching the manifest: "uv" (uv.lock) or "pip" for pyproject.toml, "npm" for package.json.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

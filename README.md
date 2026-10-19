@@ -135,6 +135,28 @@ points to the one-time install.
   above covers the dedicated tools, not scripts nor the raw Chrome replies of `browser_cdp_send`
   (`DOM.getOuterHTML`, `Accessibility.getFullAXTree`...): kept on purpose, said plainly in the tool, the skill and
   the server instructions. `Page.reload` with `scriptToEvaluateOnLoad` is refused (script injected at load).
+- **Outward gestures need the user's accord for the exact action** (2.12.0): before a click
+  (`browser_click`, `browser_click_mark`, `browser_semantic_click`), Enter / Control+Enter / Space
+  (`browser_press_key`, `keys` of `browser_fill` and `browser_semantic_fill`), a typed line break
+  (`browser_type_keys`) or a drag, the server reads the trigger without any gesture, through the bridge's existing
+  read paths (`find` for locators, and a read-only script, `client/trigger_probe.js`, evaluated by `cdp-send` in the
+  extension's isolated world): no new extension action, so it works with the extension already loaded. It reads the
+  clicked control, or the submit buttons of the focused field's form. When the shared policy
+  (`client/garde-fous.json`) sees an outward word (send, pay, buy, order, publish, post, call, transfer, subscribe,
+  book...), the gesture is refused with a summary of the exact action (target, recipients, form content without
+  sensitive values, attachments, page origin and path) and a one-time token valid 10 minutes. The agent shows the
+  summary to the user and, only after their yes, sends the same call again with `confirm=true` and
+  `accord="<token>"`. Any change between the accord and the gesture voids it; `confirm=true` alone is never enough;
+  a token read in a page is unknown. Neutral links and buttons stay free. The check fails closed only when the read
+  really fails (script error, focus in a cross-origin frame, form of a field aimed at by Enter unreadable). Page text
+  outputs (`browser_content`, `browser_axtree`, `browser_export`, Google and YouTube exports, network bodies) carry
+  `untrusted_note` when the text looks like instructions aimed at an AI (a signal only). The CLI runs the same check
+  but cannot carry a token from one command to the next (one process each): it refuses outward gestures with the
+  summary and points to the MCP server; every other gesture stays free.
+- **Paths that do not go through the accord**: `browser_eval` and `browser_cdp_send` (`Runtime.evaluate`,
+  `Input.dispatch*`) keep full page access by design and can click or submit without this check; the tool
+  descriptions and the server instructions tell the model never to use them for an outward action. Bare coordinates
+  of `browser_drag_and_drop` are not read either.
 - **Emergency stop** (Ctrl+Alt+Shift+Esc, STOP button of the control panel, `~\.nexus\stop`): commands already
   running are cancelled (typing, drag, waits), debuggers detached, every action refused for 120 s. The same file
   protocol is shared with the [NexusWindows](https://julienpiron.fr/nexuswindows/) agents.
@@ -150,6 +172,11 @@ pwsh -NoProfile -File verify.ps1 -Browser  # task, native host, bridge reached, 
 ```
 
 `test.ps1` uses the environment created by `install.ps1`.
+
+Updating an existing installation also checks the extension's loaded version/features and reloads it when needed,
+then reloads the supervised Browser MCP worker. The installation fingerprint covers client and extension sources.
+An update defers while an agent owns browser tabs; user tabs are never driven or activated by the refresh.
+If Chrome is closed, it loads the updated extension files on its next launch; that state is not a live validation.
 
 ## Privacy
 
@@ -182,6 +209,11 @@ Questions or concerns: open an issue on this repository.
   being debugged" banner on the agent tab. Protected pages (`chrome://`, the Web Store) cannot be scripted.
 - Tab ownership is per MCP process: sub-agents of one conversation share it.
 - The YouTube transcript reads the page's own player (page world).
+- The outward-action check reads the trigger just before the gesture: a page that rewrites its form or its button
+  in between is not seen. It recognizes `<form>`, dialogs and the nearest block holding a field and a button (at most 3 fields, like a chat composer);
+  recipients shown as custom chips are read only when they carry an `email` attribute. The token proves that this
+  exact action was described before running unchanged, not who said yes: the agent stays the only channel between
+  the user and the tool.
 - Code comments are in French.
 
 ## Licence

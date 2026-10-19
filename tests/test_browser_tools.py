@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import neutral_trigger_read
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "client"))
@@ -26,6 +27,8 @@ def sent(monkeypatch):
     calls = []
 
     def fake(action, params, timeout=20.0):
+        if (read := neutral_trigger_read(action, params)) is not None:  # lecture du déclencheur : rien de sortant
+            return read
         calls.append((action, params, timeout))
         return {"ok": True}
 

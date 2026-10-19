@@ -19,7 +19,7 @@ const AGY_FEATURES = [
     "network-record", "control-panel", "page-coordinates-capture",
     "orphan-tabs", "cdp-page-world", "local-cookie-values", "body-masking-allowlist",
     "sensitive-field-masking", "cdp-reload-no-script", "ax-value-masking", "capture-screencast",
-    "capture-field-masking", "console-masking"
+    "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree"
 ];
 
 let attachedDebuggers = new Set();
@@ -772,10 +772,19 @@ async function releaseTabFromPanel(rawTabId, expected = null) {
 // -----------------------------------------------------------------------------
 const pendingFileChoosers = new Map();
 const activeUploads = new Set();
+// Un flux CDP suspend sa production si ses images ne sont pas acquittées.
+// Ne garder ni l'image ni ses métadonnées : seul l'identifiant sert à l'ACK.
+const captureScreencasts = new Set();
+const captureTargetKey = (target) => `${target.tabId}|${target.sessionId || ""}`;
 
 chrome.debugger.onEvent.addListener(async (source, method, params) => {
     if (!source.tabId) return;
-    
+    if (method === "Page.screencastFrame") {
+        if (captureScreencasts.has(captureTargetKey(source)) && Number.isInteger(params?.sessionId)) {
+            await chrome.debugger.sendCommand(source, "Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => {});
+        }
+        return;
+    }
     if (method === "Runtime.consoleAPICalled" || method === "Log.entryAdded") {
         if (!tabConsoleLogs.has(source.tabId)) tabConsoleLogs.set(source.tabId, []);
         const logs = tabConsoleLogs.get(source.tabId);
@@ -2744,12 +2753,21 @@ async function axRegister(root, locator) {
         if (!backendNodeId) return null;
         if (axUnavailable.has(root.key + "|" + sessionKey(root.target))) return null;
         let ax;
+        let fullTree = false;
         try {
-            // Mesuré (Chromium 155) : la requête peut ne jamais répondre sur le document d'un cadre d'une autre
-            // origine du même processus. Délai court, puis moteur DOM pour ce cadre jusqu'au détachement.
-            ax = await withTimeout(chrome.debugger.sendCommand(root.target, "Accessibility.queryAXTree", {
-                backendNodeId, role: String(locator.role).toLowerCase()
-            }), AX_QUERY_TIMEOUT_MS, "Accessibility.queryAXTree: no response");
+            // Chromium 155 : queryAXTree peut attendre son délai même sur le document principal
+            // avec des iframes. L'arbre AX déjà calculé répond immédiatement, noms calculés compris.
+            try {
+                ax = await withTimeout(chrome.debugger.sendCommand(root.target, "Accessibility.getFullAXTree", {
+                    ...(root.frameId ? { frameId: root.frameId } : {})
+                }), AX_QUERY_TIMEOUT_MS, "Accessibility.getFullAXTree: no response");
+                if (!Array.isArray(ax?.nodes)) throw new Error("Accessibility tree unavailable");
+                fullTree = true;
+            } catch (_) {
+                ax = await withTimeout(chrome.debugger.sendCommand(root.target, "Accessibility.queryAXTree", {
+                    backendNodeId, role: String(locator.role).toLowerCase()
+                }), AX_QUERY_TIMEOUT_MS, "Accessibility.queryAXTree: no response");
+            }
         } catch (error) {
             axUnavailable.add(root.key + "|" + sessionKey(root.target));
             return null;
@@ -2757,6 +2775,7 @@ async function axRegister(root, locator) {
         if (!Array.isArray(ax?.nodes)) return null;
         const namePat = locator.name !== undefined && locator.name !== null && locator.name !== "" ? LK.pattern(locator.name, !!locator.exact) : null;
         const hits = ax.nodes.filter(n => n.backendDOMNodeId && (!n.ignored || locator.includeHidden)
+            && (!fullTree || String(n.role?.value || "").toLowerCase() === String(locator.role).toLowerCase())
             && (!namePat || LK.matches(n.name?.value || "", namePat))).slice(0, 50);
         if (!hits.length) return null;
         const token = `ax${++axTokenSeq}`;
@@ -4536,6 +4555,8 @@ async function withSensitiveFieldsMasked(tabId, work) {
  */
 async function captureScreenshot(target, params) {
     let screencast = false;
+    const key = captureTargetKey(target);
+    captureScreencasts.add(key);
     try {
         await chrome.debugger.sendCommand(target, "Page.startScreencast", {
             format: "jpeg", quality: 1, maxWidth: 16, maxHeight: 16
@@ -4548,6 +4569,7 @@ async function captureScreenshot(target, params) {
         return await chrome.debugger.sendCommand(target, "Page.captureScreenshot", params);
     } finally {
         if (screencast) await chrome.debugger.sendCommand(target, "Page.stopScreencast").catch(() => {});
+        captureScreencasts.delete(key);
     }
 }
 
@@ -4718,7 +4740,19 @@ async function sendCdpCommand(params) {
         throw new Error(`world="${world}" applies only to Runtime.evaluate (not to ${method}).`);
     }
     const tabId = await resolveTargetTab(params);
-    const target = await ensureDebugger(tabId);
+    let target = await ensureDebugger(tabId);
+    let evaluationRoot = rootOf(target);
+    if (params.mark !== undefined && params.mark !== null) {
+        if (method !== "Runtime.evaluate" || world !== "isolated" || !Number.isInteger(params.mark) || params.mark < 1) {
+            throw new Error("A mark context requires an integer mark and Runtime.evaluate in the isolated world.");
+        }
+        const key = markRoots.get(tabId)?.get(params.mark);
+        if (key) {
+            evaluationRoot = (await listFrameRoots(target)).find(root => root.key === key);
+            if (!evaluationRoot) throw new Error(`The frame of mark #${params.mark} is gone: run browser_interactive_map again.`);
+            target = evaluationRoot.target;
+        }
+    }
     let commandParams = params.commandParams && typeof params.commandParams === "object" && !Array.isArray(params.commandParams)
         ? { ...params.commandParams } : {};
     if (method === "Runtime.evaluate") {
@@ -4728,7 +4762,7 @@ async function sendCdpCommand(params) {
         delete commandParams.uniqueContextId;
         delete commandParams.contextId;
         commandParams.includeCommandLineAPI = false;
-        if (world === "isolated") commandParams.contextId = await rootContextId(rootOf(target));
+        if (world === "isolated") commandParams.contextId = await rootContextId(evaluationRoot);
         const result = await sendCommandWatchingDialogs(target, method, commandParams);
         if (result?.__dialog) return { data: dialogInterruption(result.__dialog) };
         return { data: { ...result, world } };

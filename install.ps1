@@ -40,6 +40,13 @@ function Stop-BridgeTask([string]$Name) {
 }
 
 # Les deux ponts (ancien et nouveau) écoutent les mêmes ports 9224/9225 : arrêtés avant tout.
+if (-not $SkipLaunch -and (Test-Path -LiteralPath $pythonExe)) {
+    & $pythonExe -B (Join-Path $PSScriptRoot 'scripts\refresh_extension.py') --check-only
+    if ($LASTEXITCODE -eq 3) { throw 'Actualisation différée : des onglets sont pilotés par un agent. Aucun pont arrêté.' }
+    if ($LASTEXITCODE -eq 2 -and (Get-Process -Name chrome -ErrorAction SilentlyContinue)) {
+        throw 'Chrome est ouvert mais son pont ne répond pas : aucune session arrêtée.'
+    }
+}
 Stop-BridgeTask 'NexusAGY Browser Bridge'
 Stop-BridgeTask $bridgeTaskName
 
@@ -184,10 +191,36 @@ if (-not $SkipTests) {
     & (Join-Path $PSScriptRoot 'test.ps1')
     if ($LASTEXITCODE) { throw 'test.ps1 en échec.' }
 }
-if (-not $SkipLaunch) { Start-ScheduledTask -TaskName $bridgeTaskName }
+if (-not $SkipLaunch) {
+    Start-ScheduledTask -TaskName $bridgeTaskName
+    & $pythonExe -B (Join-Path $PSScriptRoot 'scripts\refresh_extension.py') --wait-ready 30
+    if ($LASTEXITCODE -notin 0, 2) { throw "Le rechargement de l'extension n'est pas vérifié ; installation non marquée à jour." }
+    if ($LASTEXITCODE -eq 2 -and (Get-Process -Name chrome -ErrorAction SilentlyContinue)) { throw 'Extension Chrome ouverte mais injoignable.' }
+    # Le démon HTTP conserve ses modules Python en mémoire. Recharger uniquement celui de Browser,
+    # après le contrôle d'absence d'onglets pilotés ; son superviseur reprend le même port.
+    $listener = Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue
+    if ($listener) {
+        $daemonPid = $listener.OwningProcess | Select-Object -Unique
+        $daemon = Get-CimInstance Win32_Process -Filter "ProcessId = $daemonPid"
+        $entryPoint = Join-Path $PSScriptRoot 'client\mcp_server.py'
+        $supervisor = Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue
+        if ($daemon.CommandLine -notlike "*$entryPoint --http 16182*" -or $supervisor.State -ne 'Running') {
+            throw 'Le port MCP Browser ne correspond pas au démon supervisé attendu.'
+        }
+        Stop-Process -Id $daemonPid -ErrorAction Stop
+        $deadline = [DateTime]::UtcNow.AddSeconds(15)
+        do {
+            Start-Sleep -Milliseconds 250
+            $next = Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue
+        } while ((-not $next -or $next.OwningProcess -eq $daemonPid) -and [DateTime]::UtcNow -lt $deadline)
+        if (-not $next -or $next.OwningProcess -eq $daemonPid) { throw "Le démon MCP Browser n'a pas confirmé sa relance." }
+        $replacement = Get-CimInstance Win32_Process -Filter "ProcessId = $($next.OwningProcess)"
+        if ($replacement.CommandLine -notlike "*$entryPoint --http 16182*") { throw 'Le nouveau listener ne correspond pas au démon Browser attendu.' }
+        Write-Host 'Démon MCP Browser rechargé ; Android et Relay conservés.'
+    }
+}
 # Empreinte de l'installation (scripts\empreinte.ps1, formule unique) : Sync-NexusPoste (NexusInfra) la compare aux
 # sources pour savoir s'il faut réinstaller (uv.lock, install.ps1, installer-hote-natif.ps1, runtime.ps1).
 $stamp = & (Join-Path $PSScriptRoot 'scripts\empreinte.ps1')
 Set-Content (Join-Path $localRoot 'installed.stamp') $stamp -Encoding utf8NoBOM
-Write-Host 'NexusBrowser installé. Recharger l''extension (dossier extension\) dans chrome://extensions,'
-Write-Host 'puis ouvrir une nouvelle conversation dans chaque agent pour charger nexus-browser.'
+Write-Host 'NexusBrowser installé. Extension vérifiée si Chrome est connecté ; sources prises en compte au prochain lancement sinon.'

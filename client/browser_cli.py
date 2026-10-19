@@ -17,8 +17,10 @@ import sys
 sys.dont_write_bytecode = True
 
 try:  # noqa: E402
+    from . import outward_gate
     from .bridge_client import call_bridge
 except ImportError:
+    import outward_gate
     from bridge_client import call_bridge
 
 from bridge_security import VERSION  # noqa: E402  (chemin ajouté par bridge_client)
@@ -47,6 +49,52 @@ def with_locator(params, args):
 
 
 TAB_HELP = "Onglet ouvert par new-tab (obligatoire)"
+
+# Mêmes garde-fous que le serveur MCP. Une commande = un processus : un jeton d'accord ne peut pas passer d'un appel à
+# l'autre (aucun fichier de jetons). La CLI rend donc le refus et le résumé de l'action, et un geste SORTANT (envoyer,
+# payer, publier...) se fait par le serveur MCP nexus-browser ; tous les autres gestes restent libres ici.
+_accords: list = []
+
+CLI_NOTE = (
+    "The CLI cannot carry an accord token from one command to the next (one process per command): perform this "
+    "outward gesture through the nexus-browser MCP server, after the user's explicit yes."
+)
+
+
+def accords():
+    if not _accords:
+        _accords.append(outward_gate.garde_fous.Accords())
+    return _accords[0]
+
+
+def gate(args, targets, gestures, *, focus_ok=False, typed="", timeout=20.0):
+    """Contrôle d'accord avant le geste (outward_gate.check) ; lève outward_gate.AccordRequired pour un geste sortant."""
+    if not gestures:
+        return
+    bound = [
+        [{**option, "tab_id": args.tab_id} for option in t] if isinstance(t, list) else {**t, "tab_id": args.tab_id}
+        for t in targets
+    ]
+    try:
+        outward_gate.check(
+            accords(),
+            lambda action, params, wait: execute_command(action, params, wait),
+            bound,
+            gestures,
+            timeout=timeout,
+            focus_ok=focus_ok,
+            typed=typed,
+        )
+    except outward_gate.AccordRequired as refusal:
+        summary = str(refusal).split("\n")
+        # Résumé de l'action gardé ; la consigne de renvoi avec un jeton ne vaut pas pour la CLI.
+        raise outward_gate.AccordRequired("\n".join([*summary[:-1], CLI_NOTE])) from None
+
+
+def with_page_note(result, tab):
+    """Texte de page : avertissement d'injection éventuel (signal seulement), même règle que le serveur MCP."""
+    note = outward_gate.page_note(accords(), result, outward_gate.page_source(result, f"tab {tab}"))
+    return {"data": result, "untrusted_note": note} if note else result
 
 
 def page_command(subparsers, name, help_text):
@@ -250,10 +298,11 @@ def run(args) -> object:
         "release-tab": "release_tab",
         "close-tab": "close_tab",
         "network-stop": "network_stop",
-        "axtree": "get_accessibility_tree",
         "logs": "get_logs",
         "check-handoff": "check_handoff",
     }
+    if command == "axtree":
+        return with_page_note(execute_command("get_accessibility_tree", {"tabId": tab}), tab)
     if command in tab_only:
         return execute_command(tab_only[command], {"tabId": tab})
     if command == "reload":
@@ -272,13 +321,20 @@ def run(args) -> object:
             "clickCount": args.click_count,
             "tabId": tab,
         }
-        return execute_command("click", with_locator(params, args))
+        params = with_locator(params, args)
+        target = {k: params[k] for k in ("locator", "selector", "text") if params.get(k)}
+        gate(args, [target], ["click"] if target and args.button == "left" else [])
+        return execute_command("click", params)
     if command == "fill":
         params = {"selector": args.selector, "value": args.value, "tabId": tab, "replace": not args.append}
         params["mode"] = args.mode
         if args.keys:
             params["keys"] = args.keys
-        return execute_command("fill", with_locator(params, args))
+        params = with_locator(params, args)
+        target = {k: params[k] for k in ("locator", "selector") if params.get(k)}
+        gestures = outward_gate.typed_gestures("", args.keys)
+        gate(args, [target], gestures, focus_ok=not target, typed=args.value)
+        return execute_command("fill", params)
     if command == "find":
         return execute_command("find", {"locator": parse_locator(args.locator), "limit": args.limit, "tabId": tab})
     if command == "check":
@@ -299,11 +355,12 @@ def run(args) -> object:
             "wait_download", {"timeoutMs": args.timeout, "tabId": tab}, timeout=args.timeout / 1000 + 5
         )
     if command == "type-keys":
+        gate(args, [{}], outward_gate.typed_gestures(args.text), focus_ok=True, typed=args.text)
         return execute_command("type_keys", {"text": args.text, "tabId": tab})
     if command == "scroll":
         return execute_command("scroll", {"direction": args.direction, "y": args.y, "tabId": tab})
     if command == "content":
-        return execute_command("get_content", {"mode": args.mode, "tabId": tab})
+        return with_page_note(execute_command("get_content", {"mode": args.mode, "tabId": tab}), tab)
     if command == "dialog":
         params = {"accept": args.action == "accept", "promptText": args.prompt_text, "tabId": tab}
         return execute_command("handle_dialog", params)
@@ -325,14 +382,19 @@ def run(args) -> object:
         _save(res.get("screenshotDataUrl", ""), args.output)
         return {"output": args.output, "markers": res.get("markers", [])}
     if command == "click-mark":
+        gate(args, [{"mark": args.mark, "timeoutMs": 0}], ["click"])
         return execute_command("click_mark", {"mark": args.mark, "tabId": tab})
     if command == "semantic-click":
+        target = {"semantic": True, "role": args.role, "name": args.name, "text": args.text, "timeoutMs": 2500}
+        gate(args, [target], ["click"] if (args.role or args.name or args.text) else [])
         return execute_command(
             "semantic_click", {"role": args.role, "name": args.name, "text": args.text, "tabId": tab}
         )
     if command == "semantic-fill":
         return execute_command("semantic_fill", {"label": args.label, "value": args.value, "tabId": tab})
     if command == "press-key":
+        gesture = outward_gate.key_gesture(args.key)
+        gate(args, [{}], [gesture] if gesture else [], focus_ok=True)
         return execute_command("press_key", {"key": args.key, "tabId": tab})
     if command == "select-option":
         params = {"selector": args.selector, "value": args.value, "text": args.text, "tabId": tab}
@@ -361,6 +423,12 @@ def run(args) -> object:
             "steps": args.steps,
             "tabId": tab,
         }
+        ends = [
+            {k: v for k, v in (("selector", args.from_selector), ("mark", args.from_mark)) if v},
+            {k: v for k, v in (("selector", args.to_selector), ("mark", args.to_mark)) if v},
+        ]
+        ends = [end for end in ends if end]
+        gate(args, ends, ["drag"] if ends else [])
         return execute_command("drag_and_drop", params)
     raise ValueError(f"Sous-commande inconnue : {command}")
 
@@ -373,6 +441,10 @@ def main():
         sys.exit(1)
     try:
         print(json.dumps(run(args), indent=2, ensure_ascii=False))
+    except outward_gate.AccordRequired as refusal:
+        # Geste sortant sans l'accord lié à cette action exacte : rien n'a été fait (résumé et jeton pour l'agent).
+        print(json.dumps({"status": "error", "accord_required": True, "error": str(refusal)}, indent=2))
+        sys.exit(2)
     except Exception as e:
         print(f"Erreur : {e}", file=sys.stderr)
         sys.exit(1)

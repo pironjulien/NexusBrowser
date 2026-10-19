@@ -2,7 +2,8 @@ name: Publish to PyPI
 
 # Trusted Publishing (OIDC): no token stored in the repository. PyPI side, once: a trusted publisher for this
 # repository, workflow publish.yml, environment pypi; then set the repository variable PYPI_PUBLISH to true. From then
-# on, a published GitHub release vX.Y.Z (or a manual run) uploads that version (before that, it only builds and checks).
+# on, a published GitHub release vX.Y.Z (or a manual run) uploads that version (before that, it only builds and checks),
+# then publishes server.json to the official MCP registry (job registry, GitHub OIDC: no token stored).
 on:
   release:
     types: [published]
@@ -15,16 +16,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          enable-cache: false  # release build: no cache shared with other runs (cache poisoning)
       - name: Version matches the release tag, README carries the MCP registry name
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
           version=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
           echo "pyproject version: $version"
           test "$(cat VERSION)" = "$version"
-          if [ "${{ github.event_name }}" = "release" ] && [ "${{ github.event.release.tag_name }}" != "v$version" ]; then
-            echo "Tag ${{ github.event.release.tag_name }} does not match v$version"; exit 1
+          if [ "$EVENT_NAME" = "release" ] && [ "$TAG_NAME" != "v$version" ]; then
+            echo "Tag $TAG_NAME does not match v$version"; exit 1
           fi
           grep -q 'mcp-name: io.github.pironjulien/nexus-browser' README.md
       - run: uv build
@@ -47,7 +55,7 @@ jobs:
                   print("ok", init.server_info.version, len(tools))
           anyio.run(go)
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: dist
           path: dist/
@@ -62,8 +70,42 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+
+  registry:
+    # After the upload: server.json to the official MCP registry (namespace io.github.pironjulien), mcp-publisher
+    # pinned by version and SHA-256.
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      PUBLISHER_VERSION: v1.8.1
+      PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Wait until PyPI serves the version in server.json
+        shell: bash
+        run: |
+          version=$(python3 -c "import json; print(json.load(open('server.json'))['version'])")
+          for i in $(seq 1 30); do
+            curl -fsS "https://pypi.org/pypi/nexus-browser/$version/json" >/dev/null && exit 0
+            sleep 20
+          done
+          echo "nexus-browser $version is not on PyPI"; exit 1
+      - name: Install mcp-publisher (pinned, checksum verified)
+        shell: bash
+        run: |
+          curl -fsSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum --strict -c
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish server.json

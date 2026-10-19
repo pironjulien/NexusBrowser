@@ -37,6 +37,16 @@ def isolated_emergency_stop(tmp_path_factory, monkeypatch):
     yield directory
 
 
+def neutral_trigger_read(action: str, params: dict):
+    """Lecture du déclencheur (accord des gestes sortants) dans un faux pont : rien de sortant. None : autre commande.
+    find du contrôle = limit 100 (les tests de browser_find en passent une autre)."""
+    if action == "cdp-send" and (params or {}).get("method") == "Runtime.evaluate":
+        return {"result": {"type": "object", "value": {"success": True, "label": "", "clickable": False}}}
+    if action == "find" and (params or {}).get("limit") == 100:
+        return {"count": 1, "candidates": [{"name": "OK", "role": "button", "tag": "button"}]}
+    return None
+
+
 @pytest.fixture(autouse=True)
 def disposable_bridge_token(request, tmp_path_factory, monkeypatch):
     """Aucun test ne lit le vrai jeton ~/.nexus/nexus-browser/bridge-token : jeton jetable, sauf dans les modules qui servent un

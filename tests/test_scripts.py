@@ -85,16 +85,53 @@ def test_old_extension_is_reported_from_profile_preferences(tmp_path):
     assert {p: p.read_bytes() for p in user_data.rglob("*") if p.is_file()} == before  # lecture seule
 
 
-def test_install_stamp_covers_native_host_and_runtime():
+def test_install_stamp_covers_native_host_and_runtime(tmp_path):
     stamp = pwsh("empreinte.ps1")
     assert stamp.returncode == 0, stamp.stderr
     parts = stamp.stdout.strip().split(" ")
-    assert len(parts) == 4 and all(len(part) == 64 for part in parts)
+    assert len(parts) >= 7 and all(len(part) == 64 for part in parts)
     script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
     assert "scripts\\empreinte.ps1" in script
     source = (REPO_ROOT / "scripts" / "empreinte.ps1").read_text(encoding="utf-8")
-    for name in ("uv.lock", "install.ps1", "installer-hote-natif.ps1", "runtime.ps1"):
+    for name in (
+        "uv.lock",
+        "install.ps1",
+        "installer-hote-natif.ps1",
+        "runtime.ps1",
+        "refresh_extension.py",
+        "client",
+        "extension",
+    ):
         assert name in source
+    # Un correctif de moteur ou d'extension doit rendre une installation obsolète,
+    # même si uv.lock et les scripts d'installation n'ont pas changé.
+    fake = tmp_path / "repo"
+    for relative in (
+        "uv.lock",
+        "install.ps1",
+        "scripts/installer-hote-natif.ps1",
+        "scripts/runtime.ps1",
+        "scripts/refresh_extension.py",
+        "client/tool.py",
+        "extension/background.js",
+    ):
+        target = fake / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("initial", encoding="utf-8")
+    stamp_script = fake / "scripts/empreinte.ps1"
+    stamp_script.write_text(source, encoding="utf-8")
+
+    def fingerprint():
+        result = subprocess.run(["pwsh", "-NoProfile", "-File", str(stamp_script)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    before = fingerprint()
+    (fake / "extension/background.js").write_text("fixed extension", encoding="utf-8")
+    after_extension = fingerprint()
+    assert after_extension != before
+    (fake / "client/tool.py").write_text("fixed tool", encoding="utf-8")
+    assert fingerprint() != after_extension
 
 
 def test_install_cleans_old_bridge_and_registers_skills_without_duplicate():

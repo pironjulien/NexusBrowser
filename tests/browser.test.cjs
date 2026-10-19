@@ -815,6 +815,26 @@ test('capture : flux refusé par Chrome -> capture directe ; capture en échec -
     assert.equal(failing.calls.filter(c => /Screencast|captureScreenshot/.test(c.method)).at(-1).method, 'Page.stopScreencast');
 });
 
+test('captures répétées : les images du flux sont acquittées sur leur propre cible, sans contenu conservé', async () => {
+    let h;
+    h = harness({}, {debuggerSendCommand: async (target, method) => {
+        if (method === 'Page.captureScreenshot') {
+            await h.emitFrom(target, 'Page.screencastFrame', {sessionId: 41, data: 'private-frame'});
+            await h.emitFrom({tabId: 2}, 'Page.screencastFrame', {sessionId: 99});
+            await h.emitFrom(target, 'Page.screencastFrame', {sessionId: 'invalid'});
+        }
+    }});
+    await h.emit(1, 'Page.screencastFrame', {sessionId: 40});
+    for (let i = 0; i < 6; i++) await h.run('screenshot', {tabId: 1});
+    await h.emit(1, 'Page.screencastFrame', {sessionId: 42});
+    const acks = h.calls.filter(c => c.method === 'Page.screencastFrameAck');
+    assert.equal(acks.length, 6);
+    assert.ok(acks.every(c => c.target.tabId === 1 && c.params.sessionId === 41));
+    assert.ok(acks.every(c => !('data' in c.params)));
+    assert.equal(h.focusCalls.tabs, 0);
+    assert.equal(h.focusCalls.windows, 0);
+});
+
 test('about:blank tabs can be created and debugged without protected URL rejection', async () => {
     const h = harness({}, {
         tabs: {
@@ -1757,13 +1777,21 @@ test('rôles implicites et noms accessibles (label, aria-labelledby, aria-label,
     assert.equal((await find({role: 'checkbox', checked: true})).count, 0);
 });
 
-test('moteur AX : rôle et nom calculés par Chrome (queryAXTree) puis filtrés dans la page', async () => {
+for (const fullTree of [false, true]) {
+test(`moteur AX : noms calculés et rôles filtrés (${fullTree ? 'arbre complet sans attente' : 'repli queryAXTree'})`, async () => {
     let ref = null;
     const objects = new Map();
     const {h, dom} = richHarness(formPage, {
         debuggerSendCommand: (target, method, params) => {
             if (method === 'Runtime.evaluate' && params.expression === 'document') return {result: {objectId: 'doc'}};
             if (method === 'DOM.describeNode' && params.objectId === 'doc') return {node: {backendNodeId: 1}};
+            if (method === 'Accessibility.getFullAXTree') {
+                if (!fullTree) throw new Error('Full AX tree unavailable');
+                return {nodes: [
+                    {backendDOMNodeId: 21, ignored: false, role: {value: 'button'}, name: {value: 'Envoyer la commande'}},
+                    {backendDOMNodeId: 22, ignored: false, role: {value: 'textbox'}, name: {value: 'Envoyer la commande'}}
+                ]};
+            }
             if (method === 'Accessibility.queryAXTree') {
                 assert.equal(params.role, 'button');
                 // Nom exposé par Chrome (ex. contenu CSS ::after), absent du DOM.
@@ -1800,7 +1828,9 @@ test('moteur AX : rôle et nom calculés par Chrome (queryAXTree) puis filtrés 
     const click = await h.run('click', {tabId: 1, locator: {role: 'button', name: 'commande'}});
     assert.equal(click.data.id, 'send');
     assert.equal(click.data.trusted_click, true);
+    assert.equal(h.calls.some(c => c.method === 'Accessibility.queryAXTree'), !fullTree);
 });
+}
 
 test('hover, semantic_click et drag acceptent le même localisateur', async () => {
     const {h} = richHarness(formPage);
@@ -1971,6 +2001,66 @@ test('field_state relit un champ sans aucun geste (browser_fill_form) : texte, o
     assert.equal(dom.byId('accept').checked, false);
 });
 
+test("trigger_probe.js (accord des gestes sortants) : lecture sans geste du déclencheur, de son formulaire et de ses destinataires", async () => {
+    // Script envoyé par le serveur MCP dans le monde isolé par cdp-send (Runtime.evaluate) : aucune action nouvelle.
+    const source = fs.readFileSync(path.join(__dirname, '..', 'client', 'trigger_probe.js'), 'utf8');
+    const probeIn = (dom) => {
+        const fn = vm.runInNewContext(source, {document: dom.doc, window: dom.win});
+        return (spec) => JSON.parse(JSON.stringify(fn(spec)));  // autre royaume (vm)
+    };
+    const dom = richDom((h) => [
+        h('form', {id: 'compose'},
+            h('label', {for: 'to'}, 'To'), h('input', {id: 'to', type: 'email'}),
+            h('label', {for: 'msg'}, 'Message'), h('textarea', {id: 'msg'}),
+            h('label', {for: 'pw'}, 'Password'), h('input', {id: 'pw', type: 'password'}),
+            h('button', {id: 'send', type: 'submit'}, h('span', {id: 'icon'}, 'Send'))),
+        h('a', {id: 'pricing', href: '/pricing'}, 'Pricing'),
+        h('div', {id: 'chat'},
+            h('div', {id: 'box', contenteditable: 'true', 'aria-label': 'Write a reply'}, 'Hi Bob'),
+            h('div', {id: 'go', role: 'button'}, 'Send message'))
+    ]);
+    dom.byId('to').value = 'bob@example.com, eve@example.com';
+    dom.byId('msg').value = 'See you tomorrow';
+    dom.byId('pw').value = 'Secret!1';
+    dom.win.__nexus_som_elements.set(7, dom.byId('send'));
+    const probe = probeIn(dom);
+    const before = {synthetic: dom.synthetic.length, trusted: dom.trusted.length, active: dom.doc.activeElement};
+    // Clic sur l'icône d'un bouton : le bouton reçoit le clic, son formulaire est décrit (mot de passe masqué).
+    const click = probe({selector: '#icon'});
+    assert.equal(click.label, 'Send');
+    assert.equal(click.clickable, true);
+    assert.deepEqual(click.submits, ['Send']);
+    assert.deepEqual(click.recipients, ['bob@example.com', 'eve@example.com']);
+    assert.deepEqual(click.fields.map(f => [f.label, f.value || null, !!f.masked]), [['Message', 'See you tomorrow', false], ['Password', null, true]]);
+    assert.ok(!JSON.stringify(click).includes('Secret!1'));
+    assert.equal(probe({mark: 7}).label, 'Send');
+    assert.equal(probe({text: 'Pricing'}).label, 'Pricing');
+    assert.equal(probe({id: 'send', tag: 'button'}).label, 'Send');  // candidat de l'action find
+    assert.equal(probe({id: 'absent', tag: 'button'}).unreachable, true);
+    // Entrée dans un champ : élément actif, boutons d'envoi de SON formulaire.
+    dom.byId('msg').focus();
+    const enter = probe({});
+    assert.deepEqual([enter.field, enter.clickable, enter.submits], [true, false, ['Send']]);
+    // Messagerie sans <form> : la zone qui contient le champ et le bouton.
+    dom.byId('box').focus();
+    const chat = probe({});
+    assert.deepEqual([chat.submits, chat.fields.map(f => f.value)], [['Send message'], ['Hi Bob']]);
+    dom.doc.activeElement = null;
+    assert.equal(probe({}).notFound, true);
+    assert.equal(probe({selector: '#absent'}).notFound, true);
+    assert.equal(probe({page: true}).tabTitle, 'Page');
+    // Lecture seule : aucun événement, focus inchangé par la lecture.
+    assert.equal(dom.synthetic.length, before.synthetic);
+    assert.equal(dom.trusted.length, before.trusted);
+    // Champ d'une large section sans <form> (plusieurs champs, un bouton « Valider la commande » plus loin) : la
+    // section n'est pas son formulaire, Entrée n'y vise aucun bouton d'envoi.
+    const wide = richDom((h) => [h('div', {id: 'section'},
+        ...['a', 'b', 'c', 'd'].map(id => h('p', {}, h('input', {id, 'aria-label': id}))),
+        h('p', {}, h('button', {id: 'order'}, 'Valider la commande')))]);
+    wide.byId('a').focus();
+    const loose = probeIn(wide)({});
+    assert.deepEqual([loose.form, loose.submits, loose.fields], [false, [], []]);
+});
 test("field_state : liste multiple = l'option voulue SEULE sélectionnée ; champ retiré de la page = erreur", async () => {
     const {h, dom} = richHarness((h) => [
         h('label', {for: 'plans'}, 'Formules'),
@@ -2080,6 +2170,22 @@ test('auto-attachement des iframes hors processus : Target.setAutoAttach flatten
 });
 
 for (const oopif of [false, true]) {
+    test(`lecture préalable d'un marqueur dans son iframe (${oopif ? 'hors processus' : 'même processus'})`, async () => {
+        const {h, calls, attach} = crossOriginHarness({oopif});
+        await attach();
+        const mapped = await h.run('interactive_map', {tabId: 1, viewportOnly: false});
+        const mark = mapped.data.elements.find(el => el.crossOriginFrame && el.label === 'Action cadre').mark;
+        const res = await h.run('cdp-send', {tabId: 1, mark, method: 'Runtime.evaluate',
+            commandParams: {expression: `window.__nexus_som_elements.get(${mark}).id`, returnByValue: true}});
+        assert.equal(res.data.result.value, 'act');
+        const read = calls.filter(c => c.method === 'Runtime.evaluate').at(-1);
+        assert.equal(read.params.contextId, 77);
+        assert.equal(read.session, oopif ? 'child-1' : null);
+        assert.equal(h.mouse().length, 0);
+        assert.deepEqual(h.focusCalls, {tabs: 0, windows: 0});
+        const refused = await h.run('cdp-send', {tabId: 1, mark, method: 'Input.insertText', commandParams: {text: 'x'}});
+        assert.match(refused.error, /mark context/);
+    });
     test(`clic dans une iframe d'une autre origine (${oopif ? 'hors processus' : 'même processus'}) : point ramené au viewport principal`, async () => {
         const {h, frame, calls, attach} = crossOriginHarness({oopif});
         await attach();
