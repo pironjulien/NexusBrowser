@@ -44,7 +44,7 @@ browser_mcp = MCPServer(
     version=VERSION,
     instructions=(
         "NexusBrowser Chrome bridge: the user's real Chrome (their sessions), in background tabs, shared by "
-        "Antigravity, Claude and Codex. Prefer this bridge to the client's own browser extension for: covered or hidden "
+        "Antigravity, Claude and Codex. Use it for: covered or hidden "
         "elements (reported, never a silent click on the overlay), alert/confirm/prompt dialogs (reported, then "
         "browser_handle_dialog), detailed network (secret headers and fields masked, response bodies), cross-origin "
         "iframes (browser_find, clicks and typing inside), exports (page, Google Docs/Sheets/Slides, YouTube "

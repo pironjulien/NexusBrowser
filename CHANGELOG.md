@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.10.1] - 2026-10-19
+
+### Changed
+- Server instructions no longer compare this bridge with other tools ("Prefer this bridge to the client's own
+  browser extension"): they now list what it is for, in neutral words, as the Anthropic directory requires (a server
+  must not steer the model toward its tools or away from other ones). A test keeps such wording out.
+
 ### Added
 - `.github/workflows/registry.yml`: after each release reaches PyPI, `server.json` is published to the official MCP
   registry by GitHub OIDC (no token, no manual login), as NexusAndroid does.

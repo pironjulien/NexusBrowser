@@ -253,3 +253,6 @@ def test_client_texts_name_nobody():
     assert "user_asked=True" in instructions and len(instructions) <= 2048
     seen = instructions + "".join(tool.model_dump_json() for tool in tools)
     assert "Julien" not in seen.replace("julien_asked", "")
+    # Règle de l'annuaire Anthropic : aucun texte ne pousse vers ces outils ni ne détourne des outils d'un autre.
+    for steering in ("prefer", "instead of", "rather than", "client's own", "plutôt que", "claude in chrome"):
+        assert steering not in instructions.lower(), steering
