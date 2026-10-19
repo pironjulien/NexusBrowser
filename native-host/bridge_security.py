@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-VERSION = "2.9.0"
+VERSION = "2.10.0"
 TOKEN_HEADER = "X-Nexus-Browser-Token"
 # Identité du client du pont (serveur MCP d'un agent, CLI, validation réelle) : nom de l'agent et identifiant de SA
 # session (un par processus MCP). Le pont la transmet à l'extension dans le canal signé ; l'extension s'en sert pour
@@ -103,6 +103,9 @@ def harden_token_permissions(path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
+        # Page de code OEM (messages français accentués), lisible même avec PYTHONUTF8=1.
+        encoding="oem",
+        errors="replace",
         creationflags=no_window,
     )
     if result.returncode != 0:
@@ -203,6 +206,7 @@ READ_ONLY_ACTIONS = frozenset(
         "vision-inspect",
         "som-inspect",
         "find",
+        "field-state",
         "find-elements",
         "locate",
         "network-requests",

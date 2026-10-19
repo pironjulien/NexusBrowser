@@ -5,6 +5,165 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-10-19
+
+### Changed (neutral texts for any client, 2026-10-19)
+- Server instructions sent to every MCP client are now in English and neutral ("the user"), no personal name.
+  Tool descriptions, parameter descriptions and messages returned to the model (server, bridge, extension) say
+  « l'utilisateur » too; they stay in French. Same rules and flow. A test checks that `initialize` and
+  `tools/list` name nobody.
+- `browser_adopt_tab(tab_id, user_asked=True)`: neutral name for the consent flag. `julien_asked`, its former name,
+  still works as an alias; the bridge sends `userAsked` (read by the extension from this version) and `julienAsked`
+  (read by older extensions). CLI: `adopt-tab --user-asked` (`--julien-asked` kept).
+- Side panel greeting is « Bonjour »; a tab nobody drives is labelled « Utilisateur » in the control panel.
+
+### Changed (Codex plugin, 2026-10-19)
+- `install.ps1` no longer writes `[mcp_servers.nexus-browser]` to Codex's `config.toml` nor copies the skill to
+  `~\.codex\skills`: Codex gets both from a personal Codex plugin.
+
+### Fixed (2026-10-19)
+- Native messaging host registered in the real `HKCU` registry (`scripts\registre-reel.ps1`: `reg.exe` run by a
+  one-shot hidden scheduled task). Run from a packaged (MSIX) app such as the Claude desktop app, the write went to the
+  app's private registry and Chrome reported « native messaging host not found »: the extension never connected.
+- `is_chrome_running`: `tasklist` output read as bytes; with `PYTHONUTF8=1` its OEM code page (French « Numéro »)
+  crashed every tool call made while the extension was offline. `icacls` output decoded with the OEM code page too.
+- Antigravity showed the nexus-browser skill twice (global copy + plugin): `install.ps1` keeps it in the plugin only
+  and moves the old global copy to a local backup.
+
+### Changed (Claude Code plugin, 2026-10-19)
+- `install.ps1` no longer registers the server with Claude Code nor copies the skill to `~\.claude\skills`, and never
+  calls a Claude CLI: Claude Code gets both from a Claude Code plugin. Codex and Antigravity are unchanged.
+
+### Changed (YouTube transcript visible in Antigravity, 2026-10-19)
+- `browser_export_youtube_transcript` is renamed `browser_youtube_transcript`: Antigravity publishes each tool as
+  `mcp_nexus-browser_nexus-browser_<tool>` and silently drops any name over 64 characters, so it never saw this one
+  (65). No client used the old name; the bridge action `export_youtube_transcript` is unchanged. A test now checks
+  that every tool name fits once prefixed.
+
+### Added (faster Antigravity panel, 2026-10-18)
+- `browser_fill_form(tab_id, fields)`: fills a whole form in ONE call, field by field with the same gestures as the
+  single-field tools (`browser_fill`, `browser_select_option`, `browser_check`): every
+  field is validated before the first gesture, the emergency stop is checked before each field, it stops at the
+  first field not confirmed (error, dialog opened by the page, value refused or put back), then reads the whole
+  form back with no gesture (new read-only `field-state` bridge action, compared inside the page so a sensitive
+  value never leaves it): `all_verified` only if every field still holds its value. It never submits. Measured
+  on the real panel bench: 5 fills and a separate read-back took 6 model turns (~18 s) of the 61 s.
+- Its fields are aimed at by their `mark` from `browser_interactive_map` only: a reference to the element itself, kept
+  from the gesture to every read-back. A label or selector would be evaluated again at each read and could name
+  another field after the page changed (Codex cross-review); those stay with the single-field tools. A field the page
+  removed or replaced fails its read-back, and a multiple `<select>` must hold the wanted option alone.
+  Each field is read back right after its gesture and again at the end; a mark on a label or a container (redirected
+  to its current control), or on anything that is not an input (a label left without its control), is refused at
+  read-back: the mark must be the field itself. A gesture's own refusal is never cleared by a later read-back.
+  When a batch stops, the fields already filled are read back again with no gesture (their state when filled is never
+  reported as their current state; unknown when a dialog blocks the page).
+- `browser_interactive_map` also numbers rich editors (`contenteditable`, `plaintext-only` included, `role=textbox`), labelled by their
+  `aria-label` or title only: their content is input, possibly sensitive, never a label.
+
+### Fixed (Codex cross-review, 2026-10-18)
+- A sensitive field's state masks every representation of its value, not only `value`: `text`, `selectedValue` and
+  `selectedText` too (a card-expiry `<select>` or a password `contenteditable` leaked them through `select_option`).
+
+### Added (shared daemon, 2026-10-19)
+- Shared daemon mode: `client/mcp_server.py --http [port]` serves MCP Streamable HTTP on 127.0.0.1 (port 16182), one
+  process for every Claude, Codex and Antigravity session instead of one per session. Bearer token required
+  (`NEXUS_MCP_TOKEN` or `NEXUS_MCP_TOKEN_FILE`); the agent comes from the URL (`?agent=codex`, refused otherwise);
+  each MCP session gets its own identity (its tabs), is heartbeaten by the daemon while open and goes silent once
+  closed, so its tabs become orphans for its agent. `install.ps1` declares the daemon to the Nexus supervisor and
+  registers the three clients by URL. A session idle for 161.8 s (no request, no open stream) is closed, so a client
+  that left without a DELETE frees its tabs in ~3 min instead of 30; a new session beats (and reclaims) within a
+  second (review by Antigravity).
+
+### Changed
+- `browser_new_tab(group)` and `browser_group_tabs(title)` default to the current session's agent name
+  (`group=""`: no group).
+
+### Fixed
+- Side panel shortcut is now Alt+Shift+Y: Chrome took Alt+Shift+N for split view ("Select a tab") and silently
+  dropped the extension's key. The shortcut handler also opens the panel at once with the tab Chrome gives it:
+  waiting for a tab query first lost the keyboard gesture `sidePanel.open` requires, so the panel never opened.
+  An existing install keeps its old setting: set the key in chrome://extensions/shortcuts.
+
+### Added
+- Antigravity side panel: Julien types a request in Chrome's side panel and Antigravity does the real work on the
+  tab (read, click, fill forms) with its nexus-browser tools, then its answer shows up in the panel. Path agreed by
+  Claude and Antigravity (blind debate "panneau-agy-chrome", 2026-10-18): panel -> service worker -> signed bridge
+  link (`agy_ask` event) -> Nexus Relay mailbox, from "julien" to Antigravity (its sidecar wakes it at once) ->
+  Antigravity adopts that tab (`julien_asked=True`: the typed request is Julien's explicit consent for that tab
+  only), acts, releases it, replies -> mailbox "julien" -> bridge -> panel (`agy_panel_update`, reserved to the
+  bridge: no agent can speak for Antigravity). Nothing is queued in the bridge's memory (what made the former chat
+  panel unreliable); without Nexus Relay installed, the panel says so. Thread kept in `chrome.storage.local`.
+- Panel look inspired by Google's assistants (greeting, suggestion chips, pill composer, light/dark), own palette and
+  no brand. The control station stays (tab "Contrôle": piloted tabs, release a tab, bridge state) and STOP is always
+  visible in the header.
+
+### Fixed (Codex cross-review of the Antigravity panel, 2026-10-18: three passes, each "Accord : non", then fixed)
+- One request identity end to end: the panel's `localId` is written INSIDE the Nexus Relay message and comes back
+  with the reply. The relay files a request once per id, even if it died between filing and indexing (it finds the
+  message again by that id), so the extension resends an unconfirmed request every 15 s for as long as needed,
+  counting only sends that actually left Chrome, and never files it twice or restarts the work; a reply finds its
+  request even if the "filed" confirmation was lost. An unknown relay outcome (crash, timeout, non-zero exit even with
+  readable JSON) is never shown as "not sent"; only an explicit relay refusal is.
+- One request at a time, enforced in the service worker's single queue (test and reservation in one step, shared by
+  every panel of the profile); "Effacer l'affichage" keeps the active request; only an explicit "Abandonner" frees
+  the panel. The relay's transcript fallback never attributes a final answer when two requests overlap in one
+  conversation (neither of them gets one; only Antigravity's explicit reply does). Resends are scheduled by the
+  service worker itself, so they go on with the panel closed (and the link alarm catches up after a sleep).
+- Julien's consent is bound to HIS request: Antigravity adopts with `panel_request=<request id>`; the extension checks
+  that this request exists, has not expired (30 min), targets that tab, and that the tab still shows the exact page
+  (full address, fragment included: hash routers carry the record id), before any other path ("already adopted"
+  included), and again after ownership is recorded (a navigation during the awaits is caught and ownership removed).
+  Missing or expired consent means refusal. Adoptions Julien asked for elsewhere are unaffected. The target tab is
+  frozen at the first keystroke (seen live: another agent switched the active tab while typing) and the page seen
+  while typing travels with the request: if the tab moved to another page, nothing is sent. If Julien himself
+  navigates a panel-adopted tab elsewhere (address bar, bookmark, back/forward: `webNavigation`), the tab is handed
+  back to him; the work's own navigations (links, form submits, reloads) go on.
+- The thread lives in `chrome.storage.local`, restricted to trusted extension contexts (`setAccessLevel`), so an
+  acknowledged answer survives an extension reload or a Chrome restart. Each Chrome install has a stable instance id,
+  created once even under concurrent first use: a reply only goes to the install that asked (waits in the mailbox
+  while it is offline, never to another profile). The panel works with ONE Chrome profile linked to the bridge: with
+  two, a request is refused with a clear message (Antigravity's page commands would go to the priority link).
+- Only the page origin goes to the relay (no credentials, path or query); the page title is untrusted page data,
+  separate from Julien's words. The relay only hands Antigravity's replies to panel requests to the panel; agents can
+  no longer write to the "julien" mailbox. "Déposée" vs "Antigravity ne semble pas actif" from the sidecar heartbeat;
+  statuses converge in any order ("answered" never goes back); screen-reader labels; reduced motion respected.
+- Trust model, stated: "julien" names the panel's mailbox, not a proof of human origin; local processes of Julien's
+  Windows account are trusted (they can read the bridge token too). "Nothing sent without your yes" is Antigravity's
+  instruction, not a technical lock.
+
+### Fixed (Codex cross-review, fourth pass: "Accord : non", 3 + 1 findings, all reproduced and fixed)
+- The page frozen while typing is now a snapshot: a tab update no longer rewrites the expected address behind
+  Julien's back (it did, so the worker accepted page B for a request typed on page A). The panel shows "(figé, page
+  changée depuis)"; only a click on the tab chip retargets. Tested with the real panel script driving the real worker.
+- The panel marker survives a session change: reclaiming an orphan tab (heartbeat after an MCP server restart, or
+  explicit adoption) keeps it, and a panel request on a tab the agent already owns marks it too. Before, Julien
+  navigating away no longer handed such a tab back.
+- Same-document navigations are watched like the others (`onReferenceFragmentUpdated`, `onHistoryStateUpdated`):
+  Julien typing `#/fiche/B` or going back between routes of a single-page app hands the tab back; the work's own
+  route changes (link transitions, `pushState`) go on.
+- Two Chrome profiles linked: the request is now "retenue" (held), never "non transmise": a resend may follow a
+  filing made before the second profile appeared. The panel keeps the reservation and resends the same id, which the
+  relay resolves to the earlier filing once only one profile is left.
+
+### Fixed (Codex cross-review, fifth pass: "Accord : non", 1 + 1 findings, reproduced and fixed)
+- A navigation by Julien DURING a panel adoption is no longer lost: each tab keeps a navigation generation, bumped
+  before any wait even when no marked owner exists yet; the adoption reads it at the end and hands the tab back. A
+  panel adoption writes ownership once, already marked (no second write that could undo a hand-back), and a late
+  refusal restores the previous owner only if nobody changed it meanwhile. Both interleavings Codex ran (event during
+  the final consent read; event during the reclaim save) are tests now.
+- Nexus Relay missing or impossible to launch is "retenue" too, never "non transmise": it says nothing about an
+  earlier filing of the same request, so the panel keeps the reservation and resends the same id.
+
+### Fixed (Codex cross-review, sixth pass: "Accord : non", 1 finding, reproduced and fixed)
+- A panel adoption compares against the ownership object IT wrote (returned by `rememberTabOwner` before any wait),
+  never the one found in the map after the save: if Julien handed the tab back and another agent adopted it in the
+  meantime, the old adoption now refuses without restoring, releasing or overwriting the newer owner.
+
+### Fixed (Codex cross-review, seventh pass: "Accord : non", 1 finding, reproduced and fixed)
+- Handing a tab back checks ownership again AFTER detaching the debugger, right before removing it: a late hand-back
+  (two hand-backs of the same navigation, another agent adopting the tab in between) leaves the newer ownership
+  intact. The control station's "Rendre l'onglet" still hands back whoever owns the tab when it is clicked.
+
 ### Added
 - PyPI package `nexus-browser` (the MCP server, command `nexus-browser`): the wheel mirrors `client/` and
   `native-host/` unchanged under `nexus_browser/` (hatchling force-include); `install.ps1` and the three agents keep
@@ -14,8 +173,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 - Bridge not reachable and no token: the error now points to the one-time install (install.ps1).
-
-## [Unreleased]
 
 ### Added
 

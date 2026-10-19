@@ -1852,7 +1852,7 @@ def run_exports_validation() -> tuple[dict[str, bool], list[str]]:
     if video:
 
         def youtube(tab_id: int) -> None:
-            res = parse_response(mcp.browser_export_youtube_transcript(tab_id=tab_id))
+            res = parse_response(mcp.browser_youtube_transcript(tab_id=tab_id))
             data = res.get("data") or {}
             check(
                 "youtube_transcription_non_vide",

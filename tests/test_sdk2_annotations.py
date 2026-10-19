@@ -5,6 +5,7 @@ import asyncio
 import importlib.metadata
 import inspect
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -34,7 +35,7 @@ def test_server_runs_on_mcp_sdk_2():
 
 def test_every_tool_has_its_four_annotations():
     tools = _tools()
-    assert len(tools) == 47
+    assert len(tools) == 48
     for name, tool in tools.items():
         hints = tool.annotations
         assert hints is not None, name
@@ -73,6 +74,7 @@ def test_annotations_match_what_each_tool_does():
     assert {
         "browser_click",
         "browser_fill",
+        "browser_fill_form",
         "browser_press_key",
         "browser_check",
         "browser_handle_dialog",
@@ -127,7 +129,7 @@ def test_eval_is_documented_as_full_page_access():
     cdp_doc = mcp_server.browser_cdp_send.__doc__ or ""
     assert "ACCÈS COMPLET" in cdp_doc and "scriptToEvaluateOnLoad est refusé" in cdp_doc
     instructions = mcp_server.browser_mcp.instructions or ""
-    assert "accès complet à la page" in instructions and "mots de passe" in instructions
+    assert "full access to the page" in instructions and "Password" in instructions
     for skill in SKILLS:
         text = (REPO_ROOT / skill).read_text(encoding="utf-8")
         assert "accès complet à la page" in text, skill
@@ -148,3 +150,11 @@ def test_masked_values_are_announced_to_the_agent(monkeypatch):
     )
     reply = json.loads(mcp_server.browser_fill(selector="#pw", value="secret", tab_id=2))
     assert reply == {"status": "success", "data": {"verified": True, "value": "[valeur masquée]"}}
+
+
+def test_every_tool_name_fits_antigravity_once_prefixed():
+    # Antigravity publie chaque outil sous mcp_<plugin>_<serveur>_<outil> et rejette tout nom hors ^[a-zA-Z0-9_-]{1,64}$
+    # (l'outil disparaît alors en silence : browser_export_youtube_transcript faisait 65 caractères).
+    prefix = "mcp_nexus-browser_nexus-browser_"
+    too_long = [name for name in _tools() if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", prefix + name)]
+    assert too_long == []

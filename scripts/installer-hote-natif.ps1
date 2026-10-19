@@ -1,9 +1,12 @@
-param([switch]$CheckOnly, [string]$RegistryKey = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth")
+param([switch]$CheckOnly, [string]$RegistryKey = "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth")
 # Hote natif com.nexus.browser_auth : l'extension Chrome lui fait calculer les preuves d'authentification du pont
 # local (HMAC du jeton ~/.nexus/nexus-browser/bridge-token) ; le jeton n'est jamais livre a Chrome. Declare pour l'utilisateur
 # courant seulement (HKCU), pour les identifiants d'extension de native-host\bridge_config.json. Fichiers hors OneDrive.
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "runtime.ps1")
+# Cle ecrite et relue dans le registre reel (registre-reel.ps1) : depuis l'application Claude (MSIX), une ecriture
+# directe partait dans son registre prive et Chrome ne trouvait pas l'hote natif (« native messaging host not found »).
+. (Join-Path $PSScriptRoot "registre-reel.ps1")
 $hostName = "com.nexus.browser_auth"
 $python = $pythonExe
 $hostScript = Join-Path $repositoryRoot "native-host\auth_host.py"
@@ -25,8 +28,8 @@ $manifestText = ([ordered]@{
 } | ConvertTo-Json -Depth 4) + "`n"
 
 if ($CheckOnly) {
-    $registered = (Get-ItemProperty -LiteralPath $RegistryKey -ErrorAction SilentlyContinue).'(default)'
-    if ($registered -ne $manifestPath) { throw "Hote natif $hostName non declare a Chrome : reexecuter install.ps1" }
+    $registered = Invoke-RegistreReel @("query `"$RegistryKey`" /ve")
+    if (-not $registered.Contains($manifestPath)) { throw "Hote natif $hostName non declare a Chrome : reexecuter install.ps1" }
     foreach ($pair in @(@($launcher, $launcherText), @($manifestPath, $manifestText))) {
         if (-not (Test-Path -LiteralPath $pair[0]) -or [IO.File]::ReadAllText($pair[0], $utf8) -cne $pair[1]) {
             throw "Hote natif $hostName non aligne ($($pair[0])) : reexecuter install.ps1"
@@ -40,6 +43,6 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw "Runtime local
 [IO.Directory]::CreateDirectory($hostDirectory) | Out-Null
 [IO.File]::WriteAllText($launcher, $launcherText, $utf8)
 [IO.File]::WriteAllText($manifestPath, $manifestText, $utf8)
-New-Item -Path $RegistryKey -Force | Out-Null
-Set-ItemProperty -LiteralPath $RegistryKey -Name "(default)" -Value $manifestPath
+$registered = Invoke-RegistreReel @("add `"$RegistryKey`" /ve /t REG_SZ /d `"$manifestPath`" /f", "query `"$RegistryKey`" /ve")
+if (-not $registered.Contains($manifestPath)) { throw "Hote natif $hostName : cle du registre non ecrite ($registered)" }
 Write-Host "Hote natif $hostName declare a Chrome ($manifestPath)."

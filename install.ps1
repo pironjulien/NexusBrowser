@@ -2,10 +2,12 @@
 #  - environnement Python HORS OneDrive : ~\.nexus\nexus-browser\venv (jeton, journaux, captures et exports à côté)
 #  - hôte natif com.nexus.browser_auth déclaré à Chrome (HKCU) ; tâche « Nexus Browser Bridge » sans déclencheur
 #    (le pont démarre à la demande : premier appel d'un agent, schtasks /Run)
-#  - serveur MCP « nexus-browser » inscrit pour Claude Code, Codex et Antigravity, chacun avec son nom d'agent
+#  - serveur MCP « nexus-browser » inscrit pour Antigravity avec son nom d'agent (Codex et Claude : par leurs plugins)
 #    (groupe d'onglets à son nom) ; inscriptions remplacées en place, rien d'autre n'est touché. Antigravity : par son
 #    plugin SEULEMENT (une entrée en plus dans mcp_config.json lançait un second serveur, outils en double)
-#  - compétence nexus-browser copiée pour Antigravity, Claude Code (~\.claude\skills) et Codex (~\.codex\skills)
+#  - compétence nexus-browser : dans le plugin pour Antigravity (ancienne copie globale retirée) ; Codex la reçoit par
+#    son plugin perso (NexusCodex) ; Claude Code reçoit serveur et compétence
+#    par le plugin nexus-browser du catalogue « nexus » (NexusClaude)
 #  - migration depuis NexusAGY (pont d'avant le 17/10/2026) : ancienne tâche, ancien hôte natif (clé et fichiers),
 #    ancien jeton ~\.nexusagy\bridge-token et anciennes inscriptions retirés, chaque retrait journalisé dans
 #    ~\.nexus\nexus-browser\install.log ; l'ancienne extension « Antigravity Browser Bridge » est à retirer de Chrome
@@ -96,67 +98,45 @@ if ((Test-Path -LiteralPath $oldHostDirectory -PathType Container) -and -not (Ge
     Write-Journal "Ancien dossier vide de l'hôte natif retiré : $oldHostDirectory"
 }
 
-# --- Inscriptions MCP : même serveur pour les trois agents, nom d'agent propre à chacun.
+# --- Démon partagé : un seul serveur nexus-browser pour toutes les sessions de Claude, Codex et Antigravity, déclaré
+#     au superviseur des démons Nexus (NexusInfra\ops\workstation\nexus-mcp-daemons.py, tâche « Nexus MCP Daemons »).
+#     Chaque client le joint par URL avec son agent (?agent=…) et le jeton de NexusSecure ; chaque session MCP a sa
+#     propre identité (ses onglets).
 $server = Join-Path $repositoryRoot 'client\mcp_server.py'
 $args_ = @('-B', $server)
-function Get-Env([string]$Agent) {
-    [ordered]@{ PYTHONUTF8 = '1'; PYTHONDONTWRITEBYTECODE = '1'; NEXUS_BROWSER_AGENT = $Agent }
+$port = 16182
+$tokenFile = Join-Path $env:OneDrive 'Documents\NexusSecure\agents\nexus-mcp-token.txt'
+if (-not (Test-Path $tokenFile)) {
+    $bytes = [byte[]]::new(32); [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    New-Item -ItemType Directory -Force (Split-Path $tokenFile) | Out-Null
+    [IO.File]::WriteAllText($tokenFile, [Convert]::ToHexString($bytes).ToLower())
+}
+$token = (Get-Content $tokenFile -Raw).Trim()
+function Get-Url([string]$Agent) { "http://127.0.0.1:$port/mcp?agent=$($Agent.ToLower())" }
+$spec = [ordered]@{ port = $port; python = $pythonExe; args = $args_; env = [ordered]@{ PYTHONUTF8 = '1'; PYTHONDONTWRITEBYTECODE = '1' } }
+$specs = Join-Path $HOME '.nexus\daemons\specs'
+New-Item -ItemType Directory -Force $specs | Out-Null
+[IO.File]::WriteAllText((Join-Path $specs 'nexus-browser.json'), ($spec | ConvertTo-Json -Depth 5), $utf8)
+# Nouveau code : arrêter le démon en place, le superviseur le relance (les clients se reconnectent seuls).
+Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Where-Object { $_.CommandLine -match 'mcp_server\.py"? --http' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+if (-not (Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue)) {
+    Write-Warning 'Superviseur des démons absent : lancer NexusInfra\ops\workstation\Sync-NexusPoste.ps1 -Apply.'
 }
 
-# Claude Code (portée utilisateur). Sans CLI dans le PATH : celle fournie par l'application Claude.
-$claude = (Get-Command claude -ErrorAction SilentlyContinue).Source
-if (-not $claude) {
-    $bundles = @(Join-Path $env:APPDATA 'Claude\claude-code') +
-        @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Packages') -Directory -Filter 'AnthropicPBC.Claude_*' -ErrorAction SilentlyContinue |
-            ForEach-Object { Join-Path $_.FullName 'LocalCache\Roaming\Claude\claude-code' })
-    $claude = $bundles | Where-Object { Test-Path $_ } |
-        ForEach-Object { Get-ChildItem $_ -Recurse -Depth 2 -Filter claude.exe -File } |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
-}
-if ($claude) {
-    $env_ = Get-Env 'Claude'
-    $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    & $claude mcp remove nexus-browser -s user *> $null
-    $ErrorActionPreference = $previous
-    $envArgs = foreach ($k in $env_.Keys) { '-e'; "$k=$($env_[$k])" }
-    & $claude mcp add @envArgs --scope user --transport stdio nexus-browser '--' $pythonExe @args_ | Out-Null
-    if ($LASTEXITCODE) { throw 'claude mcp add nexus-browser a échoué.' }
-    Write-Host 'Claude Code : nexus-browser inscrit.'
-} else { Write-Warning 'CLI claude introuvable : Claude Code non inscrit.' }
+# Claude Code : serveur MCP et compétence par le plugin nexus-browser du catalogue « nexus » (NexusClaude\plugins,
+# activé par NexusClaude\claude-settings.json ; jeton dans la variable NEXUS_MCP_TOKEN des réglages, posée par
+# Sync-NexusPoste). Aucune inscription ici (aucune CLI Claude).
 
-# Codex : table [mcp_servers.nexus-browser] de ~\.codex\config.toml, remplacée en place (sous-tables comprises).
-$codexConfig = Join-Path $HOME '.codex\config.toml'
-if (Test-Path $codexConfig) {
-    $env_ = Get-Env 'Codex'
-    $q = { param($s) "'" + $s + "'" }  # chaîne TOML littérale : antislashs Windows conservés
-    $block = @('[mcp_servers.nexus-browser]', "command = $(& $q $pythonExe)",
-        "args = [$(($args_ | ForEach-Object { & $q $_ }) -join ', ')]", 'startup_timeout_sec = 60',
-        'tool_timeout_sec = 120', '', '[mcp_servers.nexus-browser.env]') +
-        ($env_.Keys | ForEach-Object { "$_ = $(& $q $env_[$_])" })
-    $lines = [Collections.Generic.List[string]](Get-Content $codexConfig)
-    $start = $lines.FindIndex({ param($l) $l -match '^\s*\[mcp_servers\.nexus-browser\]\s*$' })
-    if ($start -ge 0) {
-        $end = $start + 1
-        while ($end -lt $lines.Count -and ($lines[$end] -notmatch '^\s*\[' -or $lines[$end] -match '^\s*\[mcp_servers\.nexus-browser\.')) { $end++ }
-        $lines.RemoveRange($start, $end - $start)
-        $lines.InsertRange($start, [string[]]($block + ''))
-    } else {
-        if ($lines.Count -and $lines[$lines.Count - 1] -ne '') { $lines.Add('') }
-        $lines.AddRange([string[]]$block)
-    }
-    $backup = Join-Path $localRoot ('backups\codex-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.toml')
-    New-Item -ItemType Directory -Force (Split-Path $backup) | Out-Null
-    Copy-Item $codexConfig $backup
-    [IO.File]::WriteAllText($codexConfig, ($lines -join "`n") + "`n", $utf8)
-    Write-Host 'Codex : nexus-browser inscrit.'
-} else { Write-Warning 'Codex absent de ce PC : non inscrit.' }
+# --- Codex : serveur et compétence par le plugin perso nexus-browser de Codex (NexusCodex\scripts\installer-plugins-nexus.ps1,
+#     lancé par Sync-NexusPoste) ; plus de table [mcp_servers] ici.
 
 # Antigravity : ~\.gemini\config (mcp_config.json, plugin nexus-browser et sa compétence). La synchronisation de
 # NexusAGY fusionne sans retirer ce serveur ni ce plugin.
 $agyRoot = Join-Path $HOME '.gemini\config'
 $agyConfig = Join-Path $agyRoot 'mcp_config.json'
 if (Test-Path $agyConfig) {
-    $entry = [PSCustomObject]@{ command = $pythonExe; args = $args_; env = [PSCustomObject](Get-Env 'Antigravity') }
+    $entry = [PSCustomObject]@{ serverUrl = (Get-Url 'Antigravity'); headers = [PSCustomObject]@{ Authorization = "Bearer $token" } }
     $plugin = Join-Path $agyRoot 'plugins\nexus-browser'
     foreach ($file in Get-ChildItem (Join-Path $PSScriptRoot 'plugins\nexus-browser') -File -Recurse) {
         if ($file.Name -eq 'mcp_config.json') { continue }
@@ -166,9 +146,15 @@ if (Test-Path $agyConfig) {
     }
     $pluginMcp = [PSCustomObject]@{ mcpServers = [PSCustomObject]@{ 'nexus-browser' = $entry } }
     [IO.File]::WriteAllText((Join-Path $plugin 'mcp_config.json'), ($pluginMcp | ConvertTo-Json -Depth 100), $utf8)
-    $skill = Join-Path $agyRoot 'skills\nexus-browser'
-    New-Item -ItemType Directory -Force $skill | Out-Null
-    Copy-Item (Join-Path $PSScriptRoot 'skills\nexus-browser\SKILL.md') (Join-Path $skill 'SKILL.md') -Force
+    # Compétence : seulement dans le plugin. Une ancienne copie globale (skills\nexus-browser) la doublait dans
+    # Antigravity : retirée, sauvegarde hors OneDrive.
+    $oldSkill = Join-Path $agyRoot 'skills\nexus-browser'
+    if (Test-Path $oldSkill) {
+        $saved = Join-Path $localRoot "backups\agy-skill-nexus-browser-$(Get-Date -Format yyyyMMdd-HHmmss)"
+        New-Item -ItemType Directory -Force (Split-Path $saved) | Out-Null
+        Move-Item $oldSkill $saved
+        Write-Journal "Antigravity : copie globale du skill nexus-browser retirée (doublon du plugin), sauvegarde $saved"
+    }
     # Plugin activé dans config.json, seulement Antigravity fermé (sinon il réécrirait l'ancien fichier en quittant).
     $agyApp = Join-Path $agyRoot 'config.json'
     if ((Test-Path $agyApp) -and -not (Get-Process -Name Antigravity -ErrorAction SilentlyContinue)) {
@@ -193,14 +179,6 @@ if (Test-Path $agyConfig) {
     Write-Host 'Antigravity : nexus-browser inscrit (plugin seulement).'
 } else { Write-Warning 'Antigravity absent de ce PC : non inscrit.' }
 
-# Compétence nexus-browser aussi pour Claude Code et Codex (chargées depuis <agent>\skills\<nom>\SKILL.md).
-foreach ($agentHome in @((Join-Path $HOME '.claude'), (Join-Path $HOME '.codex'))) {
-    if (-not (Test-Path -LiteralPath $agentHome -PathType Container)) { continue }
-    $skill = Join-Path $agentHome 'skills\nexus-browser'
-    New-Item -ItemType Directory -Force $skill | Out-Null
-    Copy-Item (Join-Path $PSScriptRoot 'skills\nexus-browser\SKILL.md') (Join-Path $skill 'SKILL.md') -Force
-    Write-Host "Compétence nexus-browser copiée : $skill"
-}
 
 if (-not $SkipTests) {
     & (Join-Path $PSScriptRoot 'test.ps1')

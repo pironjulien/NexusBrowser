@@ -12,6 +12,8 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import Callable
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +50,9 @@ __all__ = [
     "check_upload_files",
     "is_read_only_action",
     "protected_upload_roots",
+    "session_identity",
     "set_identity",
+    "start_session_heartbeats",
 ]
 
 # Identité de CE client auprès du pont : nom de l'agent et identifiant de sa session. L'extension rattache à cette
@@ -76,16 +80,32 @@ def set_identity(agent: str, client_id: str | None = None) -> dict[str, str]:
     return dict(_identity)
 
 
+# Démon partagé (un processus pour toutes les sessions des trois agents) : l'identité de la session MCP en cours,
+# posée pour chaque requête par le serveur. Aucun processus annoncé : la session vit tant qu'elle bat (le démon bat
+# chaque session ouverte) ; fermée, elle se tait et ses onglets deviennent orphelins après SESSION_DEAD_S.
+_SESSION_IDENTITY: ContextVar[dict[str, str] | None] = ContextVar("nexus_browser_session", default=None)
+
+
+def session_identity(agent: str, session_id: str) -> dict[str, str]:
+    """Identité d'une session MCP du démon : agent de l'URL, identifiant tiré de l'id de session MCP."""
+    identity = check_identity(agent, f"{agent.lower().replace(' ', '-')}-{session_id.replace('-', '')[:24]}")
+    if identity is None:
+        raise ValueError(f"Identité de session invalide : agent={agent!r}")
+    return identity
+
+
 def identity() -> dict[str, str]:
-    return dict(_identity)
+    return dict(_SESSION_IDENTITY.get() or _identity)
 
 
 def authentication_headers() -> dict[str, str]:
     """Jeton relu à chaque commande (une rotation prend effet aussitôt), en LECTURE seule : ses droits sont réglés à
     sa création par le pont, jamais ici (aucun whoami ni icacls par commande). Identité du client jointe, et son
     processus pour une session liée à ce processus."""
-    headers = {TOKEN_HEADER: read_token(), AGENT_HEADER: _identity["agent"], CLIENT_HEADER: _identity["id"]}
-    if _session_pid is not None:
+    session = _SESSION_IDENTITY.get()
+    current = session or _identity
+    headers = {TOKEN_HEADER: read_token(), AGENT_HEADER: current["agent"], CLIENT_HEADER: current["id"]}
+    if session is None and _session_pid is not None:
         headers[PID_HEADER] = str(_session_pid)
     return headers
 
@@ -119,6 +139,45 @@ def start_heartbeat(interval_s: float = HEARTBEAT_S, stop: threading.Event | Non
             stop.wait(interval_s)
 
     thread = threading.Thread(target=beat, name="nexus-browser-heartbeat", daemon=True)
+    thread.start()
+    return thread
+
+
+def start_session_heartbeats(
+    live: Callable[[], dict[str, dict[str, str]]], interval_s: float = HEARTBEAT_S, stop: threading.Event | None = None
+) -> threading.Thread:
+    """Démon : un battement par session MCP ouverte (live() → {id de session : identité}) ; le premier de chaque
+    session reprend les onglets orphelins de son agent. Une session fermée n'est plus battue."""
+    stop = stop or threading.Event()
+
+    tick_s = min(1.0, interval_s)  # une session neuve bat (et reprend ses orphelins) dans la seconde
+
+    def beat() -> None:
+        reclaimed: set[str] = set()
+        last: dict[str, float] = {}
+        while not stop.is_set():
+            try:
+                sessions = live()
+            except RuntimeError:  # sessions modifiées pendant la lecture (boucle du serveur) : tour suivant
+                sessions = {}
+            reclaimed &= set(sessions)
+            last = {sid: at for sid, at in last.items() if sid in sessions}
+            now = time.monotonic()
+            for sid, ident in sessions.items():
+                if now - last.get(sid, -interval_s) < interval_s:
+                    continue
+                last[sid] = now
+                token = _SESSION_IDENTITY.set(ident)
+                try:
+                    heartbeat(sid not in reclaimed)
+                    reclaimed.add(sid)
+                except Exception:  # pont arrêté, Chrome fermé : réessayé au battement suivant
+                    pass
+                finally:
+                    _SESSION_IDENTITY.reset(token)
+            stop.wait(tick_s)
+
+    thread = threading.Thread(target=beat, name="nexus-browser-heartbeats", daemon=True)
     thread.start()
     return thread
 
@@ -165,13 +224,14 @@ def is_chrome_running() -> bool:
     if sys.platform != "win32":
         return False
     try:
+        # Octets, pas texte : tasklist écrit dans la page de code OEM (« Numéro » en cp850 sous Windows français),
+        # illisible en UTF-8 quand les démons tournent avec PYTHONUTF8=1.
         output = subprocess.check_output(
             ["tasklist.exe", "/FI", "IMAGENAME eq chrome.exe", "/FO", "CSV"],
             creationflags=subprocess.CREATE_NO_WINDOW,
-            text=True,
             timeout=3,
         )
-        return "chrome.exe" in output.lower()
+        return b"chrome.exe" in output.lower()
     except (OSError, subprocess.SubprocessError):
         return False
 

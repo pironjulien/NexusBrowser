@@ -134,8 +134,8 @@ def test_page_tools_require_tab_id_no_last_tab_fallback(monkeypatch):
     assert sent == ["create-tab"]
     assert {"browser_adopt_tab", "browser_release_tab", "browser_network_record", "browser_network_stop"} <= set(tools)
     assert not {"browser_sidepanel_requests", "browser_sidepanel_reply"} & set(tools)
-    assert "julien_asked" in inspect.signature(mcp_server.browser_adopt_tab).parameters
-    assert inspect.signature(mcp_server.browser_adopt_tab).parameters["julien_asked"].default is False
+    params = inspect.signature(mcp_server.browser_adopt_tab).parameters
+    assert params["user_asked"].default is False and params["julien_asked"].default is False  # ancien nom : alias
 
 
 def test_cookie_values_never_requested_by_default(monkeypatch):
@@ -232,3 +232,24 @@ def test_default_cli_identity_is_accepted_by_the_bridge():
 
     default = bridge_client.identity()
     assert bridge_security.check_identity(default["agent"], default["id"]) is not None
+
+
+def test_adopt_tab_user_asked_and_its_former_name(monkeypatch):
+    """user_asked (nom neutre) et julien_asked (ancien nom, alias) envoient le même accord, sous les deux clés lues
+    par l'extension (julienAsked pour une extension d'avant userAsked)."""
+    sent: list[dict] = []
+    monkeypatch.setattr(mcp_server, "call_bridge", lambda action, params, timeout=20.0: sent.append(params) or {})
+    mcp_server.browser_adopt_tab(7)
+    mcp_server.browser_adopt_tab(7, user_asked=True)
+    mcp_server.browser_adopt_tab(7, julien_asked=True)
+    assert [(p["userAsked"], p["julienAsked"]) for p in sent] == [(False, False), (True, True), (True, True)]
+
+
+def test_client_texts_name_nobody():
+    """Instructions et descriptions des outils, lues par tout client tiers : en anglais pour les instructions, neutres."""
+    tools = asyncio.run(mcp_server.browser_mcp.list_tools())
+    instructions = mcp_server.browser_mcp.instructions or ""
+    assert instructions.startswith("NexusBrowser Chrome bridge: the user's real Chrome")
+    assert "user_asked=True" in instructions and len(instructions) <= 2048
+    seen = instructions + "".join(tool.model_dump_json() for tool in tools)
+    assert "Julien" not in seen.replace("julien_asked", "")

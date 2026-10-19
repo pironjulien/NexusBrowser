@@ -223,8 +223,13 @@ def test_new_tab_groups_under_the_agent_name(monkeypatch):
     )
     import inspect
 
-    assert inspect.signature(mcp_server.browser_new_tab).parameters["group"].default == mcp_server.AGENT_NAME
-    assert inspect.signature(mcp_server.browser_group_tabs).parameters["title"].default == mcp_server.AGENT_NAME
+    # Omis : le nom de l'agent de la session en cours (celui du processus en stdio, de la session MCP en démon).
+    assert inspect.signature(mcp_server.browser_new_tab).parameters["group"].default is None
+    assert inspect.signature(mcp_server.browser_group_tabs).parameters["title"].default is None
+    mcp_server.browser_new_tab(url="https://example.com")
+    assert sent[-1][1]["group"] == mcp_server.AGENT_NAME
+    mcp_server.browser_new_tab(url="https://example.com", group="")
+    assert "group" not in sent[-1][1]
     mcp_server.browser_new_tab(url="https://example.com", group="Claude")
     assert sent[-1] == (
         "create-tab",

@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Nexus Browser Bridge",
-  "version": "2.9.0",
+  "version": "2.10.0",
   "minimum_chrome_version": "116",
   "description": "Pont Chrome commun à Antigravity, Claude et Codex (NexusBrowser) : chaque agent dans ses onglets de fond.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw8lgOqyVrU2QqvE92/ASo6/QabBL8JO2a15ouUs6UtMEdl7PI9g5Qf3BZGWSksLUkNPVbAp2FQEiWI+sZQNJkr7n/UVe/5ym8DOtXyFUsgpF2x7SHd47V1Kx2b6VOlFy4BGf4UYRw5Mc5zRVeu6FZyKaPNmuFHk0QdbdHz8OlRiOL5ILyp63jidgam6s6Loo/QTOxFzJXE+oJ6N/3HRMSTy8Zlu6NfqcfW7LuLs+YJEstCUY2ZVdx8sWTTYSiWRlAmWz6ZbGNmNV4EzGLHMdgtMfO7o+Kl8gJSWcPwZA8iCwMzXuJzY5YCsN/EsEKsy2UGiNtHVZuwAVE406RbISHwIDAQAB",
   "permissions": [
     "debugger",
     "tabs",
+    "webNavigation",
     "tabGroups",
     "scripting",
     "alarms",
@@ -26,10 +27,10 @@
   "commands": {
     "toggle-side-panel": {
       "suggested_key": {
-        "default": "Alt+Shift+N",
-        "mac": "Alt+Shift+N"
+        "default": "Alt+Shift+Y",
+        "mac": "Alt+Shift+Y"
       },
-      "description": "Ouvrir le poste de contrôle NexusBrowser (onglets pilotés, STOP)"
+      "description": "Ouvrir le panneau Antigravity (discussion, onglets pilotés, STOP)"
     }
   },
   "content_scripts": [
@@ -44,7 +45,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Poste de contrôle NexusBrowser",
+    "default_title": "Antigravity (NexusBrowser)",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

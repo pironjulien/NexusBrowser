@@ -49,6 +49,7 @@ def test_manifest_is_minimal_and_origins_are_explicit():
     assert set(extension["permissions"]) == {
         "debugger",
         "tabs",
+        "webNavigation",  # panneau Antigravity : navigation de Julien sur un onglet adopté → onglet rendu
         "tabGroups",
         "scripting",
         "alarms",
@@ -78,9 +79,10 @@ def test_extension_id_is_fixed_by_its_public_key():
 
 def test_install_registers_the_three_agents_under_their_own_name():
     script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
-    for agent in ("Claude", "Codex", "Antigravity"):
-        assert f"Get-Env '{agent}'" in script
-    assert "NEXUS_BROWSER_AGENT" in script
+    # Démon partagé : chaque client le joint par URL avec son agent (?agent=…), plus par NEXUS_BROWSER_AGENT.
+    for agent in ("Antigravity",):  # Claude et Codex : par leurs plugins (catalogues « nexus »)
+        assert f"Get-Url '{agent}'" in script
+    assert "?agent=" in script and "nexus-browser.json" in script
     # Migration : l'ancien pont de NexusAGY (mêmes ports) et son hôte natif sont retirés.
     assert "Unregister-ScheduledTask -TaskName 'NexusAGY Browser Bridge'" in script
     assert "com.nexusagy.bridge_auth" in script

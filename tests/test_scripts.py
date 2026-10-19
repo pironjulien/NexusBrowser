@@ -103,7 +103,10 @@ def test_install_cleans_old_bridge_and_registers_skills_without_duplicate():
         assert residue in script
     assert "Write-Journal" in script and "install.log" in script
     assert "Remove-Item -LiteralPath $old -Force" in script
-    assert ".claude'" in script and ".codex'" in script and "skills\\nexus-browser" in script
+    assert "installer-plugins-nexus.ps1" in script  # Codex : par son plugin perso (NexusCodex)
+    # Claude Code : serveur et compétence par le plugin du catalogue « nexus » (NexusClaude), aucune CLI Claude.
+    for forbidden in ("claude.exe", "mcp add", ".claude'", "[mcp_servers.nexus-browser]"):
+        assert forbidden not in script, forbidden
     assert "doublon-antigravity.ps1" in script
     assert "$json.mcpServers.'nexus-browser' = $entry" not in script  # plus d'entrée globale chez Antigravity
     assert "PYTHONDONTWRITEBYTECODE = '1'" in script and "@('-B', $server)" in script

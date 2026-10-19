@@ -253,7 +253,7 @@ def test_mcp_server_starts_its_heartbeat_and_documents_orphans():
     main = source[source.index('if __name__ == "__main__":') :]
     assert "start_heartbeat()" in main
     assert '"orphan"' in (mcp_server.browser_list_tabs.__doc__ or "")
-    assert "sans julien_asked" in (mcp_server.browser_adopt_tab.__doc__ or "")
+    assert "sans user_asked" in (mcp_server.browser_adopt_tab.__doc__ or "")
 
 
 def test_cdp_send_page_world_only_on_explicit_request(monkeypatch):

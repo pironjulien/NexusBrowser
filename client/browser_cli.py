@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-CLI du pont NexusBrowser : les onglets Chrome de Julien par l'extension Nexus Browser Bridge (même pont, mêmes
+CLI du pont NexusBrowser : les onglets Chrome de l'utilisateur par l'extension Nexus Browser Bridge (même pont, mêmes
 garde-fous que le serveur MCP nexus-browser).
 
 Identité : agent « CLI », session « cli » (stable d'un appel à l'autre, NEXUS_BROWSER_CLIENT pour en changer) :
-les onglets ouverts par `new-tab` restent pilotables par les appels suivants ; ceux de Julien et des agents, jamais.
+les onglets ouverts par `new-tab` restent pilotables par les appels suivants ; ceux de l'utilisateur et des agents, jamais.
 Chaque commande de page exige --tab-id (l'id renvoyé par new-tab).
 """
 
@@ -50,7 +50,7 @@ TAB_HELP = "Onglet ouvert par new-tab (obligatoire)"
 
 
 def page_command(subparsers, name, help_text):
-    """Sous-commande de page : --tab-id obligatoire (aucun onglet courant, jamais l'onglet actif de Julien)."""
+    """Sous-commande de page : --tab-id obligatoire (aucun onglet courant, jamais l'onglet actif de l'utilisateur)."""
     parser = subparsers.add_parser(name, help=help_text)
     parser.add_argument("--tab-id", required=True, type=int, help=TAB_HELP)
     return parser
@@ -62,16 +62,22 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="subcommand", help="Commande")
 
     subparsers.add_parser("list-tabs", help="Onglets ouverts, avec l'agent qui pilote chacun")
-    subparsers.add_parser("active-tab", help="Identité de l'onglet actif de Julien (lecture seule)")
+    subparsers.add_parser("active-tab", help="Identité de l'onglet actif de l'utilisateur (lecture seule)")
     page_command(subparsers, "select-tab", "Mettre au premier plan un onglet de cette session")
 
     p_new = subparsers.add_parser("new-tab", help="Ouvrir un onglet de fond (renvoie son id)")
     p_new.add_argument("--url", default="about:blank", help="URL (http, https, data: ou about:blank)")
 
-    p_adopt = subparsers.add_parser("adopt-tab", help="Prendre un onglet de Julien, seulement s'il l'a demandé")
-    p_adopt.add_argument("--tab-id", required=True, type=int, help="Onglet de Julien")
-    p_adopt.add_argument("--julien-asked", action="store_true", help="Julien l'a demandé explicitement")
-    page_command(subparsers, "release-tab", "Rendre l'onglet à Julien (sans le fermer)")
+    p_adopt = subparsers.add_parser("adopt-tab", help="Prendre un onglet de l'utilisateur, seulement s'il l'a demandé")
+    p_adopt.add_argument("--tab-id", required=True, type=int, help="Onglet de l'utilisateur")
+    p_adopt.add_argument(
+        "--user-asked",
+        "--julien-asked",
+        dest="user_asked",
+        action="store_true",
+        help="L'utilisateur l'a demandé explicitement (--julien-asked : ancien nom)",
+    )
+    page_command(subparsers, "release-tab", "Rendre l'onglet à l'utilisateur (sans le fermer)")
     page_command(subparsers, "close-tab", "Fermer un onglet de cette session")
 
     p_reload = page_command(subparsers, "reload", "Recharger l'onglet")
@@ -236,7 +242,9 @@ def run(args) -> object:
     if command == "new-tab":
         return execute_command("create_tab", {"url": args.url})
     if command == "adopt-tab":
-        return execute_command("adopt_tab", {"tabId": tab, "julienAsked": args.julien_asked})
+        return execute_command(
+            "adopt_tab", {"tabId": tab, "userAsked": args.user_asked, "julienAsked": args.user_asked}
+        )
     tab_only = {
         "select-tab": "select_tab",
         "release-tab": "release_tab",

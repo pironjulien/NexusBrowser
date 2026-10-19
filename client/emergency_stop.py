@@ -1,4 +1,4 @@
-"""Arrêt d'urgence commun aux agents de Julien (protocole emergency-stop.md commun aux agents de bureau).
+"""Arrêt d'urgence commun aux agents de l'utilisateur (protocole emergency-stop.md commun aux agents de bureau).
 
 Ctrl+Alt+Maj+Échap fige toute action de NexusAGY, NexusClaude, NexusCodex et NexusBrowser (Chrome) pendant 120 s.
 
@@ -51,7 +51,7 @@ _failure = 0
 
 
 class EmergencyStopError(PermissionError):
-    """Action refusée : arrêt d'urgence demandé par Julien."""
+    """Action refusée : arrêt d'urgence demandé par l'utilisateur."""
 
 
 def _version() -> str:
@@ -167,7 +167,7 @@ def hotkey_note() -> str:
         return ""
     return (
         f"Arrêt d'urgence {HOTKEY_LABEL} NON GARANTI : NexusBrowser n'a pas obtenu le raccourci (erreur {_failure}) et "
-        "aucun agent à jour ne le détient. Prévenir Julien."
+        "aucun agent à jour ne le détient. Prévenir l'utilisateur."
     )
 
 

@@ -58,15 +58,15 @@ bridge shared by several agents.
 
 ## Tools
 
-47 MCP tools. Tool descriptions and messages are in French; tool and parameter names are in English.
+48 MCP tools. Tool descriptions and messages are in French; tool and parameter names are in English.
 
 | Area | Tools |
 | --- | --- |
 | Tabs | `browser_list_tabs`, `browser_active_tab` (read only), `browser_new_tab`, `browser_select_tab`, `browser_adopt_tab`, `browser_release_tab`, `browser_group_tabs`, `browser_close_tab`, `browser_reload`, `browser_navigate`, `browser_wait_load` |
-| Input (trusted CDP events) | `browser_click`, `browser_semantic_click`, `browser_hover`, `browser_fill`, `browser_semantic_fill`, `browser_select_option`, `browser_check`, `browser_press_key`, `browser_type_keys`, `browser_drag_and_drop`, `browser_scroll`, `browser_upload`, `browser_handle_dialog` |
+| Input (trusted CDP events) | `browser_click`, `browser_semantic_click`, `browser_hover`, `browser_fill`, `browser_semantic_fill`, `browser_fill_form`, `browser_select_option`, `browser_check`, `browser_press_key`, `browser_type_keys`, `browser_drag_and_drop`, `browser_scroll`, `browser_upload`, `browser_handle_dialog` |
 | Finding elements | `browser_find` (Playwright-style locators: role, label, text, placeholder, test id, in every frame), `browser_interactive_map`, `browser_vision_inspect` and `browser_click_mark` (Set-of-Mark badges), `browser_axtree`, `browser_content`, `browser_check_handoff` (2FA, CAPTCHA) |
 | Network and downloads | `browser_network_record`, `browser_network_stop`, `browser_network_requests`, `browser_network_response`, `browser_wait_network_idle`, `browser_download_status`, `browser_wait_download`, `browser_get_cookies` |
-| Output | `browser_screenshot`, `browser_pdf`, `browser_export` (main content as Markdown, text or HTML), `browser_export_gsuite` (Google Docs, Sheets, Slides through Google's export URLs), `browser_export_youtube_transcript`, `browser_logs` |
+| Output | `browser_screenshot`, `browser_pdf`, `browser_export` (main content as Markdown, text or HTML), `browser_export_gsuite` (Google Docs, Sheets, Slides through Google's export URLs), `browser_youtube_transcript`, `browser_logs` |
 | Page access | `browser_eval`, `browser_cdp_send` (allowlisted commands) |
 
 ## Install
@@ -106,7 +106,7 @@ Once the bridge and the extension are installed (above), any MCP client can also
 claude mcp add nexus-browser --scope user -e NEXUS_BROWSER_AGENT=Claude -- uvx nexus-browser
 ```
 
-Without the bridge, the server still starts and lists its 47 tools, and every call answers with a clear error that
+Without the bridge, the server still starts and lists its 48 tools, and every call answers with a clear error that
 points to the one-time install.
 
 ## Security (held by the extension and the bridge, not by the agent)
@@ -117,7 +117,7 @@ points to the one-time install.
 - **Tab ownership**: every bridge client identifies itself (agent + session headers, forwarded by the bridge in the
   signed channel). A tab opened by `browser_new_tab` belongs to that session (`chrome.storage.session`); any page
   command on another tab (the user's, another agent's) is refused. A tab of the user only through
-  `browser_adopt_tab(tab_id, julien_asked=True)` (the parameter keeps its historical name). `tab_id` is mandatory on
+  `browser_adopt_tab(tab_id, user_asked=True)` (`julien_asked`, its former name, still works as an alias). `tab_id` is mandatory on
   every page tool. A session whose MCP process is gone (or silent for 1.618 x 60 s; servers beat every 37 s) leaves
   **orphan** tabs: the same agent can reclaim (`browser_adopt_tab`, also automatically at startup), close or release
   them; never another agent.
@@ -138,7 +138,7 @@ points to the one-time install.
 - **Emergency stop** (Ctrl+Alt+Shift+Esc, STOP button of the control panel, `~\.nexus\stop`): commands already
   running are cancelled (typing, drag, waits), debuggers detached, every action refused for 120 s. The same file
   protocol is shared with the [NexusWindows](https://julienpiron.fr/nexuswindows/) agents.
-- **Control panel** (side panel, Alt+Shift+N): tabs driven by each agent, debugger state, STOP, give a tab back.
+- **Control panel** (side panel, Alt+Shift+Y): tabs driven by each agent, debugger state, STOP, give a tab back.
 - Whoever holds the bridge token controls the browser session: keep `~\.nexus\nexus-browser\bridge-token` private.
 
 ## Checks

@@ -52,6 +52,12 @@ interrompt les commandes en cours.
   candidats. `browser_find(locator, tab_id=...)` liste sans agir.
 * **Saisie** : `browser_fill(tab_id=..., locator={"label": "Email"}, value=...)` (vrai clic, Ctrl+A, texte, valeur relue
   `verified`) ; `replace=False`, `per_key=True`, `keys=["Enter"]`, `mode="trusted"` (jamais de repli).
+* **Formulaire entier en un appel** : `browser_interactive_map` puis `browser_fill_form(tab_id=..., fields=[{"mark":
+  1, "value": "Marie"}, {"mark": 4, "option": "Lille"}, {"mark": 6, "checked": false}])` : champs visés par leur mark
+  (la référence de l'élément, gardée du geste à la relecture), mêmes gestes que les outils d'un champ, dans l'ordre ;
+  arrêt au premier champ non confirmé (erreur, boîte de dialogue, valeur refusée) ; puis tout le formulaire relu sans
+  geste : `all_verified` seulement si chaque champ a encore sa valeur. Ne soumet jamais. Un tour au lieu d'un par
+  champ : à préférer dès deux champs.
 * `browser_press_key`, `browser_type_keys`, `browser_check`, `browser_select_option`, `browser_hover`,
   `browser_drag_and_drop` : même `tab_id`, mêmes localisateurs.
 * **Iframes d'une autre origine** : localisation, clic, saisie et lecture fonctionnent (`frame`, `crossOriginFrame`).
@@ -110,7 +116,7 @@ ni renvoyer un secret que la tâche n'exige pas.
 * `browser_export(tab_id, format="markdown" | "text" | "html", selector | locator, max_chars)`.
 * `browser_export_gsuite(tab_id, format)` : Google Docs/Sheets/Slides par l'URL d'export officielle (binaires écrits
   dans `~/.nexus/nexus-browser/exports/`).
-* `browser_export_youtube_transcript(tab_id, lang="fr")` : texte horodaté et brut.
+* `browser_youtube_transcript(tab_id, lang="fr")` : texte horodaté et brut.
 * `browser_wait_download(tab_id, timeout_ms)` : chemin du fichier téléchargé (jamais un fichier jugé dangereux).
 
 ## 7. Arrêt d'urgence et poste de contrôle
@@ -118,7 +124,7 @@ ni renvoyer un secret que la tâche n'exige pas.
 * **Ctrl+Alt+Maj+Échap**, ou le bouton **STOP** du poste de contrôle de Chrome : plus aucune action de tous les
   agents pendant 120 s ; les commandes **en cours** sont annulées (frappe, glisser, attentes interrompus, débogueurs
   détachés). Ne jamais contourner : attendre les instructions de Julien.
-* **Poste de contrôle** (icône de l'extension ou **Alt+Maj+N**, modifiable dans `chrome://extensions/shortcuts`) :
+* **Poste de contrôle** (icône de l'extension ou **Alt+Maj+Y**, modifiable dans `chrome://extensions/shortcuts`) :
   onglets pilotés par chaque agent, état du débogueur, STOP, « Rendre l'onglet » (propriété retirée, débogueur
   détaché). Il n'envoie rien aux agents et n'agit sur aucune page.
 * La pastille d'état en bas de l'onglet (« Claude · action ») ne vient que de l'extension, jamais d'une page.
@@ -131,7 +137,7 @@ ni renvoyer un secret que la tâche n'exige pas.
 1. browser_new_tab("https://...")                      -> id = 123 (onglet de fond de CETTE session)
 2. browser_wait_load(tab_id=123)
 3. browser_interactive_map(tab_id=123)                 -> [#1], [#2]...
-4. browser_fill(tab_id=123, mark=1, value="...")       -> verified
+4. browser_fill_form(tab_id=123, fields=[{"mark": 1, "value": "..."}, ...]) -> all_verified
 5. browser_click(tab_id=123, mark=2)                   -> trusted_click
 6. browser_wait_network_idle(tab_id=123)
 7. browser_close_tab(tab_id=123)

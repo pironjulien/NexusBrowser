@@ -148,8 +148,8 @@ def test_gsuite_clear_error_from_extension_is_kept(bridge, exports_dir):
 
 
 def test_youtube_transcript_forwarding(bridge):
-    mcp_server.browser_export_youtube_transcript(tab_id=9, lang="fr")
-    mcp_server.browser_export_youtube_transcript(tab_id=9, format="vtt", max_chars=2000, enable_captions=False)
+    mcp_server.browser_youtube_transcript(tab_id=9, lang="fr")
+    mcp_server.browser_youtube_transcript(tab_id=9, format="vtt", max_chars=2000, enable_captions=False)
     assert bridge["calls"][0] == (
         "export-youtube-transcript",
         {"tab_id": 9, "format": "json3", "maxChars": 100_000, "enableCaptions": True, "lang": "fr"},
@@ -164,14 +164,14 @@ def test_exports_read_only_except_youtube_during_emergency_stop(bridge):
     assert not bridge_client.is_read_only_action("export-youtube-transcript")  # peut activer les sous-titres
     package_stop.pressed()
     assert json.loads(mcp_server.browser_export(tab_id=1))["status"] == "success"
-    assert json.loads(mcp_server.browser_export_youtube_transcript(tab_id=1))["status"] == "error"
+    assert json.loads(mcp_server.browser_youtube_transcript(tab_id=1))["status"] == "error"
     assert [action for action, _, _ in bridge["calls"]] == ["export-content"]
 
 
 def test_export_tools_are_registered():
     for server in (mcp_server.browser_mcp,):
         names = set(mcp_server.listed_tool_names(server))
-        assert {"browser_export", "browser_export_gsuite", "browser_export_youtube_transcript"} <= names
+        assert {"browser_export", "browser_export_gsuite", "browser_youtube_transcript"} <= names
 
 
 def test_default_exports_dir_is_outside_onedrive():
