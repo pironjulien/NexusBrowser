@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.16.0] - 2026-10-20
+
+### Added
+- Toolbar popup (click on the NexusBrowser icon), read only: bridge state (connected or not, with the reason),
+  how many tabs each agent drives (its named tab group), and the emergency stop shortcut. Gemini-like look, light or
+  dark with the system. Nothing in it acts on pages or agents.
+
 ## [2.15.0] - 2026-10-20
 
 ### Removed

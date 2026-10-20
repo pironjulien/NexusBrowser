@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>NexusBrowser</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <header class="top">
+        <svg class="star" viewBox="0 0 24 24" aria-hidden="true">
+            <defs>
+                <linearGradient id="star-ink" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" stop-color="#4f7cff"/>
+                    <stop offset="0.55" stop-color="#a35cff"/>
+                    <stop offset="1" stop-color="#ff7a9a"/>
+                </linearGradient>
+            </defs>
+            <path fill="url(#star-ink)" d="M12 1.5c.7 5.6 4.9 9.8 10.5 10.5-5.6.7-9.8 4.9-10.5 10.5C11.3 16.9 7.1 12.7 1.5 12 7.1 11.3 11.3 7.1 12 1.5z"/>
+        </svg>
+        <span class="brand">NexusBrowser</span>
+        <span id="version" class="version"></span>
+    </header>
+    <main>
+        <div id="bridge" class="pill off">Pont : lecture…</div>
+        <p id="bridge-detail" class="muted" hidden></p>
+        <h2>Onglets des agents</h2>
+        <ul id="agents" class="agents"></ul>
+        <p class="muted foot">Arrêt d'urgence de tous les agents : <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Maj</kbd>+<kbd>Échap</kbd></p>
+    </main>
+    <script src="popup.js"></script>
+</body>
+</html>

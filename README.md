@@ -172,6 +172,7 @@ points to the one-time install.
   running are cancelled (typing, drag, waits), debuggers detached, every action refused for 120 s. The same file
   protocol is shared with the [NexusWindows](https://julienpiron.fr/nexuswindows/) agents.
 - **Who drives what**: each agent's tabs sit in a Chrome tab group named after it; `browser_release_tab` gives a tab back.
+  The toolbar icon opens a read-only popup: bridge state and tabs per agent.
 - Whoever holds the bridge token controls the browser session: keep `~\.nexus\nexus-browser\bridge-token` private.
 
 ## Checks

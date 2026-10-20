@@ -4154,13 +4154,41 @@ test('page entière : taille du contenu, zoom de la page appliqué comme pour un
     assert.deepEqual(plain(tall.res.data.fullPage), {width: 8192, height: 8192, truncated: true});
 });
 
-test('aucun panneau latéral : ni permission sidePanel, ni page, ni raccourci ; bouton titré NexusBrowser', () => {
+test('aucun panneau latéral : ni permission sidePanel, ni page, ni raccourci ; bouton NexusBrowser avec sa fenêtre', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../extension/manifest.json'), 'utf8'));
     assert.ok(!manifest.permissions.includes('sidePanel'));
     assert.equal(manifest.side_panel, undefined);
     assert.equal(manifest.commands, undefined);
     assert.equal(manifest.action.default_title, 'NexusBrowser');
+    assert.equal(manifest.action.default_popup, 'popup.html');
     for (const file of ['sidepanel.html', 'sidepanel.js', 'sidepanel_view.js', 'sidepanel.css']) {
         assert.ok(!fs.existsSync(path.join(__dirname, '../extension', file)), file);
     }
+});
+
+test("fenêtre de l'icône : lecture seule (état du pont, groupes des agents), aucun script inline", async () => {
+    const dir = path.join(__dirname, '../extension');
+    const html = fs.readFileSync(path.join(dir, 'popup.html'), 'utf8');
+    const js = fs.readFileSync(path.join(dir, 'popup.js'), 'utf8');
+    assert.ok(!/<script>|on[a-z]+=|style=/.test(html));
+    assert.ok(!/executeAction|panelStop|innerHTML|fetch\(|WebSocket|debugger|scripting|tabs\.(update|remove|create)/.test(js));
+    const sent = [];
+    const elements = {};
+    const element = (id) => (elements[id] ||= {id, hidden: false, textContent: '', className: '', children: [],
+        replaceChildren(...c) { this.children = c; }, append(...c) { this.children.push(...c); }});
+    const ctx = vm.createContext({
+        document: {getElementById: element, createElement: () => element(`n${Object.keys(elements).length}`)},
+        chrome: {
+            runtime: {getManifest: () => ({version: '9.9.9'}), sendMessage: async (m) => { sent.push(m); return {connected: true}; }},
+            tabGroups: {query: async () => [{id: 5, title: 'Claude'}, {id: 6, title: 'Perso'}]},
+            tabs: {query: async () => [{groupId: 5}, {groupId: 5}, {groupId: 6}, {groupId: -1}]}
+        }
+    });
+    vm.runInContext(js, ctx);
+    await settle();
+    assert.deepEqual(plain(sent), [{target: 'background', getStatus: true}]);
+    assert.equal(elements.version.textContent, 'v9.9.9');
+    assert.equal(elements.bridge.textContent, 'Pont local connecté');
+    assert.deepEqual(elements.agents.children.map(li => li.children.map(c => c.textContent)),
+        [['Claude', '2 onglets'], ['Codex', 'aucun'], ['Antigravity', 'aucun']]);
 });
