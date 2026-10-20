@@ -5,6 +5,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.15.0] - 2026-10-20
+
+### Removed
+- Chrome side panel ("control station", Alt+Shift+Y): it duplicated what already exists. STOP is the shared
+  emergency stop (Ctrl+Alt+Shift+Esc, `~\.nexus\stop`), and the tabs each agent drives are shown by its named Chrome
+  tab group. Removed end to end: the panel page, its view and style, the `sidePanel` permission and shortcut, the
+  `getControlState` / `panelStop` / `panelRelease` messages, the bridge event `emergency_stop` sent from Chrome and its
+  relay through the offscreen document. The toolbar button is now titled "NexusBrowser" (it still said "Antigravity").
+
+### Fixed
+- Shared daemon: a client on the stateless MCP protocol (2026-07-28, no `mcp-session-id` header, as Claude Code
+  now connects) fell back to the process identity "Nexus", so its tabs were not grouped or isolated under its own
+  agent. Such a client now gets one identity per agent for the daemon's life, heartbeated like an open session (its
+  orphan tabs are taken back after a daemon restart).
+
+## [2.14.0] - 2026-10-20
+
+### Removed
+- Antigravity side panel chat ("Discussion" view, built on 2026-10-18): it never carried a single message. Removed
+  end to end: the panel's thread, composer and suggestion chips (`agy_chat.js`), the `agy_ask` bridge event and the
+  bridge-reserved `agy_panel_update` command, the bridge's Nexus Relay mailbox polling (`agy_panel.py`), and the
+  consent bound to a panel request (`panel_request` of `browser_adopt_tab`, with the hand-back of a panel-adopted tab
+  when the user navigated it himself). Nexus Relay is simplified: only Claude opens exchanges with the other AIs. The
+  old thread is erased from `chrome.storage.local` when the extension starts.
+- Kept as is: the side panel (Alt+Shift+Y), now opening straight on the control station (piloted tabs, "Rendre
+  l'onglet", bridge state, no view switcher), and the STOP button and banner, always visible in the header.
+
 ### Fixed
 - `install.ps1` no longer refuses to run when Chrome is open and the on-demand bridge has simply not started yet: it starts the bridge task, then checks again.
 

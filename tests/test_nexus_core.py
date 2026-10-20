@@ -49,13 +49,12 @@ def test_manifest_is_minimal_and_origins_are_explicit():
     assert set(extension["permissions"]) == {
         "debugger",
         "tabs",
-        "webNavigation",  # panneau Antigravity : navigation de Julien sur un onglet adopté → onglet rendu
+        "webNavigation",  # onglet ouvert par un onglet d'agent (lien target=_blank : onCreatedNavigationTarget)
         "tabGroups",
         "scripting",
         "alarms",
         "downloads",
         "offscreen",
-        "sidePanel",
         "storage",
         "nativeMessaging",  # hôte natif com.nexus.browser_auth : preuves du pont, jamais le jeton
     }

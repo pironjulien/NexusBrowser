@@ -18,6 +18,7 @@ import re
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -77,7 +78,7 @@ mcp = browser_mcp
 ACCORDS = garde_fous.Accords()
 
 # Agent servi par CE processus (inscription de install.ps1 : Antigravity, Claude ou Codex) : nom du groupe d'onglets
-# par défaut et nom affiché dans le poste de contrôle de Chrome.
+# par défaut.
 AGENT_NAME = os.environ.get("NEXUS_BROWSER_AGENT", "").strip() or "Nexus"
 # Identité de session neuve à chaque processus : deux conversations du même agent ne partagent pas leurs onglets.
 # Liée à CE processus (annoncé au pont) : quand il disparaît, ses onglets deviennent orphelins pour le même agent.
@@ -93,6 +94,7 @@ def _agent_name() -> str:
 # joint http://127.0.0.1:16182/mcp?agent=<lui> avec le jeton ; chaque session MCP a sa propre identité (ses onglets).
 AGENTS = {"claude": "Claude", "codex": "Codex", "antigravity": "Antigravity"}
 _SESSION_AGENTS: dict[str, str] = {}  # id de session MCP → agent (nom affiché)
+_STATELESS_SESSIONS: dict[str, str] = {}  # agent sans session MCP → son id de session, propre à ce démon
 SESSION_IDLE_S = 161.8
 
 
@@ -100,9 +102,16 @@ async def _bind_session(ctx: Any, call_next: Any) -> Any:
     request = getattr(ctx, "request", None)
     session = request.headers.get("mcp-session-id") if request is not None else None
     agent = AGENTS.get((request.query_params.get("agent") or "").lower()) if request is not None else None
-    if not session or not agent:  # initialize (pas encore de session) ou URL sans agent : identité du processus
+    if not agent or (not session and getattr(ctx, "method", None) == "initialize"):
+        # URL sans agent, ou initialize d'un client à sessions (son id n'existe pas encore) : identité du processus.
         return await call_next(ctx)
-    _SESSION_AGENTS[session] = agent
+    if session:
+        _SESSION_AGENTS[session] = agent
+    else:
+        # Client sans session MCP (protocole 2026-07-28, sans état : Claude Code) : une identité par agent pour la
+        # vie du démon, battue comme une session ouverte. Sans elle, ses onglets tomberaient sous l'agent du processus
+        # (« Nexus ») et se mêleraient à ceux des autres agents sans état.
+        session = _STATELESS_SESSIONS.setdefault(agent, uuid.uuid4().hex)
     token = bridge_client._SESSION_IDENTITY.set(bridge_client.session_identity(agent, session))  # noqa: SLF001
     try:
         return await call_next(ctx)
@@ -134,7 +143,11 @@ def _serve_http(port: int) -> None:
     def live() -> dict[str, dict[str, str]]:
         for gone in set(_SESSION_AGENTS) - set(list(sessions)):
             _SESSION_AGENTS.pop(gone, None)
-        return {sid: bridge_client.session_identity(agent, sid) for sid, agent in list(_SESSION_AGENTS.items())}
+        stateless = {sid: agent for agent, sid in list(_STATELESS_SESSIONS.items())}
+        return {
+            sid: bridge_client.session_identity(agent, sid)
+            for sid, agent in [*_SESSION_AGENTS.items(), *stateless.items()]
+        }
 
     async def guarded(scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] == "http":
@@ -441,23 +454,15 @@ def browser_new_tab(
 def browser_adopt_tab(
     tab_id: int,
     user_asked: bool = False,
-    panel_request: str | None = None,
 ) -> str:
     """Takes control of a USER tab (no agent drives it): refused by default. user_asked=True only when the user
-    explicitly asked to act in THIS tab. The adoption is shown in Chrome's control panel; give the tab back at the end
-    with browser_release_tab.
+    explicitly asked to act in THIS tab. Give the tab back at the end with browser_release_tab.
 
     ORPHAN tab of my agent (state "orphan" in browser_list_tabs: its session died, server restarted or crashed): taken
-    back without user_asked. A tab of another agent, or of another live session, is always refused.
-
-    Request typed by the user in Chrome's Antigravity panel: panel_request = the request id given in the panel
-    message; the extension checks that this request targets THIS tab and the page it still shows, otherwise
-    it refuses."""
+    back without user_asked. A tab of another agent, or of another live session, is always refused."""
     asked = bool(user_asked)
     # julienAsked : clé lue par les extensions d'avant userAsked (même sens).
     params: dict[str, object] = {"tab_id": tab_id, "userAsked": asked, "julienAsked": asked}
-    if panel_request:
-        params["panelRequest"] = str(panel_request)
     return _call_bridge("adopt-tab", params)
 
 

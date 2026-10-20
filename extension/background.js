@@ -16,7 +16,7 @@ const AGY_FEATURES = [
     "network-log", "wait-download", "dialogs", "bridge-auth",
     "content-export", "gsuite-export", "youtube-transcript", "explicit-tab-id", "url-masking",
     "tab-ownership", "cdp-allowlist", "isolated-world", "body-masking", "cookie-names-only", "stop-cancel",
-    "network-record", "control-panel", "page-coordinates-capture",
+    "network-record", "page-coordinates-capture",
     "orphan-tabs", "cdp-page-world", "local-cookie-values", "body-masking-allowlist",
     "sensitive-field-masking", "cdp-reload-no-script", "ax-value-masking", "capture-screencast",
     "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree",
@@ -159,10 +159,9 @@ function saveExtensionState() {
 // Propriété relue avant la toute première commande (redémarrage du service worker compris).
 const extensionStateReady = (typeof chrome !== "undefined" && chrome.storage?.session) ? loadExtensionState() : Promise.resolve();
 
-async function rememberTabOwner(tabId, client, how = "created", panelRequest = null) {
+async function rememberTabOwner(tabId, client, how = "created") {
     if (!Number.isInteger(tabId) || !validClient(client)) return;
     const owner = { agent: client.agent, client: client.id, adopted: how === "adopted", since: Date.now() };
-    if (panelRequest) owner.panelRequest = String(panelRequest);  // adopté depuis le panneau : suivi des navigations
     tabOwners.set(tabId, owner);
     await saveExtensionState();
     return owner;  // l'objet écrit par CET appel, même si la Map a changé pendant la sauvegarde
@@ -257,7 +256,6 @@ console.log(`[NexusBrowser] Background Service Worker (v${extensionVersion() || 
 // l'hôte natif com.nexus.browser_auth ; le pont choisit le service worker en priorité.
 // -----------------------------------------------------------------------------
 if (typeof importScripts === "function") importScripts("bridge_link.js");
-if (typeof importScripts === "function") importScripts("agy_chat.js");
 
 const BRIDGE_WS_URL = "ws://127.0.0.1:9224";
 const NATIVE_AUTH_HOST = "com.nexus.browser_auth";
@@ -322,8 +320,6 @@ function connectBridgeWS() {
                 reconnectAttempts = 0;
                 console.log("[NexusBrowser] Service worker authentifié auprès du pont " + BRIDGE_WS_URL);
                 link.send({ event: "bridge_connected", timestamp: Date.now() });
-                agyInstance().then((instance) => link.send({ event: "agy_hello", instance })).catch(() => {});
-                agyResendPending().catch(() => {});  // demandes du panneau restées sans confirmation
                 if (keepaliveInterval) clearInterval(keepaliveInterval);
                 keepaliveInterval = setInterval(() => {
                     if (bridgeLink && bridgeLink.ready) bridgeLink.send({ event: "keepalive", timestamp: Date.now() });
@@ -353,18 +349,6 @@ function scheduleBridgeReconnect(overrideDelayMs = null) {
         : Math.min(30000, Math.round(1500 * Math.pow(1.618, Math.min(reconnectAttempts, 6))));
     reconnectAttempts++;
     reconnectTimer = setTimeout(connectBridgeWS, delayMs);
-}
-
-/** Événement signé vers le pont par la liaison authentifiée disponible (service worker, sinon offscreen). */
-async function sendBridgeEvent(payload) {
-    if (bridgeLink && bridgeLink.ready && bridgeLink.send(payload)) return true;
-    if (!offscreenReady() || !chrome.runtime?.sendMessage) return false;
-    try {
-        const reply = await chrome.runtime.sendMessage({ target: "offscreen", bridgeEvent: payload });
-        return !!(reply && reply.sent);
-    } catch (_) {
-        return false;
-    }
 }
 
 function bridgeStatus() {
@@ -406,60 +390,10 @@ function fromExtensionPage(sender) {
     return !sender.url || String(sender.url).startsWith(`chrome-extension://${chrome.runtime.id}/`);
 }
 
-// Onglet adopté depuis le panneau (propriété marquée panelRequest, gardée comme la propriété elle-même). Si JULIEN
-// change lui-même de page (barre d'adresse, favori, précédent/suivant), son accord ne couvre plus ce document :
-// l'onglet lui est rendu. Les navigations du travail (lien, envoi de formulaire, rechargement) restent permises.
-const AGY_USER_TRANSITIONS = new Set(["typed", "auto_bookmark", "generated", "keyword", "keyword_generated", "start_page"]);
-
-function agyUserNavigation(details) {
-    if (!details || details.frameId !== 0) return false;
-    const qualifiers = details.transitionQualifiers || [];
-    return AGY_USER_TRANSITIONS.has(details.transitionType)
-        || qualifiers.includes("forward_back") || qualifiers.includes("from_address_bar");
-}
-
-// Génération de navigation de Julien par onglet, notée AVANT toute attente et même sans propriétaire marqué : une
-// adoption du panneau en cours la relit à la fin (5e relecture de Codex).
-const agyNavGeneration = new Map();
-
-async function agyOnCommitted(details) {
-    if (agyUserNavigation(details)) agyNavGeneration.set(details.tabId, (agyNavGeneration.get(details.tabId) || 0) + 1);
-    await extensionStateReady;
-    if (!tabOwners.get(details.tabId)?.panelRequest || !agyUserNavigation(details)) return false;
-    await releaseTabFromPanel(details.tabId, tabOwners.get(details.tabId));
-    notifyTabStatus(details.tabId, "Vous avez changé de page : onglet rendu (la demande du panneau visait l'autre page)", 4000, null);
-    return true;
-}
-
 if (typeof chrome !== "undefined") {
     ensureOffscreenDocument();
-    // Fragment (#/fiche/B) et History API (pushState, précédent entre routes) changent de fiche sans nouveau
-    // document : même contrôle (4e relecture de Codex). Les transitions du travail (lien) ne rendent rien.
-    for (const event of ["onCommitted", "onReferenceFragmentUpdated", "onHistoryStateUpdated"]) {
-        chrome.webNavigation?.[event]?.addListener((details) => { agyOnCommitted(details).catch(() => {}); });
-    }
-    chrome.storage?.local?.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" })?.catch?.(() => {});
-    if (chrome.sidePanel?.setPanelBehavior) {
-        chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
-    }
-    if (chrome.action?.onClicked) {
-        chrome.action.onClicked.addListener(async (tab) => {
-            try {
-                if (tab?.windowId && chrome.sidePanel?.open) {
-                    await chrome.sidePanel.open({ windowId: tab.windowId });
-                }
-            } catch (_) {}
-        });
-    }
-    if (chrome.commands?.onCommand) {
-        // sidePanel.open n'est accepté que pendant le geste clavier : appel immédiat avec
-        // l'onglet fourni par Chrome, sans await avant (sinon refus silencieux).
-        chrome.commands.onCommand.addListener((command, tab) => {
-            if (command === "toggle-side-panel" && tab?.windowId && chrome.sidePanel?.open) {
-                chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
-            }
-        });
-    }
+    // Fil de l'ancienne discussion du panneau (retirée le 20/10/2026) : effacé des installations existantes.
+    chrome.storage?.local?.remove?.(["agyChat", "agyInstance"])?.catch?.(() => {});
     if (chrome.runtime?.onStartup) chrome.runtime.onStartup.addListener(() => {
         ensureOffscreenDocument();
         setTimeout(connectBridgeWS, 300);
@@ -475,7 +409,6 @@ if (typeof chrome !== "undefined") {
             if (!bridgeLink || !bridgeLink.alive) {
                 connectBridgeWS();
             }
-            agyResendPending().catch(() => {});  // demandes du panneau sans confirmation, même panneau fermé
         });
     }
     if (chrome.runtime?.onMessage) {
@@ -490,32 +423,6 @@ if (typeof chrome !== "undefined") {
             if (!fromExtensionPage(sender)) return;
             if (message.getStatus) {
                 sendResponse(bridgeStatus());
-                return true;
-            }
-            // Poste de contrôle (panneau latéral) : il n'exécute aucune action sur les pages ; il montre les onglets
-            // pilotés, pose l'arrêt d'urgence et rend un onglet à Julien.
-            if (message.getControlState) {
-                controlState().then(sendResponse, (error) => sendResponse({ error: error.message || String(error) }));
-                return true;
-            }
-            if (message.panelStop) {
-                panelEmergencyStop().then(sendResponse, (error) => sendResponse({ error: error.message || String(error) }));
-                return true;
-            }
-            if (message.agyAsk) {
-                agyAskFromPanel(message.agyAsk).then(sendResponse, (error) => sendResponse({ error: error.message || String(error) }));
-                return true;
-            }
-            if (message.agyAbandon) {
-                agyChatChange((list) => globalThis.AgyChat.abandon(list, String(message.agyAbandon))).then(() => sendResponse({ ok: true }), (error) => sendResponse({ error: error.message || String(error) }));
-                return true;
-            }
-            if (message.agyClear) {
-                agyChatChange((list) => globalThis.AgyChat.clearDisplay(list)).then(() => sendResponse({ ok: true }), (error) => sendResponse({ error: error.message || String(error) }));
-                return true;
-            }
-            if (message.panelRelease !== undefined) {
-                releaseTabFromPanel(message.panelRelease).then(sendResponse, (error) => sendResponse({ error: error.message || String(error) }));
                 return true;
             }
             if (message.bridgeProve) {
@@ -539,234 +446,6 @@ if (typeof chrome !== "undefined") {
 }
 
 setTimeout(connectBridgeWS, 300);
-
-// -----------------------------------------------------------------------------
-// Poste de contrôle (panneau latéral) : onglets pilotés par chaque agent, état du débogueur, STOP, rendre l'onglet.
-// Aucune action sur les pages n'en part ; tout ce qu'il affiche est relu ici.
-// -----------------------------------------------------------------------------
-async function controlState() {
-    await extensionStateReady;
-    agyResendPending().catch(() => {});  // le panneau ouvert relit l'état toutes les 1,6 s : reprise sans minuterie
-    let tabs = [];
-    try { tabs = await chrome.tabs.query({}); } catch (_) {}
-    const byId = new Map(tabs.map(t => [t.id, t]));
-    const piloted = [...tabOwners.entries()].map(([tabId, owner]) => {
-        const tab = byId.get(tabId) || {};
-        const recordingUntil = networkRecording.get(tabId) || null;
-        return {
-            tabId,
-            agent: owner.agent,
-            session: String(owner.client || "").slice(-8),
-            adopted: !!owner.adopted,
-            orphan: !sessionAlive(owner),
-            since: owner.since || null,
-            title: tab.title || "",
-            url: maskUrl(tab.url || ""),
-            exists: byId.has(tabId),
-            debugger: attachedDebuggers.has(tabId),
-            commandsInFlight: tabCommandsInFlight.get(tabId) || 0,
-            recordingUntil: recordingUntil && recordingUntil > Date.now() ? recordingUntil : null
-        };
-    }).sort((a, b) => a.agent.localeCompare(b.agent) || a.tabId - b.tabId);
-    return {
-        version: extensionVersion(),
-        bridge: bridgeStatus(),
-        stoppedUntil: stopActive() ? stoppedUntil : null,
-        tabs: piloted,
-        attachedDebuggers: attachedDebuggers.size
-    };
-}
-
-/** Bouton STOP : arrêt local immédiat, puis arrêt commun ~/.nexus/stop posé par le pont pour tous les agents. */
-async function panelEmergencyStop() {
-    await emergencyStop({ holdMs: STOP_HOLD_MS, source: "poste de contrôle" });
-    const sent = await sendBridgeEvent({ event: "emergency_stop", by: "poste de contrôle", timestamp: Date.now() });
-    return {
-        stoppedUntil,
-        sentToBridge: sent,
-        ...(sent ? {} : { warning: "Pont injoignable : arrêt tenu dans Chrome seulement, pas encore chez les autres agents." })
-    };
-}
-
-// -----------------------------------------------------------------------------
-// Panneau Antigravity (accord Claude-Antigravity du 18/10/2026) : la demande tapée par Julien part au pont (liaison
-// signée), qui la dépose dans la boîte de Nexus Relay pour Antigravity ; la réponse revient par le pont
-// (agy_panel_update). Le fil est gardé dans chrome.storage.session (panneau fermé puis rouvert : rien de perdu).
-// Aucune action sur la page ne part d'ici : c'est Antigravity qui agit, avec ses outils nexus-browser.
-// -----------------------------------------------------------------------------
-const AGY_CHAT_KEY = "agyChat";
-const AGY_GRANTS_KEY = "agyGrants";
-const AGY_INSTANCE_KEY = "agyInstance";
-const AGY_GRANT_MS = 30 * 60 * 1000;
-let agyQueue = Promise.resolve();
-
-/** Toute lecture-modification-écriture du panneau (fil, accords, instance) passe par cette file unique du service
- * worker, commun à tous les panneaux du profil : « une demande à la fois » et les accords ne se perdent plus entre
- * deux écritures concurrentes (relecture de Codex). */
-function agySerial(task) {
-    const run = agyQueue.then(task);
-    agyQueue = run.catch(() => {});
-    return run;
-}
-
-/** Fil gardé dans chrome.storage.local (survit au rechargement de l'extension et au redémarrage de Chrome), réservé aux
- * contextes de confiance de l'extension (jamais aux scripts de contenu : setAccessLevel au démarrage). */
-async function agyChatRead() {
-    return (await chrome.storage.local.get(AGY_CHAT_KEY))[AGY_CHAT_KEY] || [];
-}
-
-function agyChatChange(change) {
-    return agySerial(async () => {
-        const next = change(await agyChatRead());
-        await chrome.storage.local.set({ [AGY_CHAT_KEY]: next });
-        return next;
-    });
-}
-
-/** Identité stable de cette installation (profil) : la réponse revient au Chrome qui a demandé, jamais à un autre. */
-let agyInstancePromise = null;
-function agyInstance() {
-    // Promesse partagée : hello, demande et reprise attendent la MÊME initialisation (jamais deux identités).
-    agyInstancePromise ||= (async () => {
-        const stored = await chrome.storage.local.get(AGY_INSTANCE_KEY);
-        if (stored[AGY_INSTANCE_KEY]) return stored[AGY_INSTANCE_KEY];
-        const instance = crypto.randomUUID();
-        await chrome.storage.local.set({ [AGY_INSTANCE_KEY]: instance });
-        return instance;
-    })().catch((error) => {
-        agyInstancePromise = null;
-        throw error;
-    });
-    return agyInstancePromise;
-}
-
-async function agyAskEvent(entry) {
-    const tab = entry.tab ? { id: entry.tab.id, title: entry.tab.title || "", url: entry.tab.origin || "" } : null;
-    return { event: "agy_ask", localId: entry.localId, instance: await agyInstance(), text: entry.text, tab, timestamp: Date.now() };
-}
-
-/** Accord de Julien lié à SA demande (localId) : onglet et adresse complète de la page au moment de la demande
- * (gardée ici, jamais envoyée). L'adoption issue du panneau doit le présenter (panel_request) ; absent, expiré, autre
- * onglet ou autre page : refusée. Les autres adoptions (Julien l'a demandé ailleurs) n'en dépendent pas. */
-async function agyGrants() {
-    return (await chrome.storage.session.get(AGY_GRANTS_KEY))[AGY_GRANTS_KEY] || {};
-}
-
-function agyGrant(localId, tabId, url) {
-    return agySerial(async () => {
-        const now = Date.now();
-        const grants = Object.fromEntries(Object.entries(await agyGrants()).filter(([, g]) => g.until > now));
-        grants[localId] = { tabId, url: String(url || ""), until: now + AGY_GRANT_MS };
-        await chrome.storage.session.set({ [AGY_GRANTS_KEY]: grants });
-    });
-}
-
-/** Refus (message) d'une adoption issue du panneau, ou null si l'accord de Julien couvre cet onglet et cette page. */
-async function agyGrantRefusal(panelRequest, tabId, tab) {
-    const grant = (await agyGrants())[String(panelRequest)];
-    if (!grant) return `Adoption refused: no pending side panel request "${panelRequest}" for this tab (no consent, or cleared when the extension reloaded). Tell the user.`;
-    if (grant.until <= Date.now()) return "Adoption refused: the user's consent for this side panel request has expired (30 min). Tell the user.";
-    if (grant.tabId !== tabId) return `Adoption refused: the side panel request was for tab ${grant.tabId}, not ${tabId}.`;
-    if (!tab || tab.url !== grant.url) {
-        return `Adoption refused: tab ${tabId} has moved to another page since the side panel request (${globalThis.AgyChat.originOf(grant.url)} → ${globalThis.AgyChat.originOf(tab && tab.url)}). The user's consent was for the other page: tell the user.`;
-    }
-    return null;
-}
-
-async function agyAskFromPanel(ask) {
-    const chat = globalThis.AgyChat;
-    const checked = chat.checkText(ask && ask.text);
-    if (checked.error) return { error: checked.error };
-    let tab = null;
-    let pageUrl = "";
-    const tabId = typeof ask.tabId === "number" ? ask.tabId : NaN;  // null : demande sans onglet (jamais l'onglet 0)
-    if (Number.isInteger(tabId) && tabId >= 0) {
-        try {
-            const found = await chrome.tabs.get(tabId);
-            pageUrl = found.url || "";
-            tab = { id: tabId, title: found.title || "", origin: chat.originOf(pageUrl) };
-        } catch (_) {}
-        // Page vue par Julien pendant la frappe (cible figée du panneau) : si l'onglet a changé de page, rien ne part.
-        if (tab && typeof ask.expectUrl === "string" && ask.expectUrl && ask.expectUrl !== pageUrl) {
-            return { error: "L'onglet visé a changé de page depuis que vous avez commencé à écrire : rien n'est parti. Vérifiez la page, puis renvoyez." };
-        }
-    }
-    const localId = crypto.randomUUID();
-    let refused = null;
-    // Test et réservation dans la même étape de la file : deux panneaux simultanés ne passent jamais tous les deux.
-    await agyChatChange((list) => {
-        if (chat.busyAsk(list)) {
-            refused = "Antigravity travaille encore sur la demande précédente : attendre sa réponse, ou l'abandonner (une demande à la fois).";
-            return list;
-        }
-        return chat.addAsk(list, { localId, text: checked.text, tab });
-    });
-    if (refused) return { error: refused };
-    if (tab) await agyGrant(localId, tab.id, pageUrl);
-    const sent = await agySendAsk(localId);
-    agyScheduleResend();
-    // Pas envoyé tout de suite : renvoyé toutes les 15 s avec le même localId (dépôt idempotent dans le relais).
-    return { localId, sent };
-}
-
-async function agySendAsk(localId) {
-    const entry = (await agyChatRead()).find((e) => e.kind === "ask" && e.localId === localId);
-    if (!entry || entry.status !== "sending") return false;
-    const sent = await sendBridgeEvent(await agyAskEvent(entry));
-    if (sent) await agyChatChange((list) => globalThis.AgyChat.markSent(list, localId));  // seul un envoi réel compte
-    return sent;
-}
-
-/** Demandes sans confirmation du pont : renvoyées avec le même identifiant (aucun second dépôt, aucun travail relancé),
- * au réveil de la liaison et à chaque relecture du panneau ouvert ; jamais abandonnées en silence. */
-async function agyResendPending() {
-    const chat = globalThis.AgyChat;
-    const due = chat.dueResends(await agyChatRead());
-    let sent = 0;
-    for (const entry of due) if (await agySendAsk(entry.localId)) sent++;
-    agyScheduleResend();
-    return sent;
-}
-
-/** Prochaine reprise tant qu'une demande attend sa confirmation, panneau fermé compris (le service worker reste éveillé
- * par sa liaison WebSocket ; l'alarme de la liaison, chaque minute, reprend aussi après un endormissement). */
-let agyResendTimer = null;
-function agyScheduleResend() {
-    if (agyResendTimer) return;
-    agyResendTimer = setTimeout(async () => {
-        agyResendTimer = null;
-        const waiting = (await agyChatRead()).some((e) => e.kind === "ask" && e.status === "sending");
-        if (waiting) agyResendPending().catch(() => {});
-    }, globalThis.AgyChat.RESEND_AFTER_MS + 500);
-    agyResendTimer?.unref?.();  // Node (tests) : ne retient pas le processus ; sans effet dans Chrome
-}
-
-function agyAskUpdate(update) {
-    return agyChatChange((list) => globalThis.AgyChat.applyUpdate(list, update));
-}
-
-async function agyPanelUpdate(params = {}) {
-    const list = await agyAskUpdate(params);
-    return { entries: list.length };
-}
-
-/** « Rendre l'onglet » : propriété retirée, débogueur détaché ; l'onglet reste ouvert pour Julien. */
-// expected : la propriété que l'appelant entend rendre (sinon celle trouvée en entrant). Elle n'est retirée que si
-// c'est TOUJOURS elle après le détachement : une restitution ancienne ne supprime jamais une adoption plus récente
-// (7e relecture de Codex : deux restitutions d'une même navigation, un autre client adopté entre les deux).
-async function releaseTabFromPanel(rawTabId, expected = null) {
-    const tabId = Number(rawTabId);
-    if (!Number.isInteger(tabId)) return { error: `Invalid tab: ${rawTabId}` };
-    await extensionStateReady;
-    const owner = expected || tabOwners.get(tabId) || null;
-    if (owner && tabOwners.get(tabId) !== owner) return { tabId, released: false, previousOwner: null };
-    networkRecording.delete(tabId);
-    await detachDebugger(tabId);  // même après un redémarrage du service worker (attachement oublié en mémoire)
-    if (tabOwners.get(tabId) !== owner) return { tabId, released: false, previousOwner: null };
-    await forgetTabOwner(tabId);
-    notifyTabStatus(tabId, "Onglet rendu à l'utilisateur", 2500, null);
-    return { tabId, released: !!owner, previousOwner: owner ? owner.agent : null };
-}
 
 // -----------------------------------------------------------------------------
 // CDP Event Monitor (Console logs, Dialogs, FileChooser & Network In-flight)
@@ -904,13 +583,13 @@ if (chrome.tabs?.onRemoved?.addListener) {
 }
 // Onglet ouvert PAR un onglet d'agent (lien target=_blank, window.open, fenêtre de connexion OAuth) : il revient au
 // même client, sinon l'agent perdait la main sur la suite de sa tâche. Seulement depuis un onglet qu'il a créé lui-même
-// (ni adopté chez l'utilisateur, ni ouvert par le panneau) et jamais un onglet qui a déjà un propriétaire.
+// (pas adopté chez l'utilisateur) et jamais un onglet qui a déjà un propriétaire.
 // Deux signaux : openerTabId de l'onglet, et webNavigation.onCreatedNavigationTarget, seul présent pour un lien
 // target=_blank (noopener implicite) : sans lui, l'onglet ouvert restait à l'utilisateur (mesuré le 20/10).
 function inheritOpenerOwner(tabId, openerTabId) {
     extensionStateReady.then(async () => {
         const opener = Number.isInteger(openerTabId) ? tabOwners.get(openerTabId) : null;
-        if (!Number.isInteger(tabId) || !opener || opener.adopted || opener.panelRequest || tabOwners.has(tabId)) return;
+        if (!Number.isInteger(tabId) || !opener || opener.adopted || tabOwners.has(tabId)) return;
         tabOwners.set(tabId, {
             agent: opener.agent, client: opener.client, adopted: false, since: Date.now(), openedBy: openerTabId
         });
@@ -947,7 +626,7 @@ const TAB_FREE_ACTIONS = new Set([
 // Commandes permises sur un onglet ORPHELIN du même agent (session morte), sans le reprendre d'abord.
 const ORPHAN_ACTIONS = new Set(["close_tab", "release_tab"]);
 // Commandes du pont lui-même (canal signé), sans client : contrôle de vie et arrêt d'urgence.
-const BRIDGE_ACTIONS = new Set(["ping", "emergency_stop", "agy_panel_update"]);
+const BRIDGE_ACTIONS = new Set(["ping", "emergency_stop"]);
 
 function normalizedAction(req) {
     return String(req.action || req.command || "").toLowerCase().replace(/-/g, "_");
@@ -1165,11 +844,6 @@ async function routeCommand(req, client = null) {
 
             case "emergency_stop":
                 return { data: await emergencyStop({ holdMs: Number(params.hold_s) * 1000, source: "pont" }) };
-
-            case "agy_panel_update":
-                // Réservée au pont (canal signé, sans identité de client) : jamais un agent ne parle à la place d'AGY.
-                if (client) return { error: "agy_panel_update is reserved for the bridge." };
-                return { data: await agyPanelUpdate(params) };
 
             case "network_record":
                 return await recordNetwork(params);
@@ -3579,17 +3253,13 @@ async function createTab(params, client = null) {
  */
 async function adoptTab(params = {}, client = null) {
     const tabId = await resolveTargetTab(params);
-    const panelRequest = params.panelRequest ?? params.panel_request;
-    if (panelRequest !== undefined && panelRequest !== null && panelRequest !== "") {
-        return adoptForPanel(tabId, String(panelRequest), client);
-    }
     const owner = tabOwners.get(tabId);
     if (ownedBy(owner, client)) return { data: { tabId, adopted: !!owner.adopted, already: true, owner: owner.agent } };
     if (orphanFor(owner, client)) return { data: await reclaimOrphan(tabId, owner, client) };
     if (owner) return { error: foreignTabMessage(tabId, owner, client) };
     // userAsked (julienAsked, julien_asked : anciens noms, même sens).
     if (![params.userAsked, params.user_asked, params.julienAsked, params.julien_asked].includes(true)) {
-        return { error: `Adoption of tab ${tabId} refused by default: it is the user's tab. Only if the user explicitly asked for it, retry with user_asked=True (shown in the Chrome control panel).` };
+        return { error: `Adoption of tab ${tabId} refused by default: it is the user's tab. Only if the user explicitly asked for it, retry with user_asked=True.` };
     }
     let tab = null;
     try { tab = await chrome.tabs.get(tabId); } catch (_) {}
@@ -3600,63 +3270,11 @@ async function adoptTab(params = {}, client = null) {
 }
 
 /**
- * Adoption issue du panneau (panel_request) : l'accord de Julien est vérifié AVANT tout autre chemin (déjà à l'agent
- * et orphelin compris), la propriété est écrite UNE fois, déjà marquée, puis la page relue. Une navigation de Julien
- * survenue pendant les attentes (génération de l'onglet changée, même sans propriétaire marqué à cet instant) rend
- * l'onglet ; un refus tardif remet la propriété d'avant, seulement si personne ne l'a changée entre-temps (5e relecture
- * de Codex : ni navigation ignorée, ni restitution annulée).
- */
-async function adoptForPanel(tabId, panelRequest, client) {
-    const generation = agyNavGeneration.get(tabId) || 0;
-    let current = null;
-    try { current = await chrome.tabs.get(tabId); } catch (_) {}
-    const refusal = await agyGrantRefusal(panelRequest, tabId, current);
-    if (refusal) return { error: refusal };
-    const previous = tabOwners.get(tabId) || null;
-    const already = ownedBy(previous, client);
-    const reclaimed = !already && orphanFor(previous, client);
-    if (previous && !already && !reclaimed) return { error: foreignTabMessage(tabId, previous, client) };
-    if (!previous && current && isProtectedUrl(current.url)) return { error: `Tab ${tabId} is protected (${current.url}): never handed to an agent.` };
-    // L'objet écrit par cette transaction, gardé avant toute attente (6e relecture de Codex) : jamais relu dans la Map,
-    // où une restitution suivie d'une adoption par un autre client a pu le remplacer pendant la sauvegarde.
-    const mine = await rememberTabOwner(tabId, client, previous && !previous.adopted ? "created" : "adopted", panelRequest);
-    const stillMine = () => tabOwners.get(tabId) === mine;
-    let after = null;
-    try { after = await chrome.tabs.get(tabId); } catch (_) {}
-    const late = await agyGrantRefusal(panelRequest, tabId, after);
-    if ((agyNavGeneration.get(tabId) || 0) !== generation) {
-        if (stillMine()) await releaseTabFromPanel(tabId, mine);
-        return { error: "Adoption refused: the user moved to another page during the adoption; the tab is handed back to the user. Tell the user." };
-    }
-    if (late) {
-        if (stillMine()) {
-            if (previous) {
-                tabOwners.set(tabId, previous);
-                await saveExtensionState();
-            } else {
-                await forgetTabOwner(tabId);
-            }
-        }
-        return { error: late };
-    }
-    // Propriété changée pendant les attentes (rendue, reprise par un autre) : cette adoption n'a plus rien à elle.
-    if (!stillMine()) return { error: "Adoption refused: the tab was released or handed to someone else during the adoption. Tell the user." };
-    if (already) return { data: { tabId, adopted: !!previous.adopted, already: true, owner: client.agent } };
-    if (reclaimed) {
-        notifyTabStatus(tabId, "Onglet repris par la nouvelle session", 2500, client.agent);
-        return { data: { tabId, reclaimed: true, adopted: !!previous.adopted, owner: client.agent } };
-    }
-    notifyTabStatus(tabId, "Onglet confié à l'agent par l'utilisateur", 3500, client.agent);
-    return { data: { tabId, adopted: true, owner: client.agent, title: after?.title || "", url: maskUrl(after?.url || "") } };
-}
-
-/**
  * Onglet orphelin (session morte du même agent) repris par ce client : sans julienAsked, il était déjà à l'agent.
  * Un onglet de Julien adopté par l'ancienne session le reste (« adopté », rendu à Julien par release_tab).
  */
 async function reclaimOrphan(tabId, owner, client) {
-    // Le marqueur du panneau suit la propriété : sans lui, une navigation de Julien ne rendrait plus l'onglet.
-    await rememberTabOwner(tabId, client, owner.adopted ? "adopted" : "created", owner.panelRequest || null);
+    await rememberTabOwner(tabId, client, owner.adopted ? "adopted" : "created");
     notifyTabStatus(tabId, "Onglet repris par la nouvelle session", 2500, client.agent);
     return { tabId, reclaimed: true, adopted: !!owner.adopted, owner: client.agent };
 }

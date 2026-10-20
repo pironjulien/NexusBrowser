@@ -67,7 +67,6 @@ from websockets.asyncio.server import serve  # noqa: E402
 # Arrêt d'urgence commun (client/emergency_stop.py, même module que les serveurs MCP) : vérifié ici aussi, pour tout
 # client HTTP du pont, même s'il ne le vérifie pas lui-même.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "client"))
-import agy_panel  # noqa: E402
 import emergency_stop  # noqa: E402
 
 PORT = 9224
@@ -79,7 +78,7 @@ MAX_HANDSHAKE_BYTES = 2048
 ROLE_PRIORITY = {"service_worker": 0, "offscreen": 1}
 STOP_POLL_S = 0.2
 # Actions que seul le pont envoie à l'extension (canal signé), jamais un client HTTP.
-RESERVED_ACTIONS = frozenset({"emergency_stop", "agy_panel_update"})
+RESERVED_ACTIONS = frozenset({"emergency_stop"})
 # Seule commande permise sans identité : le contrôle de vie (verify.ps1, validation réelle).
 ANONYMOUS_ACTIONS = frozenset({"ping"})
 active_connections: list = []  # BridgeClient authentifiés seulement
@@ -260,20 +259,6 @@ async def ws_handler(websocket):
                 pending_requests.pop(req_id)
                 if not pending[1].done():
                     pending[1].set_result(data)
-            elif data.get("event") == "emergency_stop":
-                # Bouton STOP du poste de contrôle (panneau de Chrome) : arrêt commun posé par le pont pour tous
-                # les agents (~/.nexus/stop) ; la surveillance annule ensuite les commandes en cours.
-                LOGGER.warning("Emergency stop requested from the Chrome control panel")
-                emergency_stop.pressed()
-                # Jamais attendu ici : la réponse de l'extension arrive par cette même boucle de lecture.
-                background(cancel_for_stop(emergency_stop.remaining_s()))
-            elif data.get("event") == "agy_hello":
-                instance = agy_panel.check_instance(data.get("instance"))
-                if instance:
-                    agy_instances[instance] = client
-            elif data.get("event") == "agy_ask":
-                # Demande tapée par Julien dans le panneau Antigravity : déposée dans la boîte de Nexus Relay.
-                background(handle_agy_ask(client, data))
             elif "event" in data:
                 LOGGER.info("Event received: %s", data.get("event"))
     except Exception as exc:
@@ -345,96 +330,6 @@ async def watch_emergency_stop() -> None:
         await asyncio.sleep(STOP_POLL_S)
 
 
-# -----------------------------------------------------------------------------
-# Panneau Antigravity (accord du 18/10/2026) : demande → boîte de Nexus Relay → Antigravity → réponse → panneau
-# -----------------------------------------------------------------------------
-AGY_POLL_S = 1.618
-# Instance Chrome (identité stable du profil, annoncée par l'extension à chaque connexion et écrite dans la demande
-# du relais) → sa liaison actuelle. Une réponse ne va qu'à l'instance qui a demandé ; absente, la réponse attend dans
-# la boîte (jamais remise à un autre profil : relecture de Codex).
-agy_instances: dict[str, "BridgeClient"] = {}
-
-
-async def handle_agy_ask(client: "BridgeClient", data: dict) -> None:
-    """Dépose la demande de l'utilisateur pour Antigravity et dit au panneau qu'elle est partie (ou pourquoi elle ne l'est pas)."""
-    local_id = data.get("localId") if isinstance(data.get("localId"), str) else ""
-    try:
-        local_id, text, tab = agy_panel.check_ask(data)
-        instance = agy_panel.check_instance(data.get("instance"))
-        if instance:
-            agy_instances[instance] = client
-        connected = {name for name, link in agy_instances.items() if link in active_connections}
-        if len(connected) > 1:
-            # Limite réelle, annoncée (relecture de Codex) : les commandes d'Antigravity vont à la liaison prioritaire,
-            # pas forcément au profil qui demande ; avec deux profils reliés, le travail pourrait viser le mauvais.
-            # Demande RETENUE, jamais « non transmise » : une reprise a pu être déposée avant l'arrivée du second
-            # profil (4e relecture de Codex). L'extension garde la réservation et renvoie le même localId ; le relais
-            # retrouve alors le dépôt antérieur au lieu d'en refaire un.
-            held = (
-                "Plusieurs profils Chrome sont reliés au pont : le panneau Antigravity n'agit qu'avec un seul. "
-                "Fermer l'autre profil : la demande repartira d'elle-même (jamais en double)."
-            )
-            update = {"localId": local_id, "status": "held", "error": held}
-            LOGGER.warning("Panel request %s held: %d Chrome profiles connected", local_id, len(connected))
-        else:
-            relay_id, sidecar_active = await agy_panel.post(text, tab, local_id, instance)
-            update = {"localId": local_id, "relayId": relay_id, "status": "sent", "sidecarActive": sidecar_active}
-            LOGGER.info("Panel request %s handed to Antigravity via Nexus Relay (%s)", local_id, relay_id)
-    except agy_panel.RelayCrashed as error:
-        # Issue inconnue (le dépôt a pu avoir lieu) : aucun « non transmise » ; l'extension renvoie la même requête,
-        # que le relais retrouve au lieu de la redéposer.
-        LOGGER.warning("Panel request %s: relay outcome unknown, the extension will resend it: %s", local_id, error)
-        return
-    except agy_panel.RelayNotLaunched as error:
-        # Le relais n'a rien pu dire de cette requête : une reprise a pu être déposée avant (5e relecture de Codex).
-        # Retenue, jamais « non transmise » : l'extension garde la réservation et renvoie le même localId.
-        update = {"localId": local_id, "status": "held", "error": str(error)}
-        LOGGER.warning("Panel request %s held: %s", local_id, error)
-    except (ValueError, agy_panel.RelayUnavailable) as error:
-        update = {"localId": local_id, "status": "error", "error": str(error)}
-        LOGGER.warning("Panel request %s not delivered: %s", local_id, error)
-    try:
-        await send_command_to_chrome("agy_panel_update", update, 5.0, target=client)
-    except Exception as error:  # noqa: BLE001 - l'extension renvoie la même demande (même localId) faute de confirmation
-        LOGGER.info("Panel update not delivered: %s", error)
-
-
-async def deliver_agy_replies() -> int:
-    """Remet au panneau les réponses en attente dans la boîte « julien », puis les passe en lu (seulement celles que
-    l'extension a reçues)."""
-    if not active_connections or not agy_panel.has_mail():
-        return 0
-    delivered: list[str] = []
-    for message in await agy_panel.collect():
-        instance = message.get("instance")
-        target = agy_instances.get(str(instance)) if instance else None
-        if instance and target not in active_connections:
-            continue  # l'instance qui a demandé n'est pas connectée : la réponse l'attend dans la boîte
-        try:
-            await send_command_to_chrome(
-                "agy_panel_update", {"reply": message}, 5.0, target=target, strict=bool(instance)
-            )
-        except Exception as error:  # noqa: BLE001 - nouvel essai au prochain tour
-            LOGGER.info("Antigravity reply %s not delivered to the panel yet: %s", message.get("id"), error)
-            break
-        delivered.append(str(message.get("id")))
-    if delivered:
-        await agy_panel.ack(delivered)
-    return len(delivered)
-
-
-async def watch_agy_replies() -> None:
-    while True:
-        try:
-            await deliver_agy_replies()
-        except agy_panel.RelayUnavailable as error:
-            LOGGER.warning("Antigravity replies not collected: %s", error)
-            await asyncio.sleep(30)
-        except Exception:  # noqa: BLE001 - cette relève ne doit jamais mourir
-            LOGGER.exception("Antigravity reply watch failure")
-        await asyncio.sleep(AGY_POLL_S)
-
-
 ACTION_ALIASES = {
     "list-tabs": "list_tabs",
     "active-tab": "get_active_tab",
@@ -490,10 +385,9 @@ def normalize_action(action: str) -> str:
     return ACTION_ALIASES.get(action, (action or "").lower().replace("-", "_"))
 
 
-async def send_command_to_chrome(action, params=None, timeout=15.0, client=None, target=None, gone=None, strict=False):
+async def send_command_to_chrome(action, params=None, timeout=15.0, client=None, target=None, gone=None):
     """Commande signée vers l'extension. client : identité du demandeur ({"agent", "id"}), posée par le pont à côté
-    des paramètres (jamais lue dans les paramètres de la commande). gone : sessions mortes du même agent. strict : la
-    liaison target seulement, jamais une autre (réponse du panneau due à une instance précise)."""
+    des paramètres (jamais lue dans les paramètres de la commande). gone : sessions mortes du même agent."""
     normalized_action = normalize_action(action)
     payload = {"action": normalized_action, "params": params or {}}
     if client is not None:
@@ -501,8 +395,6 @@ async def send_command_to_chrome(action, params=None, timeout=15.0, client=None,
     if gone:
         payload["gone"] = list(gone)
     while True:
-        if strict and (target is None or target not in active_connections):
-            raise RuntimeError("Target Chrome link missing (instance disconnected): nothing sent to another one.")
         chosen = target if target is not None and target in active_connections else select_target()
         if chosen is None:
             raise RuntimeError(
@@ -783,9 +675,7 @@ async def main(token_file: Path | None = None, log_file: Path | None = None):
     http_server = await asyncio.start_server(handle_http, sock=exclusive_listener(PORT + 1), limit=MAX_HEADER_BYTES + 4)
     print(f"  HTTP API available at http://127.0.0.1:{PORT + 1}/api/command")
 
-    await asyncio.gather(
-        ws_server.wait_closed(), http_server.serve_forever(), watch_emergency_stop(), watch_agy_replies()
-    )
+    await asyncio.gather(ws_server.wait_closed(), http_server.serve_forever(), watch_emergency_stop())
 
 
 if __name__ == "__main__":

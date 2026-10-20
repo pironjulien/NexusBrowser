@@ -273,17 +273,11 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
     const idleTimers = [];
     const sessionData = {...(chromeOverrides.sessionStorage || {})};
     const localData = {...(chromeOverrides.localStorage || {})};
-    let sidePanelBehavior = null;
     const event = {addListener() {}};
     const messageEvent = {addListener(fn) { onMessage = fn; }};
     const chrome = {
         runtime: {onStartup: event, onInstalled: event, onMessage: messageEvent, ...(chromeOverrides.runtime || {})},
         offscreen: {hasDocument: async () => true}, alarms: {create() {}, onAlarm: event},
-        sidePanel: {
-            setPanelBehavior: async (opts) => { sidePanelBehavior = opts; },
-            open: async () => {},
-            ...(chromeOverrides.sidePanel || {})
-        },
         tabGroups: {
             query: async () => [],
             update: async (id, p) => ({ id, ...p }),
@@ -335,7 +329,7 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
                     return Object.fromEntries(list.filter(k => k in localData).map(k => [k, localData[k]]));
                 },
                 set: async (items) => { Object.assign(localData, JSON.parse(JSON.stringify(items))); },
-                remove: async (key) => { delete localData[key]; }
+                remove: async (keys) => { for (const key of [].concat(keys)) delete localData[key]; }
             }
         },
         debugger: {
@@ -431,7 +425,7 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
         element, tabMessages, worlds,
         isolatedWindow: () => [...worlds.values()][0]?.window,
         isolatedWindowFor: (contextId) => worlds.get(contextId)?.window,
-        // Expéditeur par défaut : une page de l'extension (panneau, offscreen) ; {tab} = script de contenu.
+        // Expéditeur par défaut : une page de l'extension (offscreen) ; {tab} = script de contenu.
         sendMessage: (msg, sender = {id: chrome.runtime.id}) => new Promise((resolve) => {
             if (!onMessage) return resolve(undefined);
             const keepOpen = onMessage(msg, sender, resolve);
@@ -439,7 +433,6 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
         }),
         // Code exécuté dans le contexte du service worker (accès à ses variables de script).
         evalInContext: (code) => vm.runInContext(code, ctx),
-        getSidePanelBehavior: () => sidePanelBehavior,
         event: (tabId) => onEvent({tabId}, 'Page.fileChooserOpened', {backendNodeId: 9}),
         emit: (tabId, method, params = {}) => onEvent({tabId}, method, params),
         emitFrom: (source, method, params = {}) => onEvent(source, method, params),
@@ -852,12 +845,7 @@ test('about:blank tabs can be created and debugged without protected URL rejecti
     assert.equal(evalRes.data, 2);
 });
 
-test('sidePanel behavior is configured to open panel on action click', async () => {
-    const h = harness();
-    assert.equal(h.getSidePanelBehavior()?.openPanelOnActionClick, true);
-});
-
-test('poste de contrôle : aucune action de page depuis le panneau (ni executeAction ni getActiveTab)', async () => {
+test("page de l'extension : aucune action de page par message (ni executeAction ni getActiveTab)", async () => {
     const h = harness();
     assert.equal(await h.sendMessage({target: 'background', executeAction: true, action: 'click', params: {tabId: 1, selector: 'button'}}), undefined);
     assert.equal(await h.sendMessage({target: 'background', getActiveTab: true}), undefined);
@@ -2647,16 +2635,14 @@ test('pont : serveur authentifié -> commande exécutée et réponse signée, li
     } finally { stop(); }
 });
 
-test("poste de contrôle : STOP pose l'arrêt dans Chrome puis l'annonce au pont (événement signé)", async () => {
+test("arrêt d'urgence posé par le pont : plus aucune action, même signée, les lectures restent permises", async () => {
     const bridge = bridgeHarness();
     const {h, server, evaluations, stop} = bridge;
     try {
         await authenticated(bridge);
-        const res = await h.sendMessage({target: 'background', panelStop: true});
-        assert.equal(res.sentToBridge, true);
-        assert.ok(res.stoppedUntil > Date.now() + 100000);
-        await until(() => server.replies().some(r => r.event === 'emergency_stop'), 'arrêt annoncé au pont');
-        assert.equal(server.replies().find(r => r.event === 'emergency_stop').by, 'poste de contrôle');
+        server.send({requestId: 'r0', action: 'emergency_stop', params: {hold_s: 120}});
+        await until(() => server.replies().some(r => r.requestId === 'r0'), 'arrêt reçu');
+        assert.equal(h.evalInContext('stopActive()'), true);
         // Plus aucune action, même signée par le pont, tant que l'arrêt tient ; les lectures restent permises.
         server.send({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1'}, client: TEST_CLIENT});
         await until(() => server.replies().some(r => r.requestId === 'r1'), 'refus');
@@ -2668,17 +2654,13 @@ test("poste de contrôle : STOP pose l'arrêt dans Chrome puis l'annonce au pont
     } finally { stop(); }
 });
 
-test("poste de contrôle : un script de contenu ne peut ni lire l'état, ni poser STOP, ni rendre un onglet, ni obtenir de preuve", async () => {
+test("un script de contenu ne peut ni agir ni obtenir de preuve : seul le ping lui est permis", async () => {
     const {h, host, evaluations, stop} = bridgeHarness();
     try {
         const fromPage = {id: EXT_ID, tab: {id: 1}};
         assert.equal(await h.sendMessage({target: 'background', executeAction: true, action: 'evaluate', params: {tabId: 1, code: '1'}}, fromPage), undefined);
         assert.equal(await h.sendMessage({target: 'background', bridgeProve: {op: 'handshake'}}, fromPage), undefined);
-        assert.equal(await h.sendMessage({target: 'background', getControlState: true}, fromPage), undefined);
-        assert.equal(await h.sendMessage({target: 'background', panelStop: true}, fromPage), undefined);
-        assert.equal(await h.sendMessage({target: 'background', panelRelease: 1}, fromPage), undefined);
         assert.equal(h.evalInContext('stopActive()'), false);
-        assert.equal(Object.keys(h.owners()).length, 1);  // l'onglet 1 est toujours piloté
         assert.equal(evaluations(), 0);
         assert.equal(host.calls.length, 0);
         assert.equal((await h.sendMessage({target: 'background', ping: true}, fromPage)).pong, true);  // seul permis
@@ -2688,13 +2670,12 @@ test("poste de contrôle : un script de contenu ne peut ni lire l'état, ni pose
 test('document offscreen : serveur sans preuve -> rien relayé au service worker', async () => {
     const sockets = controlledSockets();
     const toBackground = [];
-    let listener = null;
     const host = nativeHostMock();
     const chromeMock = {
         runtime: {
             id: EXT_ID,
             lastError: undefined,
-            onMessage: {addListener(fn) { listener = fn; }},
+            onMessage: {addListener() {}},
             sendMessage(message, callback) {
                 toBackground.push(message);
                 if (message.bridgeProve) setImmediate(() => callback(host.answer(message.bridgeProve)));
@@ -2728,25 +2709,12 @@ test('document offscreen : serveur sans preuve -> rien relayé au service worker
     await until(() => server.replies().some(r => r.requestId === 'r2'), 'réponse relayée');
     assert.deepEqual(plain(toBackground.filter(m => m.request).map(m => m.request.requestId)), ['r2']);
     assert.equal(server.replies().find(r => r.requestId === 'r2').data, 'exécuté');
-    // Événement à signer pour le service worker (STOP du poste de contrôle) : seulement depuis une page de l'extension.
-    let reply = null;
-    listener({target: 'offscreen', bridgeEvent: {event: 'emergency_stop', by: 'poste de contrôle'}}, {id: EXT_ID}, (r) => { reply = r; });
-    assert.deepEqual(plain(reply), {sent: true});
-    reply = null;
-    listener({target: 'offscreen', bridgeEvent: {event: 'emergency_stop'}}, {id: EXT_ID, tab: {id: 3}}, (r) => { reply = r; });
-    assert.equal(reply, null);
     vm.runInContext('if (link) link.close();', ctx);
 });
 
 // -----------------------------------------------------------------------------
-// Poste de contrôle (panneau latéral) : mise en forme pure, cookies jamais avec leurs valeurs
+// Cookies jamais avec leurs valeurs
 // -----------------------------------------------------------------------------
-function sidepanelView() {
-    const ctx = vm.createContext({URL});
-    vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/sidepanel_view.js'), 'utf8'), ctx);
-    return ctx.AgySidepanelView;
-}
-
 test('cookies : valeurs jamais par défaut ; demandées sur un site réel : refus clair, rien lu dans Chrome', async () => {
     const jar = [{name: 'SID', value: 'secret-session-123', domain: '.example.invalid'}, {name: 'pref', value: 'v2', domain: 'example.invalid'}];
     const h = harness({}, {debuggerSendCommand: async (target, method) => method === 'Network.getCookies' ? {cookies: jar} : undefined});
@@ -3319,16 +3287,14 @@ test('propriété : une boîte de dialogue n\'est annoncée qu\'au pilote de l\'
     assert.equal((await h.run('active_tab', {tabId: 1}, AGENT_A)).data.pendingDialogs[0].message, 'Payer 300 euros ?');
 });
 
-test('adoption : onglet de Julien refusé par défaut, seulement avec julienAsked, visible au poste de contrôle ; jamais celui d\'un autre agent', async () => {
+test('adoption : onglet de Julien refusé par défaut, seulement avec julienAsked, jamais celui d\'un autre agent', async () => {
     const h = harness({}, {autoOwn: false, tabs: {query: async () => [{id: 1, title: 'Boîte mail', url: 'https://mail.example.invalid/#inbox?token=jeton-zzz'}]}});
     assert.match((await h.run('adopt_tab', {tabId: 1}, AGENT_A)).error, /refused by default/);
     assert.match((await h.run('adopt_tab', {tabId: 1, julienAsked: 'true'}, AGENT_A)).error, /refused by default/);  // booléen strict
     assert.equal((await h.run('adopt_tab', {tabId: 1, julienAsked: true}, AGENT_A)).data.adopted, true);
     assert.match((await h.run('adopt_tab', {tabId: 1, julienAsked: true}, AGENT_B)).error, /driven by Claude/);
     assert.equal((await h.run('evaluate', {tabId: 1, code: '2'}, AGENT_A)).data, 2);
-    const state = await h.sendMessage({target: 'background', getControlState: true});
-    assert.deepEqual(plain(state.tabs.map(t => [t.tabId, t.agent, t.adopted])), [[1, 'Claude', true]]);
-    assert.ok(!JSON.stringify(state).includes('jeton-zzz'));
+    assert.equal(h.owners()['1'].adopted, true);
     assert.equal((await h.run('release_tab', {tabId: 1}, AGENT_A)).data.released, true);
     assert.ok(h.detached.includes(1));
     assert.match((await h.run('evaluate', {tabId: 1, code: '3'}, AGENT_A)).error, /user's tab/);
@@ -3537,287 +3503,15 @@ test('navigation : jamais de fichier local ni de page interne (file://, chrome:/
     assert.equal((await h.run('navigate', {tabId: 1, url: 'https://example.com/'})).error, undefined);
 });
 
-test('poste de contrôle : onglets pilotés par agent, état du débogueur, rendre l\'onglet', async () => {
-    let next = 400;
-    const h = harness({}, {autoOwn: false, tabs: {
-        create: async (p) => ({id: next++, url: p.url, title: 'T', active: false, windowId: 10}),
-        query: async () => [{id: 400, title: 'Console', url: 'https://console.cloud.google.com/?authuser=0&token=zzz'}, {id: 401, title: 'Play', url: 'https://play.google.com/'}]
-    }});
-    await h.run('create_tab', {url: 'https://console.cloud.google.com/', group: false}, AGENT_A);
-    await h.run('create_tab', {url: 'https://play.google.com/', group: false}, AGENT_B);
-    await h.run('evaluate', {tabId: 400, code: '1'}, AGENT_A);
-    const state = await h.sendMessage({target: 'background', getControlState: true});
-    assert.deepEqual(plain(state.tabs.map(t => [t.tabId, t.agent, t.debugger])), [[400, 'Claude', true], [401, 'Codex', false]]);
-    assert.ok(!JSON.stringify(state).includes('zzz') && !JSON.stringify(state).includes('claude-aaaa1111'));
-    const released = await h.sendMessage({target: 'background', panelRelease: 400});
-    assert.equal(released.previousOwner, 'Claude');
-    assert.ok(h.detached.includes(400));
-    assert.match((await h.run('evaluate', {tabId: 400, code: '1'}, AGENT_A)).error, /user's tab/);
-    assert.deepEqual(Object.keys(h.owners()), ['401']);
-    // Pastille : message de l'extension au cadre principal (jamais un événement de la page).
-    assert.ok(h.tabMessages.some(m => m.tabId === 400 && m.message.nexusPill?.agent === 'Claude' && m.options.frameId === 0));
-    const stopped = await h.sendMessage({target: 'background', panelStop: true});
-    assert.equal(stopped.sentToBridge, false);
-    assert.match(stopped.warning, /Pont injoignable/);
-    assert.ok((await h.sendMessage({target: 'background', getControlState: true})).stoppedUntil > Date.now());
-});
+const settleWorker = async () => { for (let i = 0; i < 8; i++) await new Promise((resolve) => setImmediate(resolve)); };
+const untilTrue = async (cond) => { for (let i = 0; i < 200 && !cond(); i++) await new Promise((resolve) => setImmediate(resolve)); assert.ok(cond()); };
 
-test('poste de contrôle : mise en forme (groupes par agent, badges, arrêt, pont)', () => {
-    const view = sidepanelView();
-    const now = 1_000_000;
-    const tabs = [
-        {tabId: 7, agent: 'Codex', title: 'B', url: 'https://b.invalid/x?y=1', session: 'abcd1234', exists: true, debugger: false, commandsInFlight: 0},
-        {tabId: 3, agent: 'Claude', title: '', url: 'https://a.invalid/', session: '99999999', exists: true, debugger: true, commandsInFlight: 2, recordingUntil: now + 4200, adopted: true}
-    ];
-    assert.deepEqual(plain(view.groupByAgent(tabs).map(g => [g.agent, g.tabs.map(t => t.tabId)])), [['Claude', [3]], ['Codex', [7]]]);
-    const line = plain(view.describeTab(tabs[1], now));
-    assert.equal(line.title, 'Onglet sans titre');
-    assert.equal(line.subtitle, '#3 · a.invalid · session …99999999');
-    assert.deepEqual(line.badges, ['adopté', 'débogueur attaché', '2 commande(s) en cours', 'réseau enregistré 5 s']);
-    assert.equal(view.describeTab(tabs[0], now).subtitle, '#7 · b.invalid · session …abcd1234');  // jamais les paramètres d'URL
-    assert.equal(view.stopLabel(null, now), null);
-    assert.equal(view.stopLabel(now + 90500, now), "Arrêt d'urgence actif : plus aucune action pendant 91 s");
-    assert.deepEqual(plain(view.bridgeLabel({connected: false, authError: 'jeton faux'})), {ok: false, text: 'Pont local non joint : jeton faux'});
-    assert.equal(view.bridgeLabel({connected: true}).ok, true);
-});
-
-test('panneau Antigravity : discussion qui passe par le pont (jamais d\'action sur la page ici), STOP visible, style propre', () => {
-    const html = fs.readFileSync(path.join(__dirname, '../extension/sidepanel.html'), 'utf8');
-    const js = fs.readFileSync(path.join(__dirname, '../extension/sidepanel.js'), 'utf8');
-    const css = fs.readFileSync(path.join(__dirname, '../extension/sidepanel.css'), 'utf8');
-    assert.match(html, /<title>Antigravity<\/title>/);
-    assert.match(html, /id="btn-stop"/);  // STOP dans l'en-tête, hors des vues : toujours visible
-    assert.ok(html.indexOf('id="btn-stop"') < html.indexOf('id="view-chat"'));
-    assert.match(html, /id="view-control"[\s\S]*id="tabs-list"/);  // poste de contrôle gardé
-    assert.match(html, /<textarea id="prompt"/);
-    // Le panneau ne parle qu'au service worker : ni commande de page, ni réseau, ni HTML injecté.
-    assert.ok(!/executeAction|sidepanelSubmit|interactive_map|get_cookies|form_fields|screenshot|fetch\(|WebSocket|innerHTML/.test(js));
-    assert.match(js, /agyAsk:/);
-    // Habillage inspiré, pas copié : ni la marque, ni les couleurs exactes de l'assistant de Google.
-    assert.ok(!/gemini|#4285F4|#9B72CB|#D96570|#1A73E8/i.test(html + css), 'marque ou couleurs copiées');
-    assert.ok(!fs.existsSync(path.join(__dirname, '../extension/popup.html')) && !fs.existsSync(path.join(__dirname, '../extension/popup.js')));
-    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../extension/manifest.json'), 'utf8'));
-    const key = manifest.commands['toggle-side-panel'].suggested_key;
-    // Pris par Chrome : « Rechercher dans les onglets », vue scindée (« Sélectionner un onglet »).
-    for (const taken of ['Ctrl+Shift+A', 'Alt+Shift+N']) {
-        assert.notEqual(key.default, taken);
-        assert.notEqual(key.mac, taken);
-    }
-    // sidePanel.open exige le geste clavier : appel direct avec l'onglet fourni, sans await avant.
-    const bg = fs.readFileSync(path.join(__dirname, '../extension/background.js'), 'utf8');
-    const handler = bg.slice(bg.indexOf('chrome.commands.onCommand.addListener'));
-    assert.match(handler, /^chrome\.commands\.onCommand\.addListener\(\(command, tab\) =>/);
-    assert.ok(!/await/.test(handler.slice(0, handler.indexOf('sidePanel.open'))), 'await avant sidePanel.open');
-});
-
-function agyChat() {
-    const ctx = vm.createContext({URL});
-    vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/agy_chat.js'), 'utf8'), ctx);
-    return ctx.AgyChat;
-}
-
-test('panneau Antigravity : fil (envoi, déposée, réponse, erreur), idempotent, borné', () => {
-    const chat = agyChat();
-    assert.equal(chat.checkText('   ').error, 'Demande vide.');
-    assert.match(chat.checkText('x'.repeat(6001)).error, /trop longue/);
-    // Ni identifiants, ni chemin, ni paramètres vers le relais (relecture de Codex).
-    assert.equal(chat.originOf('https://user:pass@a.invalid:8443/reset/SECRET?token=zzz#k=v'), 'https://a.invalid:8443');
-    let list = chat.addAsk([], {localId: 'L1', text: 'Remplis', tab: {id: 4, title: 'Form'}, at: 1});
-    assert.equal(chat.askStatus(list[0]), 'Envoi…');
-    list = chat.applyUpdate(list, {localId: 'L1', status: 'sent', relayId: 'R1', sidecarActive: true});
-    assert.equal(chat.pendingAsk(list).localId, 'L1');
-    assert.equal(chat.askStatus(list[0]), 'Déposée pour Antigravity');
-    const reply = {id: 'A1', from: 'antigravity', reply_to: 'R1', request_id: 'L1', text: 'Fait.', created: '2026-10-18T18:00:00Z'};
-    list = chat.applyUpdate(list, {reply});
-    list = chat.applyUpdate(list, {reply});  // remise deux fois : une seule réponse
-    assert.deepEqual(plain(list.map(e => [e.kind, e.status || e.text])), [['ask', 'answered'], ['reply', 'Fait.']]);
-    assert.equal(chat.pendingAsk(list), null);
-    list = chat.applyUpdate(list, {localId: 'L1', status: 'error', error: 'x'});  // déjà répondue : inchangée
-    list = chat.applyUpdate(list, {localId: 'L1', status: 'sent', relayId: 'R1'});  // « answered » ne recule jamais
-    assert.equal(list[0].status, 'answered');
-    list = chat.applyUpdate(chat.addAsk(list, {localId: 'L2', text: 'b'}), {localId: 'L2', status: 'error', error: 'Nexus Relay absent'});
-    assert.equal(chat.askStatus(list.at(-1)), 'Non transmise : Nexus Relay absent');
-    assert.match(chat.askStatus({status: 'sent', sidecarActive: false}), /ne semble pas actif/);
-    for (let i = 0; i < 150; i++) list = chat.addAsk(list, {localId: `M${i}`, text: 't'});
-    assert.equal(list.length, chat.MAX_ENTRIES);
-});
-
-test('panneau Antigravity : réponse avant « déposée », ou « déposée » perdue → la réponse retrouve sa demande par request_id', () => {
-    const chat = agyChat();
-    let t = chat.addAsk([], {localId: 'L', text: 'test'});
-    t = chat.applyUpdate(t, {reply: {id: 'REP', reply_to: 'REQ', text: 'fait'}});
-    t = chat.applyUpdate(t, {localId: 'L', status: 'sent', relayId: 'REQ'});
-    assert.equal(t[0].status, 'answered');
-    // Confirmation « déposée » jamais reçue : la réponse porte l'identifiant de requête.
-    let u = chat.addAsk([], {localId: 'L9', text: 'x'});
-    u = chat.applyUpdate(u, {reply: {id: 'REP9', reply_to: 'REQ9', request_id: 'L9', text: 'fait'}});
-    assert.equal(u[0].status, 'answered');
-    assert.equal(u[0].relayId, 'REQ9');
-    assert.equal(chat.busyAsk(u), null);
-});
-
-test('panneau Antigravity : renvois sans fin avec le même localId ; seuls les envois réels comptent ; abandon et effacement', () => {
-    const chat = agyChat();
-    let list = chat.addAsk([], {localId: 'L', text: 'x', at: 1000});
-    assert.equal(chat.busyAsk(list).localId, 'L');  // une demande en cours bloque la suivante, sans limite de temps
-    assert.deepEqual(plain(chat.dueResends(list, 1000).map(e => e.localId)), ['L']);  // jamais envoyée : tout de suite
-    list = chat.markSent(list, 'L', 1000);
-    assert.equal(chat.dueResends(list, 1000 + chat.RESEND_AFTER_MS - 1).length, 0);
-    for (let i = 1; i < chat.SLOW_ATTEMPTS; i++) list = chat.markSent(list, 'L', 1000 + i * chat.RESEND_AFTER_MS);
-    assert.match(chat.askStatus(list[0]), /non confirmée.*jamais en double/);
-    assert.equal(list[0].status, 'sending');  // pas abandonnée en silence
-    assert.equal(chat.dueResends(list, 10_000_000).length, 1);
-    // Effacer l'affichage garde la demande en cours ; seul l'abandon explicite libère le panneau.
-    list = chat.clearDisplay([...list, {kind: 'reply', id: 'old', text: 'ancienne'}]);
-    assert.deepEqual(plain(list.map(e => e.localId || e.id)), ['L']);
-    list = chat.abandon(list, 'L');
-    assert.equal(list[0].status, 'abandoned');
-    assert.equal(chat.busyAsk(list), null);
-    list = chat.applyUpdate(list, {localId: 'L', status: 'sent', relayId: 'R'});  // confirmation tardive : reste abandonnée
-    assert.equal(list[0].status, 'abandoned');
-    list = chat.applyUpdate(list, {reply: {id: 'A', reply_to: 'R', request_id: 'L', text: 'fini quand même'}});
-    assert.equal(list[0].status, 'answered');
-});
-
-test('panneau Antigravity : demande → événement signé au pont (identité, instance, origine) → déposée → réponse (storage.local)', async () => {
-    const bridge = bridgeHarness();
-    const {h, server, stop} = bridge;
-    try {
-        await authenticated(bridge);
-        await until(() => server.replies().some(r => r.event === 'agy_hello'), 'instance annoncée');
-        const instance = server.replies().find(r => r.event === 'agy_hello').instance;
-        const asked = await h.sendMessage({target: 'background', agyAsk: {text: '  Remplis le formulaire  ', tabId: 1}});
-        assert.equal(asked.sent, true);
-        await until(() => server.replies().some(r => r.event === 'agy_ask'), 'demande au pont');
-        const event = server.replies().find(r => r.event === 'agy_ask');
-        assert.equal(event.text, 'Remplis le formulaire');
-        assert.equal(event.localId, asked.localId);
-        assert.equal(event.instance, instance);
-        assert.deepEqual(plain(event.tab), {id: 1, title: '', url: 'https://example.invalid'});  // origine seule
-        assert.match((await h.sendMessage({target: 'background', agyAsk: {text: 'autre', tabId: 1}})).error, /une demande à la fois/);
-        server.send({requestId: 'u1', action: 'agy_panel_update', params: {localId: asked.localId, relayId: 'R1', status: 'sent', sidecarActive: true}});
-        await until(() => server.replies().some(r => r.requestId === 'u1'), 'déposée');
-        assert.equal(h.localData.agyChat[0].status, 'sent');
-        // Un agent ne parle jamais à la place d'Antigravity (commande réservée au pont, sans identité de client).
-        server.send({requestId: 'u2', action: 'agy_panel_update', params: {reply: {id: 'X', reply_to: 'R1', text: 'faux'}}, client: TEST_CLIENT});
-        await until(() => server.replies().some(r => r.requestId === 'u2'), 'refus');
-        assert.match(server.replies().find(r => r.requestId === 'u2').error, /reserved for the bridge/);
-        server.send({requestId: 'u3', action: 'agy_panel_update', params: {reply: {id: 'A1', from: 'antigravity', reply_to: 'R1', request_id: asked.localId, text: 'Formulaire rempli.'}}});
-        await until(() => server.replies().some(r => r.requestId === 'u3'), 'réponse');
-        assert.deepEqual(plain(h.localData.agyChat.map(e => [e.kind, e.status || e.text])), [['ask', 'answered'], ['reply', 'Formulaire rempli.']]);
-        assert.equal((await h.sendMessage({target: 'background', agyAsk: {text: ' '}})).error, 'Demande vide.');
-        assert.deepEqual(plain(await h.sendMessage({target: 'background', agyClear: true})), {ok: true});
-        assert.deepEqual(plain(h.localData.agyChat), []);
-        // Jamais depuis une page web ni un script de contenu.
-        assert.equal(await h.sendMessage({target: 'background', agyAsk: {text: 'x'}}, {id: EXT_ID, tab: {id: 1}}), undefined);
-    } finally { stop(); }
-});
-
-test('panneau Antigravity : deux panneaux en même temps → une seule demande acceptée (test et réservation atomiques)', async () => {
-    const h = harness();
-    const [a, b] = await Promise.all([
-        h.sendMessage({target: 'background', agyAsk: {text: 'A', tabId: 8}}),
-        h.sendMessage({target: 'background', agyAsk: {text: 'B', tabId: 9}})
-    ]);
-    assert.equal([a, b].filter(r => r.localId).length, 1);
-    assert.equal([a, b].filter(r => /une demande à la fois/.test(r.error || '')).length, 1);
-    assert.equal(h.localData.agyChat.length, 1);
-    assert.equal(Object.keys(h.sessionData.agyGrants).length, 1);
-});
-
-test('panneau Antigravity : pont injoignable → « Envoi… », aucun essai compté, renvoyée avec le même identifiant', async () => {
-    const h = harness();
-    const asked = await h.sendMessage({target: 'background', agyAsk: {text: 'Résume', tabId: null}});
-    assert.equal(asked.sent, false);
-    const [entry] = h.localData.agyChat;
-    assert.equal(entry.status, 'sending');
-    assert.equal(entry.tab, null);  // tabId null : aucune page, jamais l'onglet 0
-    assert.equal(entry.attempts, 0);  // un envoi refusé localement ne compte pas
-    assert.equal(await h.evalInContext('agyResendPending()'), 0);  // toujours pas de pont
-    assert.equal(h.localData.agyChat[0].attempts, 0);
-    assert.equal(h.localData.agyChat[0].localId, asked.localId);
-});
-
-test('panneau Antigravity : adoption issue du panneau = accord de CETTE demande, sur CET onglet et CETTE page', async () => {
-    let url = 'https://dossiers.invalid/app#/fiche/A';
-    const h = harness({}, {autoOwn: false, tabs: {get: async (id) => ({id, url, title: 'Fiche', windowId: 10})}});
-    const asked = await h.sendMessage({target: 'background', agyAsk: {text: 'Remplis', tabId: 7}});
-    assert.ok(!JSON.stringify(h.localData.agyChat).includes('fiche/A'));  // l'adresse complète reste dans l'extension
-    const agy = {agent: 'Antigravity', id: 'antigravity-aaaa1111'};
-    const adopt = (params) => h.run('adopt_tab', {tabId: 7, ...params}, agy);
-    // Route par fragment : #/fiche/B est un autre dossier.
-    url = 'https://dossiers.invalid/app#/fiche/B';
-    assert.match((await adopt({panelRequest: asked.localId})).error, /moved to another page/);
-    url = 'https://dossiers.invalid/app#/fiche/A';
-    assert.match((await adopt({panelRequest: 'autre-demande-0000'})).error, /no pending side panel request/);
-    assert.match((await h.run('adopt_tab', {tabId: 8, panelRequest: asked.localId}, agy)).error, /was for tab 7/);
-    assert.equal((await adopt({panelRequest: asked.localId})).data.adopted, true);
-    // Déjà adopté puis navigation : le contrôle passe avant « already ».
-    url = 'https://dossiers.invalid/app#/fiche/B';
-    assert.match((await adopt({panelRequest: asked.localId})).error, /moved to another page/);
-    // Accord expiré, ou effacé au rechargement de l'extension : refus explicite.
-    h.sessionData.agyGrants[asked.localId].until = 0;
-    url = 'https://dossiers.invalid/app#/fiche/A';
-    assert.match((await adopt({panelRequest: asked.localId})).error, /expired/);
-    delete h.sessionData.agyGrants;
-    assert.match((await adopt({panelRequest: asked.localId})).error, /no pending side panel request/);
-    // Hors panneau (Julien l'a demandé ailleurs) : aucun accord du panneau ne s'en mêle.
-    assert.equal((await h.run('adopt_tab', {tabId: 12, julienAsked: true}, agy)).data.adopted, true);
-});
-
-test('panneau Antigravity : page changée pendant la frappe → rien ne part ; pendant l\'adoption → refusée et propriété retirée', async () => {
-    let url = 'https://dossiers.invalid/fiche?id=A';
-    let reads = 0;
-    let afterReads = null;  // à partir de cette lecture, l'onglet affiche B (navigation pendant les attentes)
-    const h = harness({}, {autoOwn: false, tabs: {get: async (id) => {
-        reads++;
-        return {id, url: afterReads !== null && reads >= afterReads ? 'https://dossiers.invalid/fiche?id=B' : url, title: 'Fiche', windowId: 10};
-    }}});
-    // Frappe sur A, l'onglet passe sur B avant l'envoi : le panneau envoie la page vue (expectUrl).
-    url = 'https://dossiers.invalid/fiche?id=B';
-    assert.match((await h.sendMessage({target: 'background', agyAsk: {text: 'Remplis', tabId: 7, expectUrl: 'https://dossiers.invalid/fiche?id=A'}})).error, /changé de page depuis que vous avez commencé/);
-    assert.equal((h.localData.agyChat || []).length, 0);
-    url = 'https://dossiers.invalid/fiche?id=A';
-    const asked = await h.sendMessage({target: 'background', agyAsk: {text: 'Remplis', tabId: 7, expectUrl: url}});
-    assert.ok(asked.localId);
-    // Adoption : les premières lectures voient A, la dernière (après l'enregistrement de la propriété) voit B.
-    const agy = {agent: 'Antigravity', id: 'antigravity-aaaa1111'};
-    afterReads = reads + 3;  // résolution, lecture avant l'accord, relecture après l'enregistrement
-    const res = await h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, agy);
-    assert.match(res.error, /moved to another page/);
-    assert.deepEqual(Object.keys(h.owners()), []);  // propriété retirée
-});
-
-test('panneau Antigravity : Julien navigue lui-même ailleurs → onglet rendu ; le travail (lien, formulaire) continue', async () => {
-    const h = harness({}, {autoOwn: false, tabs: {get: async (id) => ({id, url: 'https://a.invalid/form', title: 'F', windowId: 10})}});
-    const asked = await h.sendMessage({target: 'background', agyAsk: {text: 'Remplis', tabId: 7, expectUrl: 'https://a.invalid/form'}});
-    const agy = {agent: 'Antigravity', id: 'antigravity-aaaa1111'};
-    assert.equal((await h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, agy)).data.adopted, true);
-    assert.equal(h.owners()['7'].panelRequest, asked.localId);
-    assert.equal(await h.evalInContext('agyOnCommitted({tabId: 7, frameId: 0, transitionType: "form_submit", transitionQualifiers: []})'), false);
-    assert.equal(await h.evalInContext('agyOnCommitted({tabId: 7, frameId: 0, transitionType: "link", transitionQualifiers: []})'), false);
-    assert.equal(await h.evalInContext('agyOnCommitted({tabId: 7, frameId: 1, transitionType: "typed", transitionQualifiers: []})'), false);
-    assert.ok(h.owners()['7']);
-    assert.equal(await h.evalInContext('agyOnCommitted({tabId: 7, frameId: 0, transitionType: "link", transitionQualifiers: ["forward_back"]})'), true);
-    assert.deepEqual(Object.keys(h.owners()), []);
-    assert.ok(h.detached.includes(7));
-    // Onglet adopté hors panneau : jamais rendu par cette règle.
-    assert.equal((await h.run('adopt_tab', {tabId: 9, julienAsked: true}, agy)).data.adopted, true);
-    assert.equal(await h.evalInContext('agyOnCommitted({tabId: 9, frameId: 0, transitionType: "typed", transitionQualifiers: []})'), false);
-});
-
-test('panneau Antigravity : identité d\'instance créée une seule fois, même par des appels simultanés', async () => {
-    const h = harness();
-    const [one, two, three] = await h.evalInContext('Promise.all([agyInstance(), agyInstance(), agyAskEvent({localId: "request-1234", text: "x", tab: null}).then(e => e.instance)])');
-    assert.equal(one, two);
-    assert.equal(two, three);
-    assert.equal(h.localData.agyInstance, one);
-});
-
-test('panneau Antigravity : demande sans confirmation → reprise planifiée même panneau fermé', async () => {
-    const h = harness();
-    await h.sendMessage({target: 'background', agyAsk: {text: 'Résume', tabId: null}});
-    assert.equal(h.evalInContext('agyResendTimer !== null'), true);
+test('discussion du panneau retirée : son fil est effacé, le pont ne reçoit plus agy_panel_update', async () => {
+    const h = harness({}, {localStorage: {agyChat: [{kind: 'ask', text: 'ancienne'}], agyInstance: 'x', autre: 1}});
+    await settleWorker();
+    assert.deepEqual(plain(h.localData), {autre: 1});
+    const res = await h.run('agy_panel_update', {reply: {id: 'A', text: 'x'}});
+    assert.ok(res.error);
 });
 
 test('pastille et point du clic : seulement sur message de l\'extension, jamais sur un événement de la page', () => {
@@ -3942,17 +3636,8 @@ test('2.1 démarrage : le premier battement reprend les orphelins de l\'agent s\
         ['claude-nouvelle-2', 'claude-nouvelle-2', 'codex-ancienne-9', 'claude-vivante-3']);
     assert.deepEqual(plain((await h.run('heartbeat', {reclaim: true}, {agent: 'Claude', id: 'claude-autre-5'})).data.reclaimed), []);
     // Battement permis pendant l'arrêt d'urgence (aucune action de page).
-    await h.sendMessage({target: 'background', panelStop: true});
+    await h.run('emergency_stop', {hold_s: 120}, null);
     assert.equal((await h.run('heartbeat', {}, fresh)).data.alive, true);
-    // Poste de contrôle : l'orphelin restant est signalé.
-    const state = await h.sendMessage({target: 'background', getControlState: true});
-    assert.deepEqual(plain(state.tabs.filter(t => t.orphan).map(t => t.tabId)), [702]);
-});
-
-test('2.1 poste de contrôle : badge « orphelin »', () => {
-    const view = sidepanelView();
-    const line = plain(view.describeTab({tabId: 4, agent: 'Claude', title: 'T', url: 'https://a.invalid/', session: '1', exists: true, debugger: false, orphan: true}));
-    assert.ok(line.badges.includes('orphelin (session terminée)'));
 });
 
 test('2.2 cdp_send Runtime.evaluate : monde de la PAGE sur demande explicite (world="page"), monde isolé par défaut', async () => {
@@ -4315,307 +4000,6 @@ test('2.9 journal réseau : carte, cryptogramme, code et IBAN masqués dans les 
     assert.equal(list[0].url, 'https://x.invalid/pay?cc_number=[masked]&lang=fr');
 });
 
-// =============================================================================
-// 4e relecture de Codex (18/10) : cible figée, marqueur du panneau, navigations dans le même document, profils
-// =============================================================================
-function fakeNode() {
-    const listeners = {};
-    return {
-        listeners, style: {}, dataset: {}, hidden: false, value: '', textContent: '', title: '', disabled: false, scrollHeight: 20,
-        classList: {add() {}, remove() {}, toggle() {}, contains: () => false},
-        addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
-        setAttribute() {}, appendChild(child) { return child; }, append() {}, prepend() {}, replaceChildren() {},
-        focus() {}, setSelectionRange() {}, remove() {}, scrollIntoView() {}, scrollTo() {},
-        querySelector: () => fakeNode(), querySelectorAll: () => []
-    };
-}
-
-/** Le vrai panneau (agy_chat.js, sidepanel_view.js, sidepanel.js) avec un DOM et les API Chrome simulés. */
-function panelHarness(onAsk) {
-    const nodes = {};
-    const tabEvents = {};
-    const state = {tab: null, asks: []};
-    const event = (name) => ({addListener(fn) { tabEvents[name] = fn; }});
-    const chrome = {
-        runtime: {
-            lastError: undefined,
-            sendMessage(message, callback) {
-                if (message.agyAsk) {
-                    state.asks.push(message.agyAsk);
-                    Promise.resolve(onAsk(message)).then((res) => callback(res || {}));
-                } else callback({});
-            }
-        },
-        storage: {local: {get: async () => ({})}, onChanged: {addListener() {}}},
-        tabs: {
-            query: async () => (state.tab ? [state.tab] : []),
-            get: async (id) => ({...state.tab, id}),
-            onActivated: event('activated'), onUpdated: event('updated'), onRemoved: event('removed')
-        }
-    };
-    let ready = null;
-    const document = {
-        getElementById: (id) => (nodes[id] ||= fakeNode()),
-        createElement: () => fakeNode(), createElementNS: () => fakeNode(), querySelectorAll: () => [],
-        addEventListener(type, fn) { if (type === 'DOMContentLoaded') ready = fn; }
-    };
-    const ctx = vm.createContext({document, chrome, URL, console, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, Date});
-    ctx.globalThis = ctx;
-    for (const file of ['agy_chat.js', 'sidepanel_view.js', 'sidepanel.js']) {
-        vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension', file), 'utf8'), ctx);
-    }
-    const tick = () => new Promise((resolve) => setImmediate(resolve));
-    const settle = async () => { for (let i = 0; i < 8; i++) await tick(); };
-    return {
-        state, nodes, tabEvents, settle,
-        start: async () => { ready(); await settle(); },
-        fire: async (id, type, eventObject = {preventDefault() {}}) => {
-            for (const fn of nodes[id].listeners[type] || []) fn(eventObject);
-            await settle();
-        }
-    };
-}
-
-const settleWorker = async () => { for (let i = 0; i < 8; i++) await new Promise((resolve) => setImmediate(resolve)); };
-
-test('panneau Antigravity (Codex 4e passe, P1) : l\'onglet figé change de page pendant la frappe → l\'URL attendue reste celle de la frappe, refus et aucun dépôt', async () => {
-    const A = 'https://dossiers.invalid/fiche?id=A';
-    const B = 'https://dossiers.invalid/fiche?id=B';
-    let workerUrl = A;
-    const h = harness({}, {autoOwn: false, tabs: {get: async (id) => ({id, url: workerUrl, title: 'Fiche', windowId: 10})}});
-    const panel = panelHarness((message) => h.sendMessage(message));
-    panel.state.tab = {id: 7, url: A, title: 'Fiche', windowId: 10};
-    await panel.start();
-    panel.nodes.prompt.value = 'Remplis le formulaire A';
-    await panel.fire('prompt', 'input');
-    assert.match(panel.nodes['tab-context'].textContent, /Fiche \(figé\)/);
-    // Même onglet, même titre, autre fiche : onUpdated relu par le panneau.
-    panel.state.tab = {id: 7, url: B, title: 'Fiche', windowId: 10};
-    workerUrl = B;
-    panel.tabEvents.updated(7, {url: B});
-    await panel.settle();
-    assert.match(panel.nodes['tab-context'].textContent, /page changée depuis/);
-    await panel.fire('composer', 'submit');
-    assert.equal(panel.state.asks.at(-1).expectUrl, A);  // jamais réécrite par onUpdated
-    assert.equal((h.localData.agyChat || []).length, 0);  // le worker a refusé : rien n'est parti
-    // Julien vise explicitement la page affichée (clic sur la pastille) : la demande part pour B.
-    await panel.fire('tab-context', 'click');
-    await panel.fire('composer', 'submit');
-    assert.equal(panel.state.asks.at(-1).expectUrl, B);
-    assert.equal(h.localData.agyChat.length, 1);
-});
-
-test('panneau Antigravity (Codex 4e passe, P1) : reprise d\'un orphelin (battement ou adoption) et onglet déjà à l\'agent gardent le marqueur du panneau', async () => {
-    const url = 'https://a.invalid/form';
-    const old = {agent: 'Antigravity', id: 'antigravity-ancienne-1'};
-    const fresh = {agent: 'Antigravity', id: 'antigravity-nouvelle-2'};
-    for (const how of ['heartbeat', 'adopt']) {
-        const h = harness({}, {autoOwn: false, tabs: {get: async (id) => ({id, url, title: 'F', windowId: 10}), query: async () => [{id: 7}]}});
-        const asked = await h.sendMessage({target: 'background', agyAsk: {text: 'Remplis', tabId: 7, expectUrl: url}});
-        assert.equal((await h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, old)).data.adopted, true);
-        await h.run('list_tabs', {}, fresh, {gone: [old.id]});  // serveur MCP redémarré : ancienne session morte
-        if (how === 'heartbeat') assert.deepEqual(plain((await h.run('heartbeat', {reclaim: true}, fresh)).data.reclaimed), [7]);
-        else assert.equal((await h.run('adopt_tab', {tabId: 7}, fresh)).data.reclaimed, true);
-        assert.equal(h.owners()['7'].client, fresh.id);
-        assert.equal(h.owners()['7'].panelRequest, asked.localId, how);
-        assert.equal(await h.evalInContext('agyOnCommitted({tabId: 7, frameId: 0, transitionType: "typed", transitionQualifiers: ["from_address_bar"]})'), true);
-        assert.deepEqual(Object.keys(h.owners()), [], how);
-        assert.ok((await h.run('click', {tabId: 7, selector: 'button'}, fresh)).error, how);
-    }
-    // Onglet déjà adopté hors panneau par la même session, puis demande du panneau sur lui : marqué aussi.
-    const h = harness({}, {autoOwn: false, tabs: {get: async (id) => ({id, url, title: 'F', windowId: 10})}});
-    assert.equal((await h.run('adopt_tab', {tabId: 7, julienAsked: true}, fresh)).data.adopted, true);
-    assert.equal(h.owners()['7'].panelRequest, undefined);
-    const asked = await h.sendMessage({target: 'background', agyAsk: {text: 'Remplis', tabId: 7, expectUrl: url}});
-    assert.equal((await h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, fresh)).data.already, true);
-    assert.equal(h.owners()['7'].panelRequest, asked.localId);
-    assert.equal(h.owners()['7'].adopted, true);
-    assert.equal(await h.evalInContext('agyOnCommitted({tabId: 7, frameId: 0, transitionType: "link", transitionQualifiers: ["forward_back"]})'), true);
-    assert.deepEqual(Object.keys(h.owners()), []);
-});
-
-test('panneau Antigravity (Codex 4e passe, P1) : fragment et History API surveillés comme une navigation ; le travail (lien, pushState) continue', async () => {
-    const listeners = {};
-    const bus = Object.fromEntries(['onCommitted', 'onReferenceFragmentUpdated', 'onHistoryStateUpdated']
-        .map((name) => [name, {addListener(fn) { (listeners[name] ||= []).push(fn); }}]));
-    const url = 'https://dossiers.invalid/app#/fiche/A';
-    const agy = {agent: 'Antigravity', id: 'antigravity-aaaa1111'};
-    for (const [event, julien] of [
-        ['onReferenceFragmentUpdated', {transitionType: 'typed', transitionQualifiers: ['from_address_bar']}],
-        ['onHistoryStateUpdated', {transitionType: 'link', transitionQualifiers: ['forward_back']}]
-    ]) {
-        for (const key of Object.keys(listeners)) delete listeners[key];
-        const h = harness({}, {autoOwn: false, webNavigation: bus, tabs: {get: async (id) => ({id, url, title: 'F', windowId: 10})}});
-        assert.deepEqual(Object.keys(listeners).sort(), ['onCommitted', 'onHistoryStateUpdated', 'onReferenceFragmentUpdated']);
-        const asked = await h.sendMessage({target: 'background', agyAsk: {text: 'Remplis', tabId: 7, expectUrl: url}});
-        assert.equal((await h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, agy)).data.adopted, true);
-        // Changement de route du travail (transition « link » sans précédent/suivant) : l'onglet reste à Antigravity.
-        listeners[event][0]({tabId: 7, frameId: 0, transitionType: 'link', transitionQualifiers: []});
-        await settleWorker();
-        assert.ok(h.owners()['7'], event);
-        // Julien change lui-même de fiche (barre d'adresse, précédent entre routes) : rendu, plus aucune commande.
-        listeners[event][0]({tabId: 7, frameId: 0, ...julien});
-        await settleWorker();
-        assert.deepEqual(Object.keys(h.owners()), [], event);
-        assert.ok((await h.run('click', {tabId: 7, selector: 'button'}, agy)).error, event);
-    }
-});
-
-test('panneau Antigravity (Codex 4e passe, P2) : demande retenue par le pont (plusieurs profils) → toujours en cours, réservation et reprises gardées', () => {
-    const chat = agyChat();
-    let list = chat.markSent(chat.addAsk([], {localId: 'L', text: 'x', at: 1000}), 'L', 1000);
-    list = chat.applyUpdate(list, {localId: 'L', status: 'held', error: 'Plusieurs profils Chrome sont reliés au pont'});
-    assert.equal(list[0].status, 'sending');
-    assert.equal(chat.busyAsk(list).localId, 'L');
-    assert.equal(chat.dueResends(list, 1000 + chat.RESEND_AFTER_MS).length, 1);
-    assert.match(chat.askStatus(list[0]), /^Retenue : Plusieurs profils/);
-    // L'autre profil fermé : la reprise retrouve le dépôt antérieur (même localId) et la demande passe « déposée ».
-    list = chat.applyUpdate(list, {localId: 'L', status: 'sent', relayId: 'R1', sidecarActive: true});
-    assert.equal(list[0].status, 'sent');
-    assert.equal(list[0].held, undefined);
-});
-
-// 5e relecture de Codex : navigation de Julien PENDANT les attentes de l'adoption du panneau.
-function navBus() {
-    const listeners = {};
-    const bus = Object.fromEntries(['onCommitted', 'onReferenceFragmentUpdated', 'onHistoryStateUpdated']
-        .map((name) => [name, {addListener(fn) { (listeners[name] ||= []).push(fn); }}]));
-    return {bus, listeners};
-}
-
-/** Suspend le n-ième appel de storage.session.<method> qui satisfait match ; rend {hit, release}. */
-function gateStorage(h, method, match, nth = 1) {
-    const original = h.ctx.chrome.storage.session[method];
-    let count = 0;
-    let open;
-    const gate = {hit: false, release: () => open()};
-    h.ctx.chrome.storage.session[method] = async (arg) => {
-        if (match(arg) && ++count === nth) {
-            gate.hit = true;
-            await new Promise((resolve) => { open = resolve; });
-        }
-        return original(arg);
-    };
-    return gate;
-}
-
-const untilTrue = async (cond) => { for (let i = 0; i < 200 && !cond(); i++) await new Promise((resolve) => setImmediate(resolve)); assert.ok(cond()); };
-const julienTyped = {frameId: 0, transitionType: 'typed', transitionQualifiers: ['from_address_bar']};
-
-test('panneau Antigravity (Codex 5e passe, P1) : Julien change de page pendant la dernière lecture de l\'accord → adoption refusée, onglet rendu, clic sur B refusé', async () => {
-    let url = 'https://dossiers.invalid/fiche?id=A';
-    const {bus, listeners} = navBus();
-    const h = harness({}, {autoOwn: false, webNavigation: bus, tabs: {get: async (id) => ({id, url, title: 'Fiche', windowId: 10})}});
-    const agy = {agent: 'Antigravity', id: 'antigravity-aaaa1111'};
-    const asked = await h.sendMessage({target: 'background', agyAsk: {text: 'Remplis', tabId: 7, expectUrl: url}});
-    // Deuxième lecture de l'accord pendant l'adoption = le contrôle final, après la dernière lecture de l'onglet.
-    const gate = gateStorage(h, 'get', (key) => key === 'agyGrants', 2);
-    const adoption = h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, agy);
-    await untilTrue(() => gate.hit);
-    url = 'https://dossiers.invalid/fiche?id=B';
-    listeners.onCommitted[0]({tabId: 7, ...julienTyped});
-    await settleWorker();
-    gate.release();
-    assert.match((await adoption).error, /moved to another page during the adoption/);
-    assert.deepEqual(Object.keys(h.owners()), []);
-    assert.ok((await h.run('click', {tabId: 7, selector: 'button'}, agy)).error);
-    assert.equal(h.clicks, 0);
-});
-
-test('panneau Antigravity (Codex 5e passe, P1) : reprise d\'un orphelin, navigation de Julien pendant l\'enregistrement → la restitution n\'est jamais annulée', async () => {
-    let url = 'https://dossiers.invalid/fiche?id=A';
-    const {bus, listeners} = navBus();
-    const h = harness({}, {autoOwn: false, webNavigation: bus, tabs: {get: async (id) => ({id, url, title: 'Fiche', windowId: 10}), query: async () => [{id: 7}]}});
-    const old = {agent: 'Antigravity', id: 'antigravity-ancienne-1'};
-    const fresh = {agent: 'Antigravity', id: 'antigravity-nouvelle-2'};
-    const asked = await h.sendMessage({target: 'background', agyAsk: {text: 'Remplis', tabId: 7, expectUrl: url}});
-    assert.equal((await h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, old)).data.adopted, true);
-    await h.run('list_tabs', {}, fresh, {gone: [old.id]});
-    // Premier enregistrement de la reprise suspendu ; Julien navigue pendant ce temps (le marqueur est déjà posé).
-    const ownersKey = h.evalInContext('OWNERS_KEY');
-    const gate = gateStorage(h, 'set', (items) => items && ownersKey in items);
-    const adoption = h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, fresh);
-    await untilTrue(() => gate.hit);
-    url = 'https://dossiers.invalid/fiche?id=B';
-    listeners.onCommitted[0]({tabId: 7, ...julienTyped});
-    await settleWorker();
-    gate.release();
-    assert.ok((await adoption).error);
-    assert.deepEqual(Object.keys(h.owners()), []);  // restitution gardée : aucune propriété recréée
-    assert.ok((await h.run('click', {tabId: 7, selector: 'button'}, fresh)).error);
-    assert.equal(h.clicks, 0);
-});
-
-test('panneau Antigravity (Codex 5e passe, P1) : refus tardif sur un onglet déjà à l\'agent → propriété d\'avant remise telle quelle', async () => {
-    let reads = 0;
-    let bAfter = Infinity;
-    const h = harness({}, {autoOwn: false, tabs: {get: async (id) => ({id, url: ++reads >= bAfter ? 'https://a.invalid/b' : 'https://a.invalid/a', title: 'F', windowId: 10})}});
-    const agy = {agent: 'Antigravity', id: 'antigravity-aaaa1111'};
-    assert.equal((await h.run('adopt_tab', {tabId: 7, julienAsked: true}, agy)).data.adopted, true);
-    const before = h.owners()['7'];
-    const asked = await h.sendMessage({target: 'background', agyAsk: {text: 'Remplis', tabId: 7, expectUrl: 'https://a.invalid/a'}});
-    bAfter = reads + 3;  // la relecture après l'enregistrement voit une autre page (navigation du travail, pas de Julien)
-    assert.match((await h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, agy)).error, /moved to another page/);
-    assert.deepEqual(h.owners()['7'], before);
-});
-
-test('panneau Antigravity (Codex 6e passe, P1) : onglet rendu puis adopté par un autre pendant la sauvegarde → l\'ancienne adoption ne restaure ni ne rend rien', async () => {
-    let url = 'https://dossiers.invalid/fiche?id=A';
-    const h = harness({}, {autoOwn: false, tabs: {get: async (id) => ({id, url, title: 'Fiche', windowId: 10})}});
-    const agy = {agent: 'Antigravity', id: 'antigravity-aaaa1111'};
-    const claude = {agent: 'Claude', id: 'claude-bbbb2222'};
-    assert.equal((await h.run('adopt_tab', {tabId: 7, julienAsked: true}, agy)).data.adopted, true);
-    const asked = await h.sendMessage({target: 'background', agyAsk: {text: 'Remplis', tabId: 7, expectUrl: url}});
-    const ownersKey = h.evalInContext('OWNERS_KEY');
-    const gate = gateStorage(h, 'set', (items) => items && ownersKey in items);
-    const adoption = h.run('adopt_tab', {tabId: 7, panelRequest: asked.localId}, agy);
-    await untilTrue(() => gate.hit);
-    // Pendant la sauvegarde : Julien rend l'onglet (poste de contrôle), puis Claude l'adopte (propriété installée,
-    // sa propre sauvegarde attend derrière), et le travail de Claude va sur B.
-    const released = h.sendMessage({target: 'background', panelRelease: 7});
-    await untilTrue(() => !h.owners()['7']);
-    const claudeSaved = h.evalInContext(`rememberTabOwner(7, ${JSON.stringify(claude)}, "adopted")`);
-    const claudeOwner = h.owners()['7'];
-    assert.equal(claudeOwner.client, claude.id);
-    url = 'https://dossiers.invalid/fiche?id=B';
-    gate.release();
-    assert.ok((await adoption).error);
-    await released;
-    await claudeSaved;
-    assert.deepEqual(h.owners()['7'], claudeOwner);  // jamais l'ancienne propriété d'Antigravity remise
-    assert.ok((await h.run('click', {tabId: 7, selector: 'button'}, agy)).error);
-    assert.equal(h.clicks, 0);
-    assert.ok(!(await h.run('click', {tabId: 7, selector: 'button'}, claude)).error);
-});
-
-test('panneau Antigravity (Codex 7e passe, P1) : deux restitutions de la même navigation, un autre client adopte entre les deux → la seconde ne supprime pas sa propriété', async () => {
-    const h = harness({}, {autoOwn: false, tabs: {get: async (id) => ({id, url: 'https://a.invalid/b', title: 'F', windowId: 10})}});
-    const agy = {agent: 'Antigravity', id: 'antigravity-aaaa1111'};
-    const claude = {agent: 'Claude', id: 'claude-bbbb2222'};
-    assert.equal((await h.run('adopt_tab', {tabId: 7, julienAsked: true}, agy)).data.adopted, true);
-    // Détachements suspendus : on choisit l'ordre de leurs retours.
-    const pending = [];
-    const original = h.ctx.chrome.debugger.detach;
-    h.ctx.chrome.debugger.detach = (target) => new Promise((resolve, reject) => pending.push({resolve, reject, target}));
-    const agyOwner = 'tabOwners.get(7)';
-    const first = h.evalInContext(`releaseTabFromPanel(7, ${agyOwner})`);
-    const second = h.evalInContext(`releaseTabFromPanel(7, ${agyOwner})`);
-    await untilTrue(() => pending.length === 2);
-    pending[0].resolve();
-    assert.equal((await first).released, true);
-    h.ctx.chrome.debugger.detach = original;
-    assert.equal((await h.run('adopt_tab', {tabId: 7, julienAsked: true}, claude)).data.adopted, true);
-    const claudeOwner = h.owners()['7'];
-    assert.ok(!(await h.run('click', {tabId: 7, selector: 'button'}, claude)).error);
-    pending[1].reject(new Error('Debugger is not attached'));
-    assert.equal((await second).released, false);
-    assert.deepEqual(h.owners()['7'], claudeOwner);
-    assert.ok(!(await h.run('click', {tabId: 7, selector: 'button'}, claude)).error);
-    // Le bouton « Rendre l'onglet » du poste de contrôle garde son sens : il rend l'onglet de son propriétaire actuel.
-    assert.equal((await h.sendMessage({target: 'background', panelRelease: 7})).released, true);
-    assert.deepEqual(Object.keys(h.owners()), []);
-});
-
 test('onglet ouvert par un onglet d\'agent (target=_blank, popup) : au même client, jamais depuis un onglet adopté', async () => {
     const h = harness({}, {autoOwn: false});
     await h.own(5);
@@ -4768,4 +4152,15 @@ test('page entière : taille du contenu, zoom de la page appliqué comme pour un
     const tall = await shotFor({cssContentSize: {width: 30000, height: 90000}, cssVisualViewport: {zoom: 2}});
     assert.deepEqual(tall.clip.clip, {x: 0, y: 0, width: 16384, height: 16384, scale: 1});
     assert.deepEqual(plain(tall.res.data.fullPage), {width: 8192, height: 8192, truncated: true});
+});
+
+test('aucun panneau latéral : ni permission sidePanel, ni page, ni raccourci ; bouton titré NexusBrowser', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../extension/manifest.json'), 'utf8'));
+    assert.ok(!manifest.permissions.includes('sidePanel'));
+    assert.equal(manifest.side_panel, undefined);
+    assert.equal(manifest.commands, undefined);
+    assert.equal(manifest.action.default_title, 'NexusBrowser');
+    for (const file of ['sidepanel.html', 'sidepanel.js', 'sidepanel_view.js', 'sidepanel.css']) {
+        assert.ok(!fs.existsSync(path.join(__dirname, '../extension', file)), file);
+    }
 });

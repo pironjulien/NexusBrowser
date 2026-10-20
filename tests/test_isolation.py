@@ -137,6 +137,7 @@ def test_page_tools_require_tab_id_no_last_tab_fallback(monkeypatch):
     assert not {"browser_sidepanel_requests", "browser_sidepanel_reply"} & set(tools)
     params = inspect.signature(mcp_server.browser_adopt_tab).parameters
     assert params["user_asked"].default is False and "julien_asked" not in params  # ancien alias retiré (2.11.0)
+    assert "panel_request" not in params  # discussion du panneau retirée (2.14.0)
 
 
 def test_cookie_values_never_requested_by_default(monkeypatch):

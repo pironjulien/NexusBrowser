@@ -52,7 +52,7 @@ bridge shared by several agents.
 
 | Folder | Role |
 | --- | --- |
-| `extension/` | Chrome MV3 extension "Nexus Browser Bridge": CDP actions, locators, network, dialogs, cross-origin iframes, exports, tab ownership, control panel |
+| `extension/` | Chrome MV3 extension "Nexus Browser Bridge": CDP actions, locators, network, dialogs, cross-origin iframes, exports, tab ownership |
 | `native-host/` | Local bridge (`bridge_server.py`: WebSocket 9224 for the extension, HTTP 9225 for the agents) and native host `com.nexus.browser_auth` |
 | `client/` | MCP server `nexus-browser` (`mcp_server.py`), authenticated transport (`bridge_client.py`), CLI (`browser_cli.py`), shared emergency stop |
 | `skills/`, `plugins/` | Skill (copied for Antigravity, Claude Code and Codex) and Antigravity plugin, by `install.ps1` |
@@ -168,10 +168,10 @@ points to the one-time install.
   `Input.dispatch*`) keep full page access by design and can click or submit without this check; the tool
   descriptions and the server instructions tell the model never to use them for an outward action. Bare coordinates
   of `browser_drag_and_drop` are not read either.
-- **Emergency stop** (Ctrl+Alt+Shift+Esc, STOP button of the control panel, `~\.nexus\stop`): commands already
+- **Emergency stop** (Ctrl+Alt+Shift+Esc, `~\.nexus\stop`): commands already
   running are cancelled (typing, drag, waits), debuggers detached, every action refused for 120 s. The same file
   protocol is shared with the [NexusWindows](https://julienpiron.fr/nexuswindows/) agents.
-- **Control panel** (side panel, Alt+Shift+Y): tabs driven by each agent, debugger state, STOP, give a tab back.
+- **Who drives what**: each agent's tabs sit in a Chrome tab group named after it; `browser_release_tab` gives a tab back.
 - Whoever holds the bridge token controls the browser session: keep `~\.nexus\nexus-browser\bridge-token` private.
 
 ## Checks

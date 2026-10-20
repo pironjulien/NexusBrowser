@@ -75,6 +75,26 @@ def test_bind_session_sets_identity_per_request():
     assert mcp_server._SESSION_AGENTS["a" * 32] == "Claude"
 
 
+def test_bind_session_without_mcp_session_keeps_the_agent():
+    """Protocole 2026-07-28 sans état (Claude Code) : pas d'en-tête mcp-session-id, l'agent de l'URL reste le sien."""
+    seen: list[dict] = []
+
+    async def call_next(ctx):
+        seen.append(bridge_client.identity())
+        return None
+
+    def ctx(agent: str, method: str = "tools/call"):
+        request = SimpleNamespace(headers={}, query_params={"agent": agent})
+        return SimpleNamespace(request=request, method=method)
+
+    for call in (ctx("claude"), ctx("claude"), ctx("codex"), ctx("claude", "initialize")):
+        asyncio.run(mcp_server._bind_session(call, call_next))
+    assert [s["agent"] for s in seen[:3]] == ["Claude", "Claude", "Codex"]
+    assert seen[0]["id"] == seen[1]["id"] != seen[2]["id"]  # stable par agent, distincte entre agents
+    assert seen[3]["id"] == mcp_server.CLIENT_IDENTITY["id"]  # initialize d'un client à sessions : processus
+    assert {"Claude", "Codex"} <= set(mcp_server._STATELESS_SESSIONS)
+
+
 def test_session_heartbeats_reclaim_once_and_drop_closed(monkeypatch):
     beats: list[tuple[str, bool]] = []
     monkeypatch.setattr(

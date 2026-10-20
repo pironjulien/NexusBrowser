@@ -61,14 +61,6 @@ function connectWS() {
     }
 }
 
-// Événement à signer pour le service worker quand sa propre liaison n'est pas prête (STOP du poste de contrôle).
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (!message || message.target !== "offscreen" || !message.bridgeEvent) return;
-    if (sender.id !== chrome.runtime.id || sender.tab) return;
-    sendResponse({ sent: !!(link && link.send(message.bridgeEvent)) });
-    return true;
-});
-
 connectWS();
 // Health check guard every 10s to recover from suspended PC sleep states
 setInterval(() => {
