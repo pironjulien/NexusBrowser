@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 - Development dependency: pyright 1.1.407 → 1.1.414.
 
+### Fixed
+- Emergency stop: the remaining time is now bounded to [0, HOLD_S]; floating-point rounding could report
+  120.00000000000003 s, above the 120 s hold.
+
 ## [2.17.0] - 2026-10-20
 
 ### Added

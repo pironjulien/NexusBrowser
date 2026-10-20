@@ -96,9 +96,10 @@ def read_file() -> None:
 
 
 def remaining_s() -> float:
-    """Secondes d'arrêt restantes (0 : aucun arrêt), fichier relu d'abord."""
+    """Secondes d'arrêt restantes, bornées à [0, HOLD_S] (0 : aucun arrêt), fichier relu d'abord. La borne haute
+    absorbe l'arrondi flottant de « _now() + secondes - _now() » (120.00000000000003 vu en CI)."""
     read_file()
-    return max(_latched_until - _now(), 0.0)
+    return min(max(_latched_until - _now(), 0.0), HOLD_S)
 
 
 def message(remaining: float | None = None) -> str:
