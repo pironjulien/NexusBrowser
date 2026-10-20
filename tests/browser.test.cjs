@@ -4188,7 +4188,30 @@ test("fenêtre de l'icône : lecture seule (état du pont, groupes des agents), 
     await settle();
     assert.deepEqual(plain(sent), [{target: 'background', getStatus: true}]);
     assert.equal(elements.version.textContent, 'v9.9.9');
-    assert.equal(elements.bridge.textContent, 'Pont local connecté');
+    assert.equal(elements.bridge.textContent, 'Pont connecté');
+    assert.equal(elements.bridge.className, 'state ok');
     assert.deepEqual(elements.agents.children.map(li => li.children.map(c => c.textContent)),
         [['Claude', '2 onglets'], ['Codex', 'aucun'], ['Antigravity', 'aucun']]);
+});
+
+test("logo de travail : dessiné dans l'onglet regardé pendant une commande d'agent, jamais pour un battement", async () => {
+    const h = harness();
+    const drawn = () => h.scriptCalls.filter(c => c.name === 'drawBusyIndicator');
+    await h.run('heartbeat', {}, AGENT_A);
+    assert.equal(drawn().length, 0);
+    assert.equal((await h.run('evaluate', {tabId: 1, code: '1'}, AGENT_A)).data, 1);
+    await settle();
+    assert.equal(drawn().length, 1);
+    assert.deepEqual(plain(drawn()[0].target), {tabId: 1, frameIds: [0]});
+    assert.equal(drawn()[0].world, 'ISOLATED');
+    assert.equal(drawn()[0].args[0], true);
+    assert.match(drawn()[0].args[2], /au travail$/);
+    // Commande suivante dans le même onglet regardé : pas de nouveau dessin.
+    await h.run('evaluate', {tabId: 1, code: '2'}, AGENT_A);
+    await settle();
+    assert.equal(drawn().length, 1);
+    // Fin du délai sans commande : le logo est retiré.
+    h.evalInContext('clearTimeout(busyHideTimer); busyHideTimer = null; refreshBusyIndicator();');
+    await settle();
+    assert.equal(drawn().at(-1).args[0], false);
 });

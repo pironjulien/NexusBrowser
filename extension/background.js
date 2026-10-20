@@ -16,7 +16,7 @@ const AGY_FEATURES = [
     "network-log", "wait-download", "dialogs", "bridge-auth",
     "content-export", "gsuite-export", "youtube-transcript", "explicit-tab-id", "url-masking",
     "tab-ownership", "cdp-allowlist", "isolated-world", "body-masking", "cookie-names-only", "stop-cancel",
-    "network-record", "page-coordinates-capture",
+    "network-record", "page-coordinates-capture", "busy-indicator",
     "orphan-tabs", "cdp-page-world", "local-cookie-values", "body-masking-allowlist",
     "sensitive-field-masking", "cdp-reload-no-script", "ax-value-masking", "capture-screencast",
     "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree",
@@ -685,6 +685,10 @@ async function handleCommand(req) {
     if (refusal) return { error: refusal };
     const tabId = requestedTabId(params);
     if (tabId !== null) tabCommandsInFlight.set(tabId, (tabCommandsInFlight.get(tabId) || 0) + 1);
+    // Travail d'agent visible pour l'utilisateur (logo qui tourne) : commandes de page et ouverture d'onglet, jamais
+    // les battements ni les listes, qui tournent en continu.
+    const busyAgent = client && (tabId !== null || action === "create_tab") ? client.agent : null;
+    if (busyAgent) busyStart(busyAgent);
     let result;
     try {
         result = await routeCommand({ action, params }, client);
@@ -694,6 +698,7 @@ async function handleCommand(req) {
             if (left > 0) tabCommandsInFlight.set(tabId, left);
             else tabCommandsInFlight.delete(tabId);
         }
+        if (busyAgent) busyEnd(busyAgent);
     }
     const visible = tabId !== null && ownedBy(tabOwners.get(tabId), client) ? tabId : null;
     // Evaluation may legitimately return an object containing an error field.
@@ -3064,6 +3069,133 @@ function notifyTabStatus(tabId, text, autoHideMs = 3000, agent = undefined) {
         const pending = chrome.tabs.sendMessage(tabId, { nexusPill: { agent: who, text: String(text).slice(0, 80), autoHideMs } }, { frameId: 0 });
         if (pending && typeof pending.catch === "function") pending.catch(() => {});
     } catch (_) {}
+}
+
+// -----------------------------------------------------------------------------
+// Indicateur « agent au travail » : le logo NexusBrowser tourne sur lui-même en bas à droite de l'onglet que
+// l'utilisateur regarde (les agents travaillent dans des onglets de fond), comme un écran de chargement de jeu, et un
+// point sur l'icône de la barre d'outils le dit aussi sur les pages internes de Chrome, où rien ne s'affiche. Dessiné
+// par chrome.scripting (monde isolé) : il marche aussi dans un onglet ouvert avant une mise à jour de l'extension, dont
+// le script de contenu ne reçoit plus de messages. Affiché tout de suite, retiré après un court délai sans commande.
+// -----------------------------------------------------------------------------
+const BUSY_LINGER_MS = 1618;
+const busyAgents = new Map();  // agent → commandes en cours
+let busyShownTab = null;
+let busyHideTimer = null;
+let busyLogo = null;  // logo en data: URL, lu une fois (aucune ressource exposée aux pages)
+
+function busyStart(agent) {
+    busyAgents.set(agent, (busyAgents.get(agent) || 0) + 1);
+    if (busyHideTimer) { clearTimeout(busyHideTimer); busyHideTimer = null; }
+    refreshBusyIndicator();
+}
+
+function busyEnd(agent) {
+    const left = (busyAgents.get(agent) || 1) - 1;
+    if (left > 0) busyAgents.set(agent, left);
+    else busyAgents.delete(agent);
+    if (busyAgents.size || busyHideTimer) return;
+    busyHideTimer = setTimeout(() => { busyHideTimer = null; refreshBusyIndicator(); }, BUSY_LINGER_MS);
+}
+
+async function busyLogoUrl() {
+    if (busyLogo) return busyLogo;
+    try {
+        const bytes = new Uint8Array(await (await fetch(chrome.runtime.getURL("icons/logo96.png"))).arrayBuffer());
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        busyLogo = `data:image/png;base64,${btoa(binary)}`;
+    } catch (_) {
+        busyLogo = "";
+    }
+    return busyLogo;
+}
+
+/** Exécutée DANS l'onglet (monde isolé) : autonome, sans variable extérieure. */
+function drawBusyIndicator(on, logo, label) {
+    const ID = "__nexus_busy";
+    let host = document.getElementById(ID);
+    if (!on) {
+        if (host) {
+            host.style.opacity = "0";
+            host.style.transform = "scale(0.6)";
+            setTimeout(() => { const h = document.getElementById(ID); if (h && h.style.opacity === "0") h.remove(); }, 300);
+        }
+        return true;
+    }
+    if (!host) {
+        host = document.createElement("div");
+        host.id = ID;
+        Object.assign(host.style, {
+            position: "fixed", right: "28px", bottom: "28px", width: "72px", height: "72px", zIndex: "2147483647",
+            pointerEvents: "none", opacity: "0", transform: "scale(0.6)", perspective: "320px",
+            transition: "opacity 0.3s ease-out, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)"
+        });
+        // Racine fermée : la page ne lit ni ne restyle l'indicateur.
+        const root = host.attachShadow({ mode: "closed" });
+        const halo = document.createElement("div");
+        Object.assign(halo.style, {
+            position: "absolute", inset: "-10px", borderRadius: "50%",
+            background: "radial-gradient(circle, rgba(66, 133, 244, 0.55), rgba(155, 114, 203, 0.25) 55%, transparent 72%)"
+        });
+        const coin = document.createElement("div");
+        Object.assign(coin.style, { position: "absolute", inset: "0", transformStyle: "preserve-3d" });
+        const face = document.createElement("div");
+        Object.assign(face.style, {
+            position: "absolute", inset: "0", borderRadius: "50%", backfaceVisibility: "visible",
+            background: logo ? `center / cover no-repeat url("${logo}")` : "#1e1f20",
+            boxShadow: "0 0 0 2px rgba(255, 255, 255, 0.18), 0 8px 22px rgba(0, 0, 0, 0.55)"
+        });
+        coin.appendChild(face);
+        root.append(halo, coin);
+        document.documentElement.appendChild(host);
+        // Le logo roule sur lui-même (axe vertical), le halo respire.
+        coin.animate([{ transform: "rotateY(0deg)" }, { transform: "rotateY(360deg)" }],
+            { duration: 1618, iterations: Infinity, easing: "cubic-bezier(0.45, 0, 0.55, 1)" });
+        halo.animate([{ opacity: 0.55, transform: "scale(0.92)" }, { opacity: 1, transform: "scale(1.08)" }],
+            { duration: 809, iterations: Infinity, direction: "alternate", easing: "ease-in-out" });
+    }
+    host.title = label;
+    requestAnimationFrame(() => { host.style.opacity = "1"; host.style.transform = "scale(1)"; });
+    setTimeout(() => { host.style.opacity = "1"; host.style.transform = "scale(1)"; }, 50);
+    return true;
+}
+
+async function drawBusy(tabId, on) {
+    if (!chrome.scripting?.executeScript) return;
+    const label = `${[...busyAgents.keys()].slice(0, 3).join(", ")} au travail`;
+    try {
+        await chrome.scripting.executeScript({
+            target: { tabId, frameIds: [0] }, world: "ISOLATED", func: drawBusyIndicator,
+            args: [on, on ? await busyLogoUrl() : "", label]
+        });
+    } catch (_) {}  // page interne de Chrome, Web Store, PDF : le point de l'icône suffit
+}
+
+async function refreshBusyIndicator() {
+    if (typeof chrome === "undefined" || !chrome.tabs?.query) return;
+    const on = busyAgents.size > 0;
+    try {
+        chrome.action?.setBadgeBackgroundColor?.({ color: "#4285f4" });
+        chrome.action?.setBadgeText?.({ text: on ? "•" : "" });
+    } catch (_) {}
+    let target = null;
+    if (on) {
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+            target = tab?.id ?? null;
+        } catch (_) {}
+    }
+    if (busyShownTab !== null && busyShownTab !== target) drawBusy(busyShownTab, false);
+    const already = on && target !== null && busyShownTab === target;
+    busyShownTab = on ? target : null;
+    if (on && target !== null && !already) await drawBusy(target, true);
+}
+
+if (typeof chrome !== "undefined") {
+    // L'utilisateur change d'onglet ou de fenêtre pendant que l'agent travaille : le logo le suit.
+    chrome.tabs?.onActivated?.addListener?.(() => { if (busyAgents.size) refreshBusyIndicator(); });
+    chrome.windows?.onFocusChanged?.addListener?.(() => { if (busyAgents.size) refreshBusyIndicator(); });
 }
 
 /** Point visé par un vrai clic, montré dans l'onglet (même canal que la pastille). */

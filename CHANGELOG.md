@@ -5,6 +5,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.17.0] - 2026-10-20
+
+### Added
+- Working indicator: while an agent runs a page command or opens a tab, the NexusBrowser logo spins on itself
+  (72 px, like a game loading screen, with a breathing glow) in the bottom right corner of the tab the user is
+  looking at (agents work in background tabs), and follows the user across tabs and windows. Drawn by
+  `chrome.scripting` in the isolated world and a closed shadow root, click-through, so it also shows in tabs opened
+  before an extension update (their content script no longer receives messages); the logo is passed as a data URL,
+  no resource is exposed to pages. A dot on the toolbar icon says the same on Chrome pages where nothing can be
+  drawn. Hidden 1.6 s after the last command; heartbeats and tab lists never show it.
+
+### Changed
+- Popup: the emergency stop line reads "Tout arrêter 2 min : Ctrl+Alt+Maj+Échap". The tab status pill sits left of
+  the spinning logo.
+
+## [2.16.1] - 2026-10-20
+
+### Changed
+- Extension icon: the julienpiron.fr π emblem (the bridge serves the three agents) instead of the Antigravity glyph,
+  which is removed.
+- Toolbar popup redrawn after Gemini's home screen: dark background with a soft blue glow, Google Sans, the bridge
+  state as a centred headline, the agents in one rounded surface.
+
 ## [2.16.0] - 2026-10-20
 
 ### Added

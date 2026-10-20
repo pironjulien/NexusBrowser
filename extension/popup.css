@@ -1,100 +1,124 @@
-/* Fenêtre de l'icône NexusBrowser : état du pont et onglets des agents (habillage inspiré de Gemini, palette propre).
-   Clair ou sombre selon le système. */
+/* Fenêtre de l'icône NexusBrowser : état du pont et onglets des agents. Habillage calqué sur Gemini (fond sombre,
+   halo bleu, Google Sans, surfaces arrondies) ; clair ou sombre selon le système. */
 :root {
-    color-scheme: light dark;
-    --bg: #ffffff;
-    --surface: #f0f4f9;
-    --text: #1f1f1f;
-    --muted: #5f6368;
-    --border: #dde3ea;
-    --ok: #188038;
-    --ok-bg: #e6f4ea;
-    --off: #b06000;
-    --off-bg: #fef7e0;
+    color-scheme: dark light;
+    --bg: #131314;
+    --surface: #1e1f20;
+    --surface-hover: #282a2c;
+    --text: #e3e3e3;
+    --muted: #9aa0a6;
+    --line: #2d2e30;
+    --glow: rgba(46, 86, 196, 0.42);
+    --ok: #6dd58c;
+    --off: #fcc934;
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
     :root {
-        --bg: #131314;
-        --surface: #1e1f20;
-        --text: #e3e3e3;
-        --muted: #a8abb0;
-        --border: #3c4043;
-        --ok: #6dd58c;
-        --ok-bg: #1b3a24;
-        --off: #fcc934;
-        --off-bg: #3a2f10;
+        --bg: #ffffff;
+        --surface: #f0f4f9;
+        --surface-hover: #e9eef6;
+        --text: #1f1f1f;
+        --muted: #5f6368;
+        --line: #e3e7ed;
+        --glow: rgba(66, 133, 244, 0.18);
+        --ok: #188038;
+        --off: #b06000;
     }
 }
 
 * { box-sizing: border-box; }
 
+html { overflow: hidden; background: var(--bg); }
+
 body {
-    margin: 0;
-    width: 300px;
+    position: relative;
+    margin: 0 auto;
+    width: 320px;
+    overflow: hidden;
     background: var(--bg);
     color: var(--text);
-    font: 13px/1.5 "Google Sans Text", "Google Sans", Roboto, "Segoe UI", system-ui, sans-serif;
+    font: 14px/1.45 "Google Sans Text", "Google Sans", Roboto, "Segoe UI", system-ui, sans-serif;
 }
+
+/* Halo bleu diffus derrière le contenu, comme l'accueil de Gemini */
+.glow {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 85% 60% at 50% 48%, var(--glow), transparent 72%);
+    pointer-events: none;
+}
+
+.top, main, .foot { position: relative; }
 
 .top {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 12px 14px 10px;
-    border-bottom: 1px solid var(--border);
+    gap: 10px;
+    padding: 14px 16px 6px;
 }
-.star { width: 20px; height: 20px; flex: none; }
-.brand {
-    font-weight: 500;
-    font-size: 15px;
-    background: linear-gradient(90deg, #4f7cff, #a35cff 55%, #ff7a9a);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-}
+.logo { width: 26px; height: 26px; border-radius: 50%; }
+.brand { font-family: "Google Sans", Roboto, "Segoe UI", system-ui, sans-serif; font-size: 17px; }
 .version { margin-left: auto; color: var(--muted); font-size: 12px; }
 
-main { padding: 12px 14px 14px; }
+main { padding: 18px 16px 4px; }
 
-.pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 12px;
-    border-radius: 999px;
-    font-weight: 500;
-}
-.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-.pill.ok { color: var(--ok); background: var(--ok-bg); }
-.pill.off { color: var(--off); background: var(--off-bg); }
-
-h2 {
-    margin: 14px 0 6px;
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted);
-}
-
-.agents { list-style: none; margin: 0; padding: 0; }
-.agents li {
+.state {
     display: flex;
-    justify-content: space-between;
-    padding: 7px 12px;
-    margin-bottom: 4px;
-    border-radius: 12px;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin: 0;
+    font-family: "Google Sans", Roboto, "Segoe UI", system-ui, sans-serif;
+    font-size: 21px;
+    font-weight: 400;
+    letter-spacing: -0.01em;
+}
+.state::before {
+    content: "";
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--muted);
+}
+.state.ok::before { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+.state.off::before { background: var(--off); }
+
+.detail { margin: 6px 0 0; text-align: center; color: var(--muted); font-size: 12.5px; }
+
+/* Liste des agents : une surface arrondie, comme la zone de saisie de Gemini */
+.agents {
+    list-style: none;
+    margin: 18px 0 0;
+    padding: 6px;
+    border-radius: 24px;
     background: var(--surface);
 }
-.agents .n { color: var(--muted); }
+.agents li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 18px;
+}
+.agents li:hover { background: var(--surface-hover); }
+.agents .count { margin-left: auto; color: var(--muted); font-size: 13px; }
+.agents .active { color: var(--text); }
 
-.muted { color: var(--muted); margin: 6px 0 0; }
-.foot { margin-top: 12px; font-size: 12px; }
+.foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 16px 16px;
+    color: var(--muted);
+    font-size: 12px;
+}
+.spark { width: 16px; height: 16px; flex: none; }
 kbd {
     font: inherit;
     font-size: 11px;
-    padding: 0 4px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
 }

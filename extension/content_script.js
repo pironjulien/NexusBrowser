@@ -65,7 +65,7 @@ function showPill(detail) {
         pill = document.createElement("div");
         pill.id = "__nexus_status_pill";
         Object.assign(pill.style, {
-            position: "fixed", bottom: "16px", right: "16px", zIndex: "2147483647", display: "flex",
+            position: "fixed", bottom: "50px", right: "116px", zIndex: "2147483647", display: "flex",
             alignItems: "center", gap: "8px", padding: "6px 12px", background: "rgba(24, 24, 27, 0.92)",
             border: "1px solid rgba(255, 255, 255, 0.18)", borderRadius: "8px", boxShadow: "0 4px 16px rgba(0, 0, 0, 0.35)",
             color: "#f4f4f5", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif", fontSize: "12px",

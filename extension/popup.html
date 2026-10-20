@@ -6,27 +6,31 @@
     <link rel="stylesheet" href="popup.css">
 </head>
 <body>
+    <div class="glow" aria-hidden="true"></div>
     <header class="top">
-        <svg class="star" viewBox="0 0 24 24" aria-hidden="true">
-            <defs>
-                <linearGradient id="star-ink" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0" stop-color="#4f7cff"/>
-                    <stop offset="0.55" stop-color="#a35cff"/>
-                    <stop offset="1" stop-color="#ff7a9a"/>
-                </linearGradient>
-            </defs>
-            <path fill="url(#star-ink)" d="M12 1.5c.7 5.6 4.9 9.8 10.5 10.5-5.6.7-9.8 4.9-10.5 10.5C11.3 16.9 7.1 12.7 1.5 12 7.1 11.3 11.3 7.1 12 1.5z"/>
-        </svg>
+        <img class="logo" src="icons/logo96.png" alt="">
         <span class="brand">NexusBrowser</span>
         <span id="version" class="version"></span>
     </header>
     <main>
-        <div id="bridge" class="pill off">Pont : lecture…</div>
-        <p id="bridge-detail" class="muted" hidden></p>
-        <h2>Onglets des agents</h2>
-        <ul id="agents" class="agents"></ul>
-        <p class="muted foot">Arrêt d'urgence de tous les agents : <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Maj</kbd>+<kbd>Échap</kbd></p>
+        <h1 id="bridge" class="state">Lecture du pont…</h1>
+        <p id="bridge-detail" class="detail" hidden></p>
+        <ul id="agents" class="agents" aria-label="Onglets des agents"></ul>
     </main>
+    <footer class="foot">
+        <svg class="spark" viewBox="0 0 24 24" aria-hidden="true">
+            <defs>
+                <linearGradient id="spark-ink" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" stop-color="#4285f4"/>
+                    <stop offset="0.4" stop-color="#9b72cb"/>
+                    <stop offset="0.75" stop-color="#d96570"/>
+                    <stop offset="1" stop-color="#f6ad2b"/>
+                </linearGradient>
+            </defs>
+            <path fill="url(#spark-ink)" d="M12 1.5c.7 5.6 4.9 9.8 10.5 10.5-5.6.7-9.8 4.9-10.5 10.5C11.3 16.9 7.1 12.7 1.5 12 7.1 11.3 11.3 7.1 12 1.5z"/>
+        </svg>
+        <span>Tout arrêter 2 min : <kbd>Ctrl+Alt+Maj+Échap</kbd></span>
+    </footer>
     <script src="popup.js"></script>
 </body>
 </html>

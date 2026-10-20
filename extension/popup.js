@@ -9,15 +9,15 @@ function text(id, value) {
 }
 
 async function showBridge() {
-    const pill = document.getElementById("bridge");
+    const state = document.getElementById("bridge");
     const detail = document.getElementById("bridge-detail");
     let status = null;
     try {
         status = await chrome.runtime.sendMessage({ target: "background", getStatus: true });
     } catch (_) {}
     const ok = !!(status && status.connected);
-    pill.className = `pill ${ok ? "ok" : "off"}`;
-    pill.textContent = ok ? "Pont local connecté" : "Pont local injoignable";
+    state.className = `state ${ok ? "ok" : "off"}`;
+    state.textContent = ok ? "Pont connecté" : "Pont en attente";
     const reason = ok ? "" : (status && status.authError) || "Il démarre à la première commande d'un agent.";
     detail.hidden = !reason;
     detail.textContent = reason;
@@ -40,7 +40,7 @@ async function showAgents() {
         label.textContent = name;
         const n = document.createElement("span");
         const count = counts.get(name);
-        n.className = "n";
+        n.className = count ? "count active" : "count";
         n.textContent = count ? `${count} onglet${count > 1 ? "s" : ""}` : "aucun";
         item.append(label, n);
         return item;
