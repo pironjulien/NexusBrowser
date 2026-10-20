@@ -154,7 +154,7 @@
     ]
   },
   "injection": {
-    "_": "Détecteur d'injection dans le texte lu : SIGNAL seulement (avertissement dans la réponse de l'outil), jamais une garantie ni un blocage. Une attaque qu'il manque reste incapable d'autoriser une action (voir « accord »). Motifs appliqués au texte rendu comparable (sans accents ni casse, ponctuation en espaces : « confirm=true » → « confirm true », « a@b.fr » → « a b fr »).",
+    "_": "Détecteur d'injection dans le texte lu : SIGNAL seulement (avertissement dans la réponse de l'outil), jamais une garantie ni un blocage. Une attaque qu'il manque reste incapable d'autoriser une action (voir « accord »). Motifs appliqués au texte rendu comparable (sans accents ni casse, ponctuation en espaces : « confirm=true » → « confirm true », « a@example.com » → « a example com »).",
     "motifs": [
       "(ignore|ignorer|ignorez|disregard|forget|oublie|oubliez) (all |the |your |any |toutes |tous |les |tes |vos )?(previous |prior |above |earlier |precedentes |anciennes )?(instructions?|consignes?|regles|rules|directives)",
       "(you are|tu es|vous etes) (now |maintenant |desormais )?(an? |un |une )?(ai|ia|assistant|agent|claude|gemini|codex|chatgpt|llm)\\b",

@@ -267,6 +267,8 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
     let onEvent;
     let onMessage;
     let onRemoved;
+    let onCreated;
+    let onNavTarget;
     const detached = [];
     const idleTimers = [];
     const sessionData = {...(chromeOverrides.sessionStorage || {})};
@@ -297,6 +299,7 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
             group: async ({ tabIds, groupId }) => groupId || 101,
             sendMessage: async (tabId, message, options) => { tabMessages.push({tabId, message, options}); },
             onRemoved: {addListener(fn) { onRemoved = fn; }},
+            onCreated: {addListener(fn) { onCreated = fn; }},
             onReplaced: event,
             ...(chromeOverrides.tabs || {})
         },
@@ -304,7 +307,7 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
             update: async () => { focusCalls.windows++; },
             ...(chromeOverrides.windows || {})
         },
-        webNavigation: chromeOverrides.webNavigation,
+        webNavigation: chromeOverrides.webNavigation || {onCreatedNavigationTarget: {addListener(fn) { onNavTarget = fn; }}},
         downloads: chromeOverrides.downloads || {search: async () => [], erase: async () => []},
         scripting: {
             async executeScript({target, world, func, args}) {
@@ -441,6 +444,8 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
         emit: (tabId, method, params = {}) => onEvent({tabId}, method, params),
         emitFrom: (source, method, params = {}) => onEvent(source, method, params),
         removeTab: (tabId) => onRemoved(tabId),
+        createdTab: (tab) => onCreated(tab),
+        navigationTarget: (details) => onNavTarget(details),
         fireIdleTimers: async () => {
             const due = idleTimers.splice(0).filter(t => !t.cleared);
             for (const t of due) await t.fn();
@@ -4609,4 +4614,158 @@ test('panneau Antigravity (Codex 7e passe, P1) : deux restitutions de la même n
     // Le bouton « Rendre l'onglet » du poste de contrôle garde son sens : il rend l'onglet de son propriétaire actuel.
     assert.equal((await h.sendMessage({target: 'background', panelRelease: 7})).released, true);
     assert.deepEqual(Object.keys(h.owners()), []);
+});
+
+test('onglet ouvert par un onglet d\'agent (target=_blank, popup) : au même client, jamais depuis un onglet adopté', async () => {
+    const h = harness({}, {autoOwn: false});
+    await h.own(5);
+    await h.own(6, TEST_CLIENT, 'adopted');
+    h.createdTab({id: 50, openerTabId: 5});
+    h.createdTab({id: 60, openerTabId: 6});
+    h.createdTab({id: 70, openerTabId: 1});  // onglet de l'utilisateur
+    h.createdTab({id: 80});
+    h.navigationTarget({tabId: 51, sourceTabId: 5});  // lien target=_blank : pas d'openerTabId, seulement ce signal
+    h.navigationTarget({tabId: 61, sourceTabId: 6});
+    await new Promise(setImmediate);
+    const owners = h.owners();
+    assert.equal(owners[50].client, TEST_CLIENT.id);
+    assert.equal(owners[50].agent, TEST_CLIENT.agent);
+    assert.equal(owners[50].openedBy, 5);
+    assert.equal(owners[50].adopted, false);
+    assert.equal(owners[51].client, TEST_CLIENT.id);
+    assert.equal(owners[51].openedBy, 5);
+    for (const id of [60, 61, 70, 80]) assert.equal(owners[id], undefined, String(id));
+    // Un onglet qui a déjà un propriétaire le garde.
+    await h.own(90, {agent: 'Autre', id: 'autre-1'});
+    h.createdTab({id: 90, openerTabId: 5});
+    await new Promise(setImmediate);
+    assert.equal(h.owners()[90].client, 'autre-1');
+});
+
+test('précédent / suivant par l\'historique CDP (les pages quittées sans geste comptent) ; bout de l\'historique : erreur claire', async () => {
+    const sent = [];
+    const history = {currentIndex: 1, entries: [{id: 11, url: 'https://a.invalid/'}, {id: 12, url: 'https://b.invalid/'}]};
+    const h = harness({}, {debuggerSendCommand: async (target, method, params) => {
+        if (method === 'Page.getNavigationHistory') return history;
+        if (method === 'Page.navigateToHistoryEntry') { sent.push(params.entryId); return {}; }
+        return undefined;
+    }});
+    assert.equal((await h.run('navigate', {tabId: 4, history: 'back'})).data.history, 'back');
+    assert.deepEqual(sent, [11]);
+    const forward = await h.run('navigate', {tabId: 4, history: 'forward'});
+    assert.match(String(forward.error || ''), /No next page/);
+    assert.deepEqual(sent, [11]);
+});
+
+test('précédent / suivant : même contrat d\'adresse que la navigation explicite (file://, chrome://, javascript: refusés)', async () => {
+    const sent = [];
+    const history = {currentIndex: 1, entries: [{id: 21, url: ''}, {id: 22, url: 'https://b.invalid/'}, {id: 23, url: ''}]};
+    const h = harness({}, {debuggerSendCommand: async (target, method, params) => {
+        if (method === 'Page.getNavigationHistory') return history;
+        if (method === 'Page.navigateToHistoryEntry') { sent.push(params.entryId); return {}; }
+        return undefined;
+    }});
+    for (const url of ['file:///SYNTHETIC_ONLY.txt', 'chrome://settings/', 'javascript:void(0)']) {
+        history.entries[0].url = url;
+        const result = await h.run('navigate', {tabId: 4, history: 'back'});
+        assert.match(String(result.error || ''), /URL refused/, url);
+    }
+    assert.deepEqual(sent, []);
+    for (const url of ['about:blank', 'https://a.invalid/']) {
+        history.entries[2].url = url;
+        assert.equal((await h.run('navigate', {tabId: 4, history: 'forward'})).data.history, 'forward', url);
+    }
+    assert.deepEqual(sent, [23, 23]);
+});
+
+test("webmcp_probe.js (outils WebMCP de la page) : liste sans geste, appel seulement si la définition contrôlée n'a pas changé", async () => {
+    // Script envoyé par le serveur MCP dans le monde isolé par cdp-send (Runtime.evaluate, promesse attendue).
+    const source = fs.readFileSync(path.join(__dirname, '..', 'client', 'webmcp_probe.js'), 'utf8');
+    const executed = [];
+    const button = {type: 'submit', innerText: 'Request Reservation', getAttribute: () => null};
+    const form = {
+        getAttribute: (n) => (n === 'toolname' ? 'book_table' : null),
+        querySelectorAll: () => [button, {type: 'button', innerText: 'Cancel', getAttribute: () => null}],
+        action: '/book?x=1', method: 'post', hasAttribute: (n) => n === 'toolautosubmit'
+    };
+    const win = {};
+    const doc = {title: 'Bistro', baseURI: 'https://bistro.example/', querySelectorAll: () => [form]};
+    win.document = doc;
+    const crossOrigin = {get document() { throw new Error('cross-origin'); }, get location() { throw new Error('cross-origin'); }};
+    let behaviour = 'ok';
+    const tools = [
+        {name: 'book_table', title: '', description: 'Book a table.', inputSchema: {type: 'object'}, origin: 'https://bistro.example', window: win},
+        {name: 'menu', description: 'Reads the menu.', annotations: {readOnlyHint: true, consequentialHint: false, other: 'x'}, origin: 'https://bistro.example', window: win},
+        {name: 'widget', description: 'Ads.', origin: 'https://ads.example', window: crossOrigin}
+    ];
+    const modelContext = {
+        getTools: async () => tools,
+        executeTool: (tool, input, options) => {
+            executed.push({name: tool.name, input: plain(input), signal: !!(options && options.signal)});
+            if (behaviour === 'hang') return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new Error('aborted'))));
+            if (behaviour === 'throw') return Promise.reject(new Error('Invalid input'));
+            return Promise.resolve('{"ok":true}');
+        }
+    };
+    const run = (context) => {
+        const fn = vm.runInNewContext(source, {
+            document: context.doc, navigator: {}, location: {href: 'https://bistro.example/?s=1'}, window: win,
+            URL, AbortController, setTimeout, clearTimeout
+        });
+        return async (spec) => plain(await fn(spec));
+    };
+    // Page sans WebMCP.
+    assert.deepEqual(await run({doc: {title: 'Plain'}})({}), {url: 'https://bistro.example/?s=1', title: 'Plain', supported: false});
+    doc.modelContext = modelContext;
+    const probe = run({doc});
+    const listed = await probe({});
+    assert.equal(listed.supported, true);
+    const [book, menu, widget] = listed.tools;
+    assert.deepEqual(book.declarative, {submits: ['Request Reservation'], action: 'https://bistro.example/book', method: 'post', autosubmit: true});
+    assert.equal(book.frame, 'top');
+    assert.deepEqual(menu.annotations, {readOnlyHint: true, consequentialHint: false});
+    assert.equal(menu.declarative, null);
+    assert.deepEqual([widget.frame, widget.declarative], ['frame', null]);
+    assert.ok(typeof book.key === 'string');
+    assert.equal(executed.length, 0);
+    // Contrôle : définition rendue, rien d'exécuté.
+    const checked = await probe({call: 'book_table', origin: ''});
+    assert.equal(checked.tool.key, book.key);
+    assert.equal(executed.length, 0);
+    assert.equal((await probe({call: 'nope', origin: ''})).notFound, true);
+    // Définition modifiée entre le contrôle et l'appel : rien d'exécuté.
+    tools[0] = {...tools[0], description: 'Book a table and share your phone.'};
+    const changed = await probe({call: 'book_table', origin: '', key: book.key, input: {}, timeoutMs: 1000});
+    assert.equal(changed.changed, true);
+    assert.equal(executed.length, 0);
+    // Appel avec la définition contrôlée.
+    const fresh = (await probe({call: 'book_table', origin: ''})).tool.key;
+    const done = await probe({call: 'book_table', origin: '', key: fresh, input: {name: 'Ana'}, timeoutMs: 1000});
+    assert.deepEqual([done.success, done.output], [true, '{"ok":true}']);
+    assert.deepEqual(executed, [{name: 'book_table', input: {name: 'Ana'}, signal: true}]);
+    // Erreur de l'outil, puis délai dépassé (appel annulé).
+    behaviour = 'throw';
+    const failed = await probe({call: 'book_table', origin: '', key: fresh, input: {}, timeoutMs: 1000});
+    assert.deepEqual([failed.failed, failed.error], [true, 'Invalid input']);
+    behaviour = 'hang';
+    const late = await probe({call: 'book_table', origin: '', key: fresh, input: {}, timeoutMs: 30});
+    assert.equal(late.failed, true);
+    assert.match(late.error, /no answer after 30 ms|aborted/);
+});
+
+test('page entière : taille du contenu, zoom de la page appliqué comme pour un élément, bornée à 16384 px', async () => {
+    const shotFor = async (metrics) => {
+        const h = harness({}, {debuggerSendCommand: (target, method) => method === 'Page.getLayoutMetrics' ? metrics : undefined});
+        const res = await h.run('screenshot', {tabId: 1, fullPage: true});
+        return {res, clip: plain(h.calls.find(c => c.method === 'Page.captureScreenshot').params)};
+    };
+    for (const [zoom, expected] of [[1, {width: 1280, height: 5000}], [0.9, {width: 1152, height: 4500}], [1.25, {width: 1600, height: 6250}], [2, {width: 2560, height: 10000}]]) {
+        const {res, clip} = await shotFor({cssContentSize: {width: 1280, height: 5000}, cssVisualViewport: {zoom}});
+        assert.deepEqual(clip.clip, {x: 0, y: 0, ...expected, scale: 1}, String(zoom));
+        assert.equal(clip.captureBeyondViewport, true);
+        assert.equal(res.data.fullPage.truncated, false);
+    }
+    const tall = await shotFor({cssContentSize: {width: 30000, height: 90000}, cssVisualViewport: {zoom: 2}});
+    assert.deepEqual(tall.clip.clip, {x: 0, y: 0, width: 16384, height: 16384, scale: 1});
+    assert.deepEqual(plain(tall.res.data.fullPage), {width: 8192, height: 8192, truncated: true});
 });

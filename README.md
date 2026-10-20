@@ -10,9 +10,9 @@
 [![Python 3.14](https://img.shields.io/badge/python-3.14-blue?logo=python&logoColor=white)](pyproject.toml)
 [![MCP](https://img.shields.io/badge/MCP-server-7ee2a8)](https://modelcontextprotocol.io)
 
-[![NexusBrowser: your real Chrome, driven by an AI agent in a background tab.](docs/assets/banner.webp)](https://julienpiron.fr/nexusbrowser/)
+[![NexusBrowser: your real Chrome, driven by an AI agent in a background tab.](https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/docs/assets/banner.webp)](https://julienpiron.fr/nexusbrowser/)
 
-![NexusBrowser: an AI agent types into a form, picks an option and clicks in a background Chrome tab while the user keeps browsing](docs/assets/demo.webp)
+![NexusBrowser: an AI agent types into a form, picks an option and clicks in a background Chrome tab while the user keeps browsing](https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/docs/assets/demo.webp)
 
 **Your real Chrome, driven by AI agents in background tabs.** NexusBrowser lets Antigravity, Claude and Codex use
 the user's own Chrome (their sessions, their extensions) through one shared local bridge and one MCP server,
@@ -58,16 +58,18 @@ bridge shared by several agents.
 
 ## Tools
 
-48 MCP tools.
+52 MCP tools.
 
 | Area | Tools |
 | --- | --- |
-| Tabs | `browser_list_tabs`, `browser_active_tab` (read only), `browser_new_tab`, `browser_select_tab`, `browser_adopt_tab`, `browser_release_tab`, `browser_group_tabs`, `browser_close_tab`, `browser_reload`, `browser_navigate`, `browser_wait_load` |
+| Tabs | `browser_list_tabs`, `browser_active_tab` (read only), `browser_new_tab`, `browser_select_tab`, `browser_adopt_tab`, `browser_release_tab`, `browser_group_tabs`, `browser_close_tab`, `browser_reload`, `browser_navigate` (URL, back, forward), `browser_wait_load`, `browser_wait_for` (text or element appears or disappears) |
 | Input (trusted CDP events) | `browser_click`, `browser_semantic_click`, `browser_hover`, `browser_fill`, `browser_semantic_fill`, `browser_fill_form`, `browser_select_option`, `browser_check`, `browser_press_key`, `browser_type_keys`, `browser_drag_and_drop`, `browser_scroll`, `browser_upload`, `browser_handle_dialog` |
 | Finding elements | `browser_find` (Playwright-style locators: role, label, text, placeholder, test id, in every frame), `browser_interactive_map`, `browser_vision_inspect` and `browser_click_mark` (Set-of-Mark badges), `browser_axtree`, `browser_content`, `browser_check_handoff` (2FA, CAPTCHA) |
 | Network and downloads | `browser_network_record`, `browser_network_stop`, `browser_network_requests`, `browser_network_response`, `browser_wait_network_idle`, `browser_download_status`, `browser_wait_download`, `browser_get_cookies` |
-| Output | `browser_screenshot`, `browser_pdf`, `browser_export` (main content as Markdown, text or HTML), `browser_export_gsuite` (Google Docs, Sheets, Slides through Google's export URLs), `browser_youtube_transcript`, `browser_logs` |
+| Output | `browser_screenshot` (view, full page or element), `browser_pdf`, `browser_export` (main content as Markdown, text or HTML), `browser_export_gsuite` (Google Docs, Sheets, Slides through Google's export URLs), `browser_youtube_transcript`, `browser_logs` |
+| Site-provided tools (WebMCP) | `browser_webmcp_tools`, `browser_webmcp_call` (tools a page exposes through `document.modelContext`) |
 | Page access | `browser_eval`, `browser_cdp_send` (allowlisted commands) |
+| Several actions | `browser_batch` (up to 30 tool calls in one round trip, stops at the first error; each step keeps its own checks) |
 
 ## Install
 
@@ -106,7 +108,7 @@ Once the bridge and the extension are installed (above), any MCP client can also
 claude mcp add nexus-browser --scope user -e NEXUS_BROWSER_AGENT=Claude -- uvx nexus-browser
 ```
 
-Without the bridge, the server still starts and lists its 48 tools, and every call answers with a clear error that
+Without the bridge, the server still starts and lists its 52 tools, and every call answers with a clear error that
 points to the one-time install.
 
 ## Security (held by the extension and the bridge, not by the agent)
@@ -153,6 +155,14 @@ points to the one-time install.
   `untrusted_note` when the text looks like instructions aimed at an AI (a signal only). The CLI runs the same check
   but cannot carry a token from one command to the next (one process each): it refuses outward gestures with the
   summary and points to the MCP server; every other gesture stays free.
+- **WebMCP tools** (sites that expose their own tools to agents through `document.modelContext`, native in Chrome
+  149+ for sites in the origin trial): `browser_webmcp_tools` lists them and `browser_webmcp_call` runs one through
+  Chrome's own `getTools()` / `executeTool()`, evaluated by `cdp-send` in the extension's isolated world (the page
+  cannot replace them; no new extension action, no Chrome flag). The call goes through the same accord: a tool the
+  page marks `consequentialHint`, or whose name, title, description or form submit button carries an outward word, is
+  refused with the exact call (tool, origin, input with sensitive values masked but bound to the token, page) and a
+  one-time token. A tool marked `readOnlyHint` runs freely. The tool runs only if its definition did not change
+  since the check. Descriptions and outputs are page text (`untrusted_note`).
 - **Paths that do not go through the accord**: `browser_eval` and `browser_cdp_send` (`Runtime.evaluate`,
   `Input.dispatch*`) keep full page access by design and can click or submit without this check; the tool
   descriptions and the server instructions tell the model never to use them for an outward action. Bare coordinates
@@ -214,6 +224,10 @@ Questions or concerns: open an issue on this repository.
   recipients shown as custom chips are read only when they carry an `email` attribute. The token proves that this
   exact action was described before running unchanged, not who said yes: the agent stays the only channel between
   the user and the tool.
+- WebMCP: the page's own `readOnlyHint` and `consequentialHint` are trusted as declared, and tools of a
+  cross-origin iframe are listed only when that frame exposes them to the top page (`exposedTo`), as the spec
+  requires. Chrome's CDP `WebMCP` domain (used by Chrome DevTools MCP) is not used: it needs Chrome started with
+  `--enable-features=DevToolsWebMCPSupport`.
 - Code comments are in French.
 
 ## Licence

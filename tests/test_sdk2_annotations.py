@@ -35,7 +35,7 @@ def test_server_runs_on_mcp_sdk_2():
 
 def test_every_tool_has_its_four_annotations():
     tools = _tools()
-    assert len(tools) == 48
+    assert len(tools) == 52
     # Même nombre dans le contrôle de la roue publiée (publish.yml) : 2.10.0 a d'abord échoué sur un 47 resté là.
     publish = (REPO_ROOT / ".github" / "workflows" / "publish.yml").read_text(encoding="utf-8")
     assert f"assert len(tools) == {len(tools)}, len(tools)" in publish
@@ -95,7 +95,8 @@ def test_annotations_match_what_each_tool_does():
 
 def test_read_only_hint_never_claims_an_action_the_bridge_blocks(monkeypatch):
     """Chaque outil dit « lecture seule » envoie au pont une commande de sa liste des lectures (permises pendant
-    l'arrêt d'urgence) ; seule exception assumée : get-cookies, qui ne modifie rien mais reste bloquée par l'arrêt."""
+    l'arrêt d'urgence) ; exceptions assumées, qui ne modifient rien mais restent bloquées par l'arrêt : get-cookies, et
+    la liste des outils WebMCP (getTools lu par cdp-send, que le pont compte parmi les actions)."""
     sent: list[str] = []
     monkeypatch.setattr(mcp_server, "call_bridge", lambda action, params, timeout=20.0: sent.append(action) or {})
     monkeypatch.setattr(mcp_server, "_default_capture_path", lambda prefix: None)
@@ -105,6 +106,7 @@ def test_read_only_hint_never_claims_an_action_the_bridge_blocks(monkeypatch):
         "output_path": None,
         "request_id": "1",
         "url": "https://example.invalid/",
+        "gone": True,  # browser_wait_for : répond dès la première lecture (aucun élément)
     }
     for name, tool in _tools().items():
         if not tool.annotations.read_only_hint:
@@ -120,7 +122,7 @@ def test_read_only_hint_never_claims_an_action_the_bridge_blocks(monkeypatch):
         sent.clear()
         function(**{key: value for key, value in samples.items() if key in accepted})
         assert len(sent) == 1, name
-        if sent[0] != "get-cookies":
+        if (name, sent[0]) not in {("browser_get_cookies", "get-cookies"), ("browser_webmcp_tools", "cdp-send")}:
             assert bridge_security.is_read_only_action(sent[0]), f"{name} -> {sent[0]}"
 
 

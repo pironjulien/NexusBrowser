@@ -5,7 +5,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-10-20
+
+### Added
+- Gaps closed after a tool-by-tool comparison with the most used browser MCP servers (Chrome DevTools MCP,
+  Playwright MCP, browser-use, Claude in Chrome, Blueprint MCP, real-browser-mcp) on 2026-10-20. 52 tools with WebMCP.
+- `browser_batch`: up to 30 tool calls in one round trip, in order, stopping at the first error. Each step is
+  validated against its own tool's schema and goes through its own checks: an outward gesture without the user's
+  accord stops the batch with its `accord_required` refusal; any unexpected failure of a step stops it cleanly.
+  The optional `tab_id` applies to every step that does not give its own.
+- Tabs opened BY an agent's own tab (target=_blank links, `window.open`, OAuth sign-in popups) belong to the same
+  agent session (`openedBy` in its ownership): the agent no longer loses the rest of its task. Never from a tab
+  adopted from the user or opened by the side panel, and never a tab that already has an owner.
+- `browser_wait_for`: waits until a visible element shows a text (or matches a locator) in any frame, or with
+  `gone=True` until none is left, polling the existing `find` (no new extension action). A page it cannot read
+  (blocking dialog) is an error, never taken for "gone".
+- `browser_navigate(url="back" | "forward")`: previous or next page of the agent's own tab history, read through
+  CDP (`Page.getNavigationHistory`): `chrome.tabs.goBack` skipped pages left without a user gesture, which is most
+  pages of an agent tab. The destination goes through the same address check as an explicit navigation: an adopted
+  tab whose history holds `file://`, `chrome://` or `javascript:` cannot step back onto it.
+- `browser_screenshot(full_page=True)`: the whole scrollable page (CSS content size, page zoom applied, height capped
+  and width capped at 16384 px with `fullPage.truncated`), sensitive fields masked as in every capture; refused with
+  `inline=True` (image too large for a response).
+- Deliberately left out: performance tracing, Lighthouse, emulation and memory tools (developer debugging, covered by
+  Chrome DevTools MCP), and coordinate clicks (Set-of-Mark marks already target what a vision model sees, with the
+  covered-element and accord checks).
+
+- **WebMCP: tools that a page exposes to agents itself** (`document.modelContext`, W3C Web Machine Learning CG
+  draft; native in Chrome 149+ on sites enrolled in the origin trial). `browser_webmcp_tools` lists them (name,
+  title, description, `inputSchema`, `readOnlyHint` / `consequentialHint` / `untrustedContentHint`, origin, frame,
+  and for a declarative tool its form's submit buttons and target). `browser_webmcp_call` runs one through Chrome's
+  own `getTools()` / `executeTool()` with a timeout that cancels it. Both go through the bridge's existing read
+  path (`client/webmcp_probe.js` evaluated by `cdp-send` in the extension's isolated world, so the page cannot
+  replace these functions): no new extension action, no Chrome flag, works with the extension already loaded.
+  Chrome's CDP `WebMCP` domain, used by Chrome DevTools MCP (`--categoryExperimentalWebmcp`) and Stagehand, is not
+  used: it needs Chrome started with `--enable-features=DevToolsWebMCPSupport`, which the user's own Chrome is not.
+- Same accord as clicks for WebMCP calls: a tool the page marks `consequentialHint`, or whose name, title,
+  description or form submit button carries an outward word of the shared policy (snake_case, camelCase and
+  conjugated English verbs such as "Sends" or "Publishes" are normalised first), is refused with a summary of the
+  exact call (tool, origin, input with sensitive values masked but bound to the token by a fingerprint, recipients,
+  form target, page) and a one-time token. Read-only tools (`readOnlyHint`) run freely. The tool runs only if its
+  definition is still the one that was checked. Tool lists and outputs are page text (`untrusted_note`). Both are
+  refused during the emergency stop (the bridge counts `cdp-send` as an action).
+- Tests: `tests/test_webmcp.py` (offline fake page: free read-only and neutral tools, accord flow, changed input or
+  masked value voids the token, single use, definition swapped after the check, ambiguous and unknown tools, page
+  injection, emergency stop) and a Node test of `webmcp_probe.js`.
+
 ### Changed
+- README: images by absolute URL, so they also show on PyPI.
 - README: the stale version line no longer hardcodes a number (the release and PyPI badges show it).
 
 ## [2.12.1] - 2026-10-20

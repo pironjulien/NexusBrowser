@@ -24,7 +24,7 @@ def test_initialize_and_list_tools(tmp_path):
             assert init.server_info.name == "nexus-browser"
             assert init.server_info.version == version
             tools = (await session.list_tools()).tools
-            assert len(tools) == 48
+            assert len(tools) == 52
             for tool in tools:
                 assert tool.annotations is not None and tool.annotations.title, tool.name
 

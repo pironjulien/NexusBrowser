@@ -19,7 +19,8 @@ const AGY_FEATURES = [
     "network-record", "control-panel", "page-coordinates-capture",
     "orphan-tabs", "cdp-page-world", "local-cookie-values", "body-masking-allowlist",
     "sensitive-field-masking", "cdp-reload-no-script", "ax-value-masking", "capture-screencast",
-    "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree"
+    "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree",
+    "history-navigation-cdp", "full-page-capture", "opener-tabs-webnav"
 ];
 
 let attachedDebuggers = new Set();
@@ -900,6 +901,27 @@ if (chrome.tabs?.onRemoved?.addListener) {
         activeUploads.delete(tabId);
         extensionStateReady.then(() => forgetTabOwner(tabId)).catch(() => {});
     });
+}
+// Onglet ouvert PAR un onglet d'agent (lien target=_blank, window.open, fenêtre de connexion OAuth) : il revient au
+// même client, sinon l'agent perdait la main sur la suite de sa tâche. Seulement depuis un onglet qu'il a créé lui-même
+// (ni adopté chez l'utilisateur, ni ouvert par le panneau) et jamais un onglet qui a déjà un propriétaire.
+// Deux signaux : openerTabId de l'onglet, et webNavigation.onCreatedNavigationTarget, seul présent pour un lien
+// target=_blank (noopener implicite) : sans lui, l'onglet ouvert restait à l'utilisateur (mesuré le 20/10).
+function inheritOpenerOwner(tabId, openerTabId) {
+    extensionStateReady.then(async () => {
+        const opener = Number.isInteger(openerTabId) ? tabOwners.get(openerTabId) : null;
+        if (!Number.isInteger(tabId) || !opener || opener.adopted || opener.panelRequest || tabOwners.has(tabId)) return;
+        tabOwners.set(tabId, {
+            agent: opener.agent, client: opener.client, adopted: false, since: Date.now(), openedBy: openerTabId
+        });
+        await saveExtensionState();
+    }).catch(() => {});
+}
+if (chrome.tabs?.onCreated?.addListener) {
+    chrome.tabs.onCreated.addListener((tab) => inheritOpenerOwner(tab?.id, tab?.openerTabId));
+}
+if (chrome.webNavigation?.onCreatedNavigationTarget?.addListener) {
+    chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => inheritOpenerOwner(details?.tabId, details?.sourceTabId));
 }
 // Onglet remplacé par Chrome (prérendu, navigation instantanée) : la propriété suit le nouvel identifiant.
 if (chrome.tabs?.onReplaced?.addListener) {
@@ -3675,6 +3697,24 @@ async function closeTab(params = {}) {
 }
 
 async function navigateTab(params) {
+    if (params.history === "back" || params.history === "forward") {
+        // Précédent / suivant de l'historique de SON onglet : seulement des pages que l'onglet a déjà ouvertes.
+        const tabId = await resolveTargetTab(params);
+        resetNetworkTracking(tabId);
+        // Historique lu par CDP, pas chrome.tabs.goBack : Chrome saute les pages quittées sans geste de l'utilisateur
+        // (intervention contre la manipulation de l'historique), et un onglet d'agent n'en a souvent aucun ; goBack
+        // répondait « Cannot find a next page in history » juste après une navigation (mesuré le 20/10).
+        const target = await ensureDebugger(tabId);
+        const { currentIndex, entries = [] } = await chrome.debugger.sendCommand(target, "Page.getNavigationHistory");
+        const entry = entries[currentIndex + (params.history === "back" ? -1 : 1)];
+        if (!entry) throw new Error(`No ${params.history === "back" ? "previous" : "next"} page in this tab's history`);
+        // Même contrat que la navigation explicite : un onglet adopté peut avoir file:// ou chrome:// dans son passé.
+        checkNavigableUrl(entry.url);
+        await chrome.debugger.sendCommand(target, "Page.navigateToHistoryEntry", { entryId: entry.id });
+        scheduleDebuggerDetach(tabId);
+        notifyTabStatus(tabId, params.history === "back" ? "Page précédente" : "Page suivante", 2000);
+        return { data: { success: true, history: params.history } };
+    }
     if (!params.url) throw new Error("Missing url parameter");
     const url = checkNavigableUrl(params.url);
     const tabId = await resolveTargetTab(params);
@@ -4454,6 +4494,8 @@ async function scrollPage(params = {}) {
 }
 
 const SCREENSHOT_FORMATS = { png: "image/png", jpeg: "image/jpeg", jpg: "image/jpeg", webp: "image/webp" };
+// Plus grande dimension d'image que Chrome sait rendre en une capture (limite de texture de Skia).
+const FULL_PAGE_MAX_PX = 16384;
 
 /**
  * Boîte d'un élément (repère de la vue, getBoundingClientRect) -> zone de Page.captureScreenshot, en repère de la
@@ -4631,6 +4673,25 @@ async function takeScreenshot(params = {}) {
         } else {
             return { error: "Element not found for screenshot selector: " + params.selector };
         }
+    }
+
+    if (params.fullPage) {
+        // Page entière (comme Puppeteer fullPage) : taille du contenu en pixels CSS, zoom de la page appliqué comme
+        // pour un élément (pageClip), hauteur bornée à la taille d'image maximale de Chrome.
+        const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+        const size = metrics?.cssContentSize || metrics?.contentSize || {};
+        const zoom = Number(metrics?.cssVisualViewport?.zoom) > 0 ? Number(metrics.cssVisualViewport.zoom) : 1;
+        const width = Math.min(Math.max(1, Math.ceil(Number(size.width) || 0)), Math.floor(FULL_PAGE_MAX_PX / zoom));
+        const fullHeight = Math.max(1, Math.ceil(Number(size.height) || 0));
+        const height = Math.min(fullHeight, Math.floor(FULL_PAGE_MAX_PX / zoom));
+        const clip = { x: 0, y: 0, width: Math.round(width * zoom), height: Math.round(height * zoom), scale: 1 };
+        const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, {
+            format: cdpFormat, clip, captureBeyondViewport: true
+        }));
+        return { data: {
+            dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip,
+            fullPage: { width, height, truncated: height < fullHeight || width < Math.ceil(Number(size.width) || 0) }
+        } };
     }
 
     const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, { format: cdpFormat }));

@@ -121,6 +121,7 @@ def test_page_tools_require_tab_id_no_last_tab_fallback(monkeypatch):
         "browser_new_tab",
         "browser_download_status",
         "browser_group_tabs",
+        "browser_batch",  # lot d'outils : chaque étape exige son tab_id (son propre schéma)
     }
     for name, tool in tools.items():
         if name in tab_free:
