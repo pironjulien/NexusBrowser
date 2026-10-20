@@ -5,6 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- Development dependency: pyright 1.1.407 → 1.1.414.
+
 ## [2.17.0] - 2026-10-20
 
 ### Added

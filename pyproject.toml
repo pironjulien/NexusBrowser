@@ -51,7 +51,7 @@ include = ["client/", "native-host/", "packaging/", "VERSION", "README.md", "LIC
 
 [dependency-groups]
 dev = [
-    "pyright==1.1.407",
+    "pyright==1.1.414",
     "pytest>=8.0,<10",
     "ruff>=0.12,<1",
 ]
