@@ -43,6 +43,14 @@ function Stop-BridgeTask([string]$Name) {
 if (-not $SkipLaunch -and (Test-Path -LiteralPath $pythonExe)) {
     & $pythonExe -B (Join-Path $PSScriptRoot 'scripts\refresh_extension.py') --check-only
     if ($LASTEXITCODE -eq 3) { throw 'Actualisation différée : des onglets sont pilotés par un agent. Aucun pont arrêté.' }
+    if ($LASTEXITCODE -eq 2 -and (Get-Process -Name chrome -ErrorAction SilentlyContinue) -and
+        (Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue).State -ne 'Running') {
+        # Pont à la demande pas encore démarré : le lancer pour que l'extension réponde, puis revérifier.
+        schtasks /Run /TN $bridgeTaskName | Out-Null
+        Start-Sleep -Seconds 5
+        & $pythonExe -B (Join-Path $PSScriptRoot 'scripts\refresh_extension.py') --check-only
+        if ($LASTEXITCODE -eq 3) { throw 'Actualisation différée : des onglets sont pilotés par un agent. Aucun pont arrêté.' }
+    }
     if ($LASTEXITCODE -eq 2 -and (Get-Process -Name chrome -ErrorAction SilentlyContinue)) {
         throw 'Chrome est ouvert mais son pont ne répond pas : aucune session arrêtée.'
     }

@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- `install.ps1` no longer refuses to run when Chrome is open and the on-demand bridge has simply not started yet: it starts the bridge task, then checks again.
+
+### Added
+- OpenSSF Scorecard badge in the README (the Scorecard workflow already runs on every push).
+
 ## [2.13.0] - 2026-10-20
 
 ### Added

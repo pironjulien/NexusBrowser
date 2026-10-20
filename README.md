@@ -5,6 +5,7 @@
 [![Release](https://img.shields.io/github/v/release/pironjulien/NexusBrowser)](https://github.com/pironjulien/NexusBrowser/releases)
 [![PyPI](https://img.shields.io/pypi/v/nexus-browser)](https://pypi.org/project/nexus-browser/)
 [![Tests](https://github.com/pironjulien/NexusBrowser/actions/workflows/tests.yml/badge.svg)](https://github.com/pironjulien/NexusBrowser/actions/workflows/tests.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/pironjulien/NexusBrowser/badge)](https://scorecard.dev/viewer/?uri=github.com/pironjulien/NexusBrowser)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](extension/manifest.json)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-blue?logo=python&logoColor=white)](pyproject.toml)
