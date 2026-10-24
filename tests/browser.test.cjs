@@ -469,7 +469,7 @@ test('missing target propagates as a transport error', async () => {
 
 test('explicit evaluation preserves error-shaped data', async () => {
     const h = harness();
-    const result = await h.run('evaluate', {tabId: 1, code: '({error: "user data"})'});
+    const result = await h.run('eval', {tabId: 1, code: '({error: "user data"})'});
     assert.equal(result.data.error, 'user data');
     assert.equal(result.error, undefined);
 });
@@ -477,7 +477,7 @@ test('explicit evaluation preserves error-shaped data', async () => {
 test('failed evaluation is not executed twice', async () => {
     const h = harness();
     h.fail();
-    assert.match((await h.run('evaluate', {tabId: 1, code: 'bad()'})).error, /Script failed/);
+    assert.match((await h.run('eval', {tabId: 1, code: 'bad()'})).error, /Script failed/);
     assert.equal(h.calls.filter(c => c.method === 'Runtime.evaluate').length, 1);
 });
 
@@ -521,7 +521,7 @@ test('focus émulé une seule fois, avant le premier événement de souris (ongl
 
 test('une simple lecture n\'émule jamais le focus', async () => {
     const h = harness();
-    await h.run('evaluate', {tabId: 1, code: '1 + 1'});
+    await h.run('eval', {tabId: 1, code: '1 + 1'});
     assert.equal(h.calls.filter(c => c.method === 'Emulation.setFocusEmulationEnabled').length, 0);
 });
 
@@ -688,7 +688,7 @@ test('getPageContent extracts interactive elements and handles SVG className', a
         },
         window: { location: { href: 'https://example.com' } }
     });
-    const res = await h.run('get_content', { tabId: 1, mode: 'interactive' });
+    const res = await h.run('content', { tabId: 1, mode: 'interactive' });
     assert.equal(res.data.title, 'Test Page');
     assert.equal(res.data.elements.length, 1);
     assert.equal(res.data.elements[0].className, 'lucide-icon');
@@ -842,7 +842,7 @@ test('about:blank tabs can be created and debugged without protected URL rejecti
     });
     const res = await h.run('create_tab', {});
     assert.equal(res.data.url, 'about:blank');
-    const evalRes = await h.run('evaluate', { tabId: res.data.id, code: '1 + 1' });
+    const evalRes = await h.run('eval', { tabId: res.data.id, code: '1 + 1' });
     assert.equal(evalRes.data, 2);
 });
 
@@ -936,9 +936,9 @@ test('onglets partagés : après new_tab, une commande de page sans tab_id est r
     // L'agent A ouvre son onglet ; l'agent B (même extension) envoie une commande sans tab_id.
     assert.equal((await h.run('create_tab', { url: 'https://example.com/isolated' })).data.id, 88);
     const pageCommands = [
-        ['click', {selector: 'button'}], ['fill', {selector: 'input', value: 'x'}], ['evaluate', {code: '1'}],
+        ['click', {selector: 'button'}], ['fill', {selector: 'input', value: 'x'}], ['eval', {code: '1'}],
         ['upload', {files: ['C:/test/one.txt']}], ['press_key', {key: 'Enter'}], ['get_cookies', {}],
-        ['cdp_send', {method: 'Page.reload'}], ['get_content', {mode: 'text'}], ['screenshot', {}],
+        ['cdp_send', {method: 'Page.reload'}], ['content', {mode: 'text'}], ['screenshot', {}],
         ['handle_dialog', {accept: true}], ['wait_download', {timeoutMs: 10}], ['group_tabs', {title: 'X'}],
         ['interactive_map', {}], ['network_requests', {}], ['type_keys', {text: 'a'}], ['select_tab', {}]
     ];
@@ -1114,7 +1114,7 @@ test('close_tab, navigate et reload sans tab_id ni onglet d\'agent connu sont re
     assert.match((await h.run('reload', {})).error, /new_tab/);
     assert.equal(removed + updated + reloaded, 0);
     // Les lectures de page ne visent plus l'onglet actif de Julien non plus.
-    assert.match((await h.run('get_content', {mode: 'text'})).error, /pass tab_id/);
+    assert.match((await h.run('content', {mode: 'text'})).error, /pass tab_id/);
     assert.equal(h.calls.some(c => c.method === 'Runtime.evaluate'), false);
 });
 
@@ -1139,14 +1139,14 @@ test('l\'extension ne mémorise aucun onglet d\'agent (ancien onglet commun igno
 
 test('une boîte de dialogue n\'est jamais acceptée d\'office et se règle par handle_dialog', async () => {
     const h = harness();
-    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
     await h.emit(1, 'Page.javascriptDialogOpening', {type: 'confirm', message: 'Supprimer définitivement ?'});
     assert.equal(h.calls.some(c => c.method === 'Page.handleJavaScriptDialog'), false);
 
-    const blocked = await h.run('evaluate', {tabId: 1, code: '2'});
+    const blocked = await h.run('eval', {tabId: 1, code: '2'});
     assert.match(blocked.error, /confirm/);
     assert.match(blocked.error, /Supprimer définitivement/);
-    const read = await h.run('get_content', {tabId: 1, mode: 'text'});
+    const read = await h.run('content', {tabId: 1, mode: 'text'});
     assert.match(read.error, /Supprimer définitivement/);
     // Sans tab_id : refusé, la boîte n'est pas réglée au hasard.
     assert.match((await h.run('handle_dialog', {accept: true})).error, /pass tab_id/);
@@ -1158,7 +1158,7 @@ test('une boîte de dialogue n\'est jamais acceptée d\'office et se règle par 
     const call = h.calls.find(c => c.method === 'Page.handleJavaScriptDialog');
     assert.equal(call.params.accept, false);
     assert.equal(call.target.tabId, 1);
-    assert.equal((await h.run('evaluate', {tabId: 1, code: '3'})).data, 3);
+    assert.equal((await h.run('eval', {tabId: 1, code: '3'})).data, 3);
 });
 
 test('un clic qui ouvre une boîte de dialogue rend la main et la signale', async () => {
@@ -1182,7 +1182,7 @@ test('un clic qui ouvre une boîte de dialogue rend la main et la signale', asyn
 
 test('Network.enable dès l\'attachement et compteur remis à zéro à la navigation', async () => {
     const h = harness({}, {virtualTime: true});
-    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
     const methods = h.calls.map(c => c.method);
     assert.ok(methods.indexOf('Network.enable') >= 0 && methods.indexOf('Network.enable') < methods.indexOf('Runtime.evaluate'));
 
@@ -1201,18 +1201,18 @@ test('Network.enable dès l\'attachement et compteur remis à zéro à la naviga
 
 test('le débogueur est détaché après inactivité et à la fermeture de l\'onglet', async () => {
     const h = harness();
-    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
     assert.ok(h.idleTimers.length > 0);
     await h.fireIdleTimers();
     assert.deepEqual(h.detached, [1]);
 
     // Boîte de dialogue en attente : le débogueur reste attaché pour pouvoir y répondre
-    await h.run('evaluate', {tabId: 2, code: '1'});
+    await h.run('eval', {tabId: 2, code: '1'});
     await h.emit(2, 'Page.javascriptDialogOpening', {type: 'alert', message: 'x'});
     await h.fireIdleTimers();
     assert.deepEqual(h.detached, [1]);
 
-    await h.run('evaluate', {tabId: 3, code: '1'});
+    await h.run('eval', {tabId: 3, code: '1'});
     h.removeTab(3);
     await new Promise(setImmediate);
     assert.ok(h.detached.includes(3));
@@ -1481,7 +1481,7 @@ test('les actions souris ne mettent jamais l\'onglet ni la fenêtre au premier p
 
 test('un clic réarme le détachement du débogueur à l\'inactivité', async () => {
     const h = harness();
-    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
     assert.equal(h.idleTimers.filter(t => !t.cleared).length, 1);
     const first = h.idleTimers.find(t => !t.cleared);
     await h.run('click', {tabId: 1, selector: 'button'});
@@ -1867,8 +1867,8 @@ test('fill remplace : Ctrl+A réel (code KeyA, VK 65, modificateur Control, comm
     assert.deepEqual(keys[0], {method: 'Input.dispatchKeyEvent', type: 'rawKeyDown', modifiers: 2, key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17, nativeVirtualKeyCode: 17});
     assert.deepEqual(keys[1], {method: 'Input.dispatchKeyEvent', type: 'rawKeyDown', modifiers: 2, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, commands: ['selectAll']});
     assert.equal(keys.at(-1).method, 'Input.insertText');
-    // type ajoute au lieu de remplacer
-    const appended = await h.run('type', {tabId: 1, locator: {label: 'Ville'}, value: ' 3e'});
+    // replace:false ajoute au lieu de remplacer
+    const appended = await h.run('fill', {tabId: 1, locator: {label: 'Ville'}, value: ' 3e', replace: false});
     assert.equal(appended.data.verified, true);
     assert.equal(dom.byId('city').value, 'Lyon 3e');
 });
@@ -1958,7 +1958,7 @@ test('check par vrai clic seulement si l\'état diffère, puis relu ; select_opt
     const again = await h.run('check', {tabId: 1, locator: {role: 'checkbox', name: "J'accepte"}});
     assert.equal(again.data.changed, false);
     assert.equal(h.mouse().length, before);  // aucun clic
-    const off = await h.run('uncheck', {tabId: 1, locator: {label: "J'accepte"}});
+    const off = await h.run('check', {tabId: 1, locator: {label: "J'accepte"}, checked: false});
     assert.equal(off.data.checked, false);
     const sel = await h.run('select_option', {tabId: 1, locator: {label: 'Formule'}, value: 'pro'});
     assert.equal(sel.data.selectedValue, 'pro');
@@ -2146,7 +2146,7 @@ function crossOriginHarness({oopif = false, coverFrame = false, sameOriginDocume
     });
     ref = h;
     const attach = async () => {
-        await h.run('evaluate', {tabId: 1, code: '1'});
+        await h.run('eval', {tabId: 1, code: '1'});
         if (oopif) await h.emit(1, 'Target.attachedToTarget', {sessionId: SESSION, targetInfo: {targetId: 'F1', type: 'iframe', url: 'http://localhost:2/frame'}});
     };
     return {h, top, frame, calls, attach, iframe, ref};
@@ -2292,7 +2292,7 @@ test('iframe srcdoc same-origin annoncée avec une origine étrange : parcourue 
 // -----------------------------------------------------------------------------
 async function networkHarness() {
     const h = harness();
-    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
     const request = (id, url, extra = {}) => h.emit(1, 'Network.requestWillBeSent', {
         requestId: id, timestamp: 10, wallTime: 1760000000, type: extra.type || 'Fetch', frameId: 'MAIN',
         request: {url, method: extra.method || 'GET', headers: {Authorization: 'Bearer secret-token', Cookie: 'sid=secret-cookie', 'X-Test': 'visible'}},
@@ -2366,7 +2366,7 @@ test('réseau : corps de réponse tronqué, binaire signalé, base64 textuel dé
             if (method === 'Network.getResponseBody') { seen.push(target.sessionId || null); return bodies[params.requestId]; }
         }
     });
-    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
     const add = async (id, mime, sessionId) => {
         const source = sessionId ? {tabId: 1, sessionId} : {tabId: 1};
         await h.emitFrom(source, 'Network.requestWillBeSent', {requestId: id, timestamp: 1, request: {url: `https://x.invalid/${id}`, method: 'GET', headers: {}}});
@@ -2396,7 +2396,7 @@ test('réseau : corps de réponse tronqué, binaire signalé, base64 textuel dé
 
 test('réseau : corps refusé clairement après détachement du débogueur', async () => {
     const h = harness();
-    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
     await h.emit(1, 'Network.requestWillBeSent', {requestId: 'old', timestamp: 1, request: {url: 'https://x.invalid/', method: 'GET', headers: {}}});
     await h.emit(1, 'Network.loadingFinished', {requestId: 'old', timestamp: 2, encodedDataLength: 1});
     await h.fireIdleTimers();
@@ -2561,7 +2561,7 @@ test('pont : un serveur qui envoie une commande sans poignée de main n\'obtient
         assert.equal(hello.role, 'service_worker');
         assert.equal(hello.extension_id, EXT_ID);
         assert.match(hello.client_nonce, /^[A-Za-z0-9_-]{43}$/);
-        ws.deliver({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1 + 1'}, client: TEST_CLIENT});
+        ws.deliver({requestId: 'r1', action: 'eval', params: {tabId: 1, code: '1 + 1'}, client: TEST_CLIENT});
         await until(() => ws.readyState === 3, 'fermeture');
         await settle();
         assert.equal(ws.closeCode, 1008);
@@ -2581,7 +2581,7 @@ test('pont : preuve du serveur fausse -> aucune preuve du client, aucune command
         assert.equal(server.proof(), undefined);
         // Liaison fermée : même un message signé avec la clé de session n'est plus lu.
         ws.deliver(server.frame({type: 'auth_ok'}));
-        ws.deliver(server.frame({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1'}, client: TEST_CLIENT}));
+        ws.deliver(server.frame({requestId: 'r1', action: 'eval', params: {tabId: 1, code: '1'}, client: TEST_CLIENT}));
         await settle();
         assert.equal(evaluations(), 0);
         const status = await h.sendMessage({target: 'background', getStatus: true});
@@ -2599,7 +2599,7 @@ test('pont : commande signée avant auth_ok, non signée, mal signée ou rejoué
             server.challenge();
             await until(() => server.proof(), 'preuve du client');
             assert.equal(server.proof().client_proof, server.expectedProof());
-            const command = {requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1 + 1'}, client: TEST_CLIENT};
+            const command = {requestId: 'r1', action: 'eval', params: {tabId: 1, code: '1 + 1'}, client: TEST_CLIENT};
             if (attack === 'before_auth_ok') {
                 ws.deliver(server.frame(command));
             } else {
@@ -2624,7 +2624,7 @@ test('pont : serveur authentifié -> commande exécutée et réponse signée, li
     const {h, ws, server, evaluations, stop} = bridge;
     try {
         await authenticated(bridge);
-        server.send({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1 + 1'}, client: TEST_CLIENT});
+        server.send({requestId: 'r1', action: 'eval', params: {tabId: 1, code: '1 + 1'}, client: TEST_CLIENT});
         await until(() => server.replies().some(r => r.requestId === 'r1'), 'réponse');
         const reply = server.replies().find(r => r.requestId === 'r1');
         assert.deepEqual(plain(reply), {requestId: 'r1', success: true, data: 2});
@@ -2645,7 +2645,7 @@ test("arrêt d'urgence posé par le pont : plus aucune action, même signée, le
         await until(() => server.replies().some(r => r.requestId === 'r0'), 'arrêt reçu');
         assert.equal(h.evalInContext('stopActive()'), true);
         // Plus aucune action, même signée par le pont, tant que l'arrêt tient ; les lectures restent permises.
-        server.send({requestId: 'r1', action: 'evaluate', params: {tabId: 1, code: '1'}, client: TEST_CLIENT});
+        server.send({requestId: 'r1', action: 'eval', params: {tabId: 1, code: '1'}, client: TEST_CLIENT});
         await until(() => server.replies().some(r => r.requestId === 'r1'), 'refus');
         assert.match(server.replies().find(r => r.requestId === 'r1').error, /Emergency stop/);
         assert.equal(evaluations(), 0);
@@ -2659,7 +2659,7 @@ test("un script de contenu ne peut ni agir ni obtenir de preuve : seul le ping l
     const {h, host, evaluations, stop} = bridgeHarness();
     try {
         const fromPage = {id: EXT_ID, tab: {id: 1}};
-        assert.equal(await h.sendMessage({target: 'background', executeAction: true, action: 'evaluate', params: {tabId: 1, code: '1'}}, fromPage), undefined);
+        assert.equal(await h.sendMessage({target: 'background', executeAction: true, action: 'eval', params: {tabId: 1, code: '1'}}, fromPage), undefined);
         assert.equal(await h.sendMessage({target: 'background', bridgeProve: {op: 'handshake'}}, fromPage), undefined);
         assert.equal(h.evalInContext('stopActive()'), false);
         assert.equal(evaluations(), 0);
@@ -2693,7 +2693,7 @@ test('document offscreen : serveur sans preuve -> rien relayé au service worker
     const ws = sockets.instances.at(-1);
     ws.open();
     assert.equal(ws.sent[0].role, 'offscreen');
-    ws.deliver({requestId: 'r1', action: 'evaluate', params: {code: '1'}});
+    ws.deliver({requestId: 'r1', action: 'eval', params: {code: '1'}});
     await until(() => ws.readyState === 3, 'fermeture');
     await settle();
     assert.equal(toBackground.filter(m => m.request).length, 0);
@@ -2731,28 +2731,6 @@ test('cookies : valeurs jamais par défaut ; demandées sur un site réel : refu
         assert.ok(!JSON.stringify(refused).includes('secret-session-123'));
     }
     assert.equal(h.calls.length, before);  // refus avant tout appel à Chrome
-});
-
-test('champs du formulaire : libellé, type, requis et rempli, jamais la valeur saisie', async () => {
-    const field = (props) => ({
-        getBoundingClientRect: () => ({width: 100, height: 20}),
-        getAttribute: (name) => (props.attrs || {})[name] ?? null,
-        labels: props.label ? [{textContent: props.label}] : [],
-        ...props
-    });
-    const fields = [
-        field({tagName: 'INPUT', type: 'email', id: 'mail', value: 'julien@example.invalid', label: 'Adresse  e-mail', required: true, attrs: {name: 'email'}}),
-        field({tagName: 'INPUT', type: 'password', value: 'MotDePasse!', attrs: {'aria-label': 'Mot de passe'}}),
-        field({tagName: 'INPUT', type: 'hidden', value: 'csrf'}),
-        field({tagName: 'TEXTAREA', type: 'textarea', value: '', attrs: {placeholder: 'Message'}})
-    ];
-    const h = harness({document: {querySelectorAll: (sel) => sel.startsWith('input') ? fields : [], getElementById: () => null}});
-    const res = await h.run('form_fields', {tabId: 1});
-    assert.equal(res.data.count, 3);
-    assert.deepEqual(plain(res.data.fields.map(f => [f.label, f.type, f.filled, f.required])), [
-        ['Adresse e-mail', 'email', true, true], ['Mot de passe', 'password', true, false], ['Message', 'textarea', false, false]
-    ]);
-    assert.ok(!JSON.stringify(res).includes('MotDePasse!') && !JSON.stringify(res).includes('julien@example.invalid'));
 });
 
 test('carte interactive : jamais la valeur d\'un champ comme libellé', async () => {
@@ -3102,8 +3080,8 @@ test('exports annoncés par ping (contrôle préalable de la validation réelle)
 // -----------------------------------------------------------------------------
 test('boîtes de dialogue : seule celle de l\'onglet visé est annoncée, et réglée seulement avec son tab_id', async () => {
     const h = harness();
-    await h.run('evaluate', {tabId: 1, code: '1'});
-    await h.run('evaluate', {tabId: 2, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 2, code: '1'});
     await h.emit(1, 'Page.javascriptDialogOpening', {type: 'confirm', message: 'Payer 300 euros ?'});
     await h.emit(2, 'Page.javascriptDialogOpening', {type: 'alert', message: 'Enregistré'});
     // L'agent de l'onglet 2 ne voit jamais la boîte de l'onglet 1 (ni l'inverse).
@@ -3111,7 +3089,7 @@ test('boîtes de dialogue : seule celle de l\'onglet visé est annoncée, et ré
     assert.equal(onTab2.data.pendingDialogs.length, 1);
     assert.equal(onTab2.data.pendingDialogs[0].message, 'Enregistré');
     assert.ok(!JSON.stringify(onTab2).includes('Payer 300 euros'));
-    const onTab3 = await h.run('evaluate', {tabId: 3, code: '1'});
+    const onTab3 = await h.run('eval', {tabId: 3, code: '1'});
     assert.ok(!JSON.stringify(onTab3).includes('Payer') && !JSON.stringify(onTab3).includes('Enregistré'));
     const tabless = await h.run('active_tab', {});
     assert.equal(tabless.data.pendingDialogs, undefined);
@@ -3122,7 +3100,7 @@ test('boîtes de dialogue : seule celle de l\'onglet visé est annoncée, et ré
     const answers = h.calls.filter(c => c.method === 'Page.handleJavaScriptDialog');
     assert.equal(answers.length, 1);
     assert.equal(answers[0].target.tabId, 2);
-    assert.match((await h.run('evaluate', {tabId: 1, code: '2'})).error, /Payer 300 euros/);  // toujours ouverte
+    assert.match((await h.run('eval', {tabId: 1, code: '2'})).error, /Payer 300 euros/);  // toujours ouverte
 });
 
 test('cdp_send : liste de commandes PERMISES, tout le reste refusé avant Chrome (revue C1)', async () => {
@@ -3169,7 +3147,7 @@ test('cdp_send Runtime.evaluate : toujours dans le monde isolé, sans API de con
 
 test('réseau : en-têtes masqués par motif de nom et paramètres d\'URL sensibles masqués', async () => {
     const h = harness();
-    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
     const url = 'https://api.example.invalid/cb?code=abc123&state=ok&access_token=tok1&X-Amz-Signature=sig1' +
         '&X-Amz-Credential=cred1&api_key=k1&page=2#id_token=idt1&scope=email';
     await h.emit(1, 'Network.requestWillBeSent', {
@@ -3256,8 +3234,8 @@ test('propriété : l\'agent A n\'agit ni sur l\'onglet de B ni sur ceux de Juli
     const b = (await h.run('create_tab', {url: 'https://b.invalid', group: false}, AGENT_B)).data.id;
     assert.deepEqual([a, b], [200, 201]);
     const pageCommands = [
-        ['click', () => ({selector: 'button'})], ['evaluate', () => ({code: '1'})], ['fill', () => ({selector: 'input', value: 'x'})],
-        ['get_content', () => ({mode: 'text'})], ['screenshot', () => ({})], ['cdp_send', () => ({method: 'DOM.getDocument'})],
+        ['click', () => ({selector: 'button'})], ['eval', () => ({code: '1'})], ['fill', () => ({selector: 'input', value: 'x'})],
+        ['content', () => ({mode: 'text'})], ['screenshot', () => ({})], ['cdp_send', () => ({method: 'DOM.getDocument'})],
         ['close_tab', () => ({})], ['navigate', () => ({url: 'https://x.invalid'})], ['handle_dialog', () => ({accept: true})],
         ['network_response', () => ({request_id: '1'})], ['release_tab', () => ({})], ['select_tab', () => ({})],
         ['upload', () => ({files: ['C:/Dev/rapport.pdf']})], ['get_cookies', () => ({})], ['network_record', () => ({})],
@@ -3272,7 +3250,7 @@ test('propriété : l\'agent A n\'agit ni sur l\'onglet de B ni sur ceux de Juli
     assert.match((await h.run('click', {tabId: a, selector: 'button'}, null)).error, /without client identity/);
     assert.match((await h.run('click', {tabId: a, selector: 'button'}, {agent: 'Claude'})).error, /without client identity/);
     assert.equal(h.calls.length, 0);  // rien n'a touché Chrome
-    assert.equal((await h.run('evaluate', {tabId: a, code: '40 + 2'}, AGENT_A)).data, 42);
+    assert.equal((await h.run('eval', {tabId: a, code: '40 + 2'}, AGENT_A)).data, 42);
     assert.ok(h.calls.length > 0 && h.calls.every(c => c.target.tabId === a));
     const list = (await h.run('list_tabs', {}, AGENT_A)).data;
     assert.deepEqual(plain(list.map(t => [t.id, t.owner, t.mine])), [[1, null, false], [200, 'Claude', true], [201, 'Codex', false]]);
@@ -3282,28 +3260,58 @@ test('propriété : l\'agent A n\'agit ni sur l\'onglet de B ni sur ceux de Juli
 test('propriété : une boîte de dialogue n\'est annoncée qu\'au pilote de l\'onglet', async () => {
     const h = harness({}, {autoOwn: false});
     await h.own(1, AGENT_A);
-    await h.run('evaluate', {tabId: 1, code: '1'}, AGENT_A);
+    await h.run('eval', {tabId: 1, code: '1'}, AGENT_A);
     await h.emit(1, 'Page.javascriptDialogOpening', {type: 'confirm', message: 'Payer 300 euros ?'});
     assert.equal((await h.run('active_tab', {tabId: 1}, AGENT_B)).data.pendingDialogs, undefined);
     assert.equal((await h.run('active_tab', {tabId: 1}, AGENT_A)).data.pendingDialogs[0].message, 'Payer 300 euros ?');
 });
 
-test('adoption : onglet de Julien refusé par défaut, seulement avec julienAsked, jamais celui d\'un autre agent', async () => {
+test('plusieurs onglets (tabIds) : propriété vérifiée quel que soit le nom d\'action ; anciens alias inconnus', async () => {
+    // Relevé par Codex le 24/10 : l'alias tabs_group échappait au contrôle de tabIds (onglet à soi en leurre).
+    const h = harness({}, {autoOwn: false, sessionStorage: {}});
+    await h.run('create_tab', {url: 'https://a.invalid', group: false}, AGENT_A);
+    for (const action of ['group_tabs', 'tabs_group', 'navigate']) {
+        const res = await h.run(action, {tabId: 99, tabIds: [99, 1], title: 'x'}, AGENT_A);
+        assert.ok(res.error, action);
+        assert.match(res.error, /not driven by any agent|Unknown action/, action);
+    }
+    assert.match((await h.run('tabs_group', {tabId: 99, tabIds: [99]}, AGENT_A)).error, /Unknown action/);
+    // Un tabIds à soi ne sert jamais de leurre pour l'onglet visé (tab_id) : contrôlé lui aussi.
+    for (const action of ['eval', 'group_tabs', 'click']) {
+        const res = await h.run(action, {tabId: 1, tabIds: [99], code: '42', selector: 'button'}, AGENT_A);
+        assert.match(res.error || '', /not driven by any agent/, action);
+    }
+    assert.equal((await h.run('eval', {tabId: 99, tabIds: [99], code: '42'}, AGENT_A)).data, 42);
+    assert.equal((await h.run('group_tabs', {tabIds: [99], title: 'x'}, AGENT_A)).error, undefined);
+    // Numéro lu une seule fois, strictement : « 1e2 » ne vaut plus 100 au contrôle puis 1 à l'exécution.
+    for (const params of [{tabId: '1e2'}, {tabIds: ['1e2']}, {tabId: ' 0x63'}, {tabId: 99.5}, {tabId: 99, tab_id: 1}, {tabIds: '99'}]) {
+        const res = await h.run('eval', {...params, code: '42'}, AGENT_A);
+        assert.match(res.error || '', /Invalid tab_id|Conflicting tab_id|Invalid tab_ids/, JSON.stringify(params));
+    }
+    assert.equal((await h.run('eval', {tabId: '99', code: '42'}, AGENT_A)).data, 42);
+    assert.equal((await h.run('eval', {tab_id: 99, code: '42'}, AGENT_A)).data, 42);
+    for (const old of ['evaluate', 'get_dom', 'print_pdf', 'upload_file', 'form_fields', 'uncheck', 'type']) {
+        assert.match((await h.run(old, {tabId: 99}, AGENT_A)).error, /Unknown action/, old);
+    }
+});
+
+test('adoption : onglet de Julien refusé par défaut, seulement avec userAsked, jamais celui d\'un autre agent', async () => {
     const h = harness({}, {autoOwn: false, tabs: {query: async () => [{id: 1, title: 'Boîte mail', url: 'https://mail.example.invalid/#inbox?token=jeton-zzz'}]}});
     assert.match((await h.run('adopt_tab', {tabId: 1}, AGENT_A)).error, /refused by default/);
-    assert.match((await h.run('adopt_tab', {tabId: 1, julienAsked: 'true'}, AGENT_A)).error, /refused by default/);  // booléen strict
-    assert.equal((await h.run('adopt_tab', {tabId: 1, julienAsked: true}, AGENT_A)).data.adopted, true);
-    assert.match((await h.run('adopt_tab', {tabId: 1, julienAsked: true}, AGENT_B)).error, /driven by Claude/);
-    assert.equal((await h.run('evaluate', {tabId: 1, code: '2'}, AGENT_A)).data, 2);
+    assert.match((await h.run('adopt_tab', {tabId: 1, userAsked: 'true'}, AGENT_A)).error, /refused by default/);  // booléen strict
+    // Anciens noms (avant 2.11) : plus lus, jamais pris pour un accord.
+    for (const old of ['julienAsked', 'julien_asked', 'user_asked']) {
+        assert.match((await h.run('adopt_tab', {tabId: 1, [old]: true}, AGENT_A)).error, /refused by default/, old);
+    }
+    assert.equal((await h.run('adopt_tab', {tabId: 1, userAsked: true}, AGENT_A)).data.adopted, true);
+    assert.match((await h.run('adopt_tab', {tabId: 1, userAsked: true}, AGENT_B)).error, /driven by Claude/);
+    assert.equal((await h.run('eval', {tabId: 1, code: '2'}, AGENT_A)).data, 2);
     assert.equal(h.owners()['1'].adopted, true);
     assert.equal((await h.run('release_tab', {tabId: 1}, AGENT_A)).data.released, true);
     assert.ok(h.detached.includes(1));
-    assert.match((await h.run('evaluate', {tabId: 1, code: '3'}, AGENT_A)).error, /user's tab/);
-    // userAsked : nom neutre de julienAsked (même sens).
-    assert.equal((await h.run('adopt_tab', {tabId: 1, userAsked: true}, AGENT_A)).data.adopted, true);
-    assert.equal((await h.run('release_tab', {tabId: 1}, AGENT_A)).data.released, true);
+    assert.match((await h.run('eval', {tabId: 1, code: '3'}, AGENT_A)).error, /user's tab/);
     const shielded = harness({}, {autoOwn: false, tabs: {get: async (id) => ({id, url: 'chrome://settings', windowId: 10})}});
-    assert.match((await shielded.run('adopt_tab', {tabId: 9, julienAsked: true}, AGENT_A)).error, /protected/);
+    assert.match((await shielded.run('adopt_tab', {tabId: 9, userAsked: true}, AGENT_A)).error, /protected/);
 });
 
 test('propriété conservée après redémarrage du service worker (chrome.storage.session), oubliée si l\'onglet a disparu', async () => {
@@ -3312,10 +3320,10 @@ test('propriété conservée après redémarrage du service worker (chrome.stora
     await first.run('create_tab', {url: 'https://a.invalid', group: false}, AGENT_A);
     assert.equal(first.sessionData.nexusBrowserTabOwners['300'].agent, 'Claude');
     const restarted = harness({}, {autoOwn: false, tabs, sessionStorage: first.sessionData});
-    assert.equal((await restarted.run('evaluate', {tabId: 300, code: '4'}, AGENT_A)).data, 4);
-    assert.match((await restarted.run('evaluate', {tabId: 300, code: '4'}, AGENT_B)).error, /driven by Claude/);
+    assert.equal((await restarted.run('eval', {tabId: 300, code: '4'}, AGENT_A)).data, 4);
+    assert.match((await restarted.run('eval', {tabId: 300, code: '4'}, AGENT_B)).error, /driven by Claude/);
     const gone = harness({}, {autoOwn: false, tabs: {...tabs, query: async () => []}, sessionStorage: first.sessionData});
-    assert.match((await gone.run('evaluate', {tabId: 300, code: '4'}, AGENT_A)).error, /user's tab/);
+    assert.match((await gone.run('eval', {tabId: 300, code: '4'}, AGENT_A)).error, /user's tab/);
 });
 
 test('réseau : champs secrets des corps masqués à toute profondeur (JSON, préfixe XSSI, formulaire, JSON tronqué)', async () => {
@@ -3330,7 +3338,7 @@ test('réseau : champs secrets des corps masqués à toute profondeur (JSON, pr�
     };
     const mimes = {oauth: 'application/json', xssi: 'application/json', form: 'application/x-www-form-urlencoded', cut: 'application/json', page: 'text/html'};
     const h = harness({}, {debuggerSendCommand: (target, method, params) => method === 'Network.getResponseBody' ? {body: bodies[params.requestId], base64Encoded: false} : undefined});
-    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
     for (const id of Object.keys(bodies)) {
         await h.emit(1, 'Network.requestWillBeSent', {requestId: id, timestamp: 1, request: {url: `https://x.invalid/${id}`, method: 'POST', headers: {}}});
         await h.emit(1, 'Network.responseReceived', {requestId: id, response: {status: 200, mimeType: mimes[id], headers: {}}});
@@ -3462,7 +3470,7 @@ test('capture d\'élément : zone en repère de la PAGE (défilement ajouté), a
 
 test('service worker redémarré, onglet encore attaché : session reprise et iframes de nouveau suivies', async () => {
     const h = harness({}, {attachError: 'Another debugger is already attached to the tab with id: 1.'});
-    assert.equal((await h.run('evaluate', {tabId: 1, code: '5'})).data, 5);
+    assert.equal((await h.run('eval', {tabId: 1, code: '5'})).data, 5);
     const methods = h.calls.map(c => [c.method, c.params?.autoAttach]);
     for (const m of ['Page.enable', 'Runtime.enable', 'Network.enable']) assert.ok(methods.some(([x]) => x === m), m);
     const auto = methods.filter(([m]) => m === 'Target.setAutoAttach').map(([, on]) => on);
@@ -3473,8 +3481,8 @@ test('service worker redémarré, onglet encore attaché : session reprise et if
 
 test('débogueur : compteur de commandes PAR ONGLET, une commande bloquée sur l\'onglet 2 n\'empêche pas de détacher l\'onglet 1', async () => {
     const h = harness({}, {debuggerSendCommand: (target, method) => (method === 'Runtime.evaluate' && target.tabId === 2) ? new Promise(() => {}) : undefined});
-    await h.run('evaluate', {tabId: 1, code: '1'});
-    h.run('evaluate', {tabId: 2, code: 'bloque'});  // ne se termine jamais
+    await h.run('eval', {tabId: 1, code: '1'});
+    h.run('eval', {tabId: 2, code: 'bloque'});  // ne se termine jamais
     await settle();
     await h.fireIdleTimers();
     assert.ok(h.detached.includes(1));
@@ -3491,7 +3499,7 @@ test('réseau : débogueur gardé seulement pendant l\'enregistrement demandé (
     const stopped = await h.run('network_stop', {tabId: 1});
     assert.equal(stopped.data.detached, true);
     assert.deepEqual(h.detached, [1]);
-    await h.run('evaluate', {tabId: 2, code: '1'});
+    await h.run('eval', {tabId: 2, code: '1'});
     await h.fireIdleTimers();
     assert.ok(h.detached.includes(2));  // sans enregistrement : détaché à l'inactivité
 });
@@ -3528,7 +3536,6 @@ test('navigation : jamais de fichier local ni de page interne (file://, chrome:/
 });
 
 const settleWorker = async () => { for (let i = 0; i < 8; i++) await new Promise((resolve) => setImmediate(resolve)); };
-const untilTrue = async (cond) => { for (let i = 0; i < 200 && !cond(); i++) await new Promise((resolve) => setImmediate(resolve)); assert.ok(cond()); };
 
 test('discussion du panneau retirée : son fil est effacé, le pont ne reçoit plus agy_panel_update', async () => {
     const h = harness({}, {localStorage: {agyChat: [{kind: 'ask', text: 'ancienne'}], agyInstance: 'x', autre: 1}});
@@ -3588,19 +3595,19 @@ test('2.1 orphelins : processus disparu (signalé par le pont) -> onglets repris
     // Commande de page sur l'orphelin sans le reprendre : refus qui dit comment faire, rien dans Chrome.
     assert.match((await h.run('click', {tabId: 500, selector: 'button'}, fresh)).error, /orphaned.*browser_adopt_tab\(tab_id\)/);
     assert.equal(h.calls.length, 0);
-    // Reprise sans julien_asked, puis pilotage normal.
+    // Reprise sans userAsked, puis pilotage normal.
     const reclaimed = (await h.run('adopt_tab', {tabId: 500}, fresh)).data;
     assert.deepEqual(plain([reclaimed.reclaimed, reclaimed.owner, reclaimed.adopted]), [true, 'Claude', false]);
-    assert.equal((await h.run('evaluate', {tabId: 500, code: '6 * 7'}, fresh)).data, 42);
+    assert.equal((await h.run('eval', {tabId: 500, code: '6 * 7'}, fresh)).data, 42);
     // Fermer ou rendre un orphelin du même agent : permis sans reprise.
     assert.equal((await h.run('release_tab', {tabId: 501}, fresh)).data.released, true);
     assert.deepEqual(Object.keys(h.owners()).sort(), ['500', '502', '503']);
     // Session vivante du même agent (autre conversation) : toujours protégée.
-    for (const action of ['adopt_tab', 'close_tab', 'release_tab', 'evaluate']) {
+    for (const action of ['adopt_tab', 'close_tab', 'release_tab', 'eval']) {
         assert.match((await h.run(action, {tabId: 502, code: '1'}, fresh)).error || '', /Claude in another session: refused/, action);
     }
     assert.equal(h.owners()['502'].client, 'claude-vivante-3');
-    // L'onglet de Julien reste soumis à julien_asked.
+    // L'onglet de Julien reste soumis à userAsked.
     assert.match((await h.run('adopt_tab', {tabId: 1}, fresh)).error, /refused by default/);
 });
 
@@ -3619,7 +3626,7 @@ test('2.1 orphelins : fermeture permise, mort retenue après redémarrage du ser
     const restarted = harness({}, {autoOwn: false, tabs, sessionStorage: h.sessionData});
     assert.deepEqual(plain((await restarted.run('list_tabs', {}, fresh)).data.map(t => [t.id, t.state])), [[520, 'user'], [521, 'orphan']]);
     assert.equal((await restarted.run('adopt_tab', {tabId: 521}, fresh)).data.reclaimed, true);
-    assert.equal((await restarted.run('evaluate', {tabId: 521, code: '1'}, fresh)).data, 1);
+    assert.equal((await restarted.run('eval', {tabId: 521, code: '1'}, fresh)).data, 1);
 });
 
 test('2.1 orphelins : silence de plus de 1,618 x 60 s -> session morte ; un battement garde la session vivante', async () => {
@@ -3731,7 +3738,7 @@ test('2.4 réseau : pagination et compteurs de jetons jamais masqués (Google, O
     };
     const mimes = {form: 'application/x-www-form-urlencoded'};
     const h = harness({}, {debuggerSendCommand: (target, method, params) => method === 'Network.getResponseBody' ? {body: bodies[params.requestId], base64Encoded: false} : undefined});
-    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
     for (const id of Object.keys(bodies)) {
         await h.emit(1, 'Network.requestWillBeSent', {requestId: id, timestamp: 1, request: {url: `https://x.invalid/${id}`, method: 'GET', headers: {}}});
         await h.emit(1, 'Network.responseReceived', {requestId: id, response: {status: 200, mimeType: mimes[id] || 'application/json', headers: {}}});
@@ -3782,7 +3789,7 @@ const leaks = (res) => SECRET_VALUES.filter(v => JSON.stringify(res).includes(v)
 test('2.8 content et vision_inspect : jamais la valeur d\'un mot de passe, d\'un code ou d\'une carte (« [valeur masquée] »)', async () => {
     const {h, dom} = richHarness(secretPage);
     dom.win.location = {href: 'https://compte.example.invalid/connexion'};
-    const content = await h.run('get_content', {tabId: 1, mode: 'interactive'});
+    const content = await h.run('content', {tabId: 1, mode: 'interactive'});
     assert.deepEqual(leaks(content), []);
     const byId = Object.fromEntries(content.data.elements.map(e => [e.id, e]));
     for (const id of ['pw', 'shown', 'new', 'otp', 'card', 'cvc']) assert.equal(byId[id].value, '[masked value]', id);
@@ -3810,7 +3817,7 @@ test('2.8 content html : attribut value d\'un champ sensible masqué dans une co
         get outerHTML() { return render(page); },
         cloneNode: (deep) => ({querySelectorAll: (sel) => (deep && sel === '[value]' ? copy : []), get outerHTML() { return render(copy); }})
     }}});
-    const res = await h.run('get_content', {tabId: 1, mode: 'html'});
+    const res = await h.run('content', {tabId: 1, mode: 'html'});
     assert.deepEqual(leaks(res), []);
     assert.match(res.data, /type="password" value="\[masked value\]"/);
     assert.match(res.data, /value="julien"/);
@@ -3906,7 +3913,7 @@ test('2.8 revue d\'Antigravity : texte rendu d\'un champ sensible, bouton « aff
     ];
     const {h, dom} = richHarness(page);
     dom.win.location = {href: 'https://compte.example.invalid/'};
-    const raw = JSON.stringify(await h.run('get_content', {tabId: 1, mode: 'interactive'}));
+    const raw = JSON.stringify(await h.run('content', {tabId: 1, mode: 'interactive'}));
     for (const secret of ['TexteSecret!4', 'Affiche!5', 'Mdp!6']) assert.ok(!raw.includes(secret), secret);
     assert.ok(raw.includes('Julien Voyageur'));  // « passenger » n'est pas un mot de passe
     const found = await h.run('find', {tabId: 1, locator: {role: 'button', name: 'Section mot de passe'}});
@@ -3925,7 +3932,7 @@ test('2.8 revue d\'Antigravity : texte rendu d\'un champ sensible, bouton « aff
     const h3 = harness({document: {documentElement: {cloneNode: () => ({
         querySelectorAll: (sel) => (sel === '[value]' ? [comp] : []), get outerHTML() { return `<x-card value="${comp.attrs.value}">`; }
     })}}});
-    assert.equal((await h3.run('get_content', {tabId: 1, mode: 'html'})).data, '<x-card value="[masked value]">');
+    assert.equal((await h3.run('content', {tabId: 1, mode: 'html'})).data, '<x-card value="[masked value]">');
 });
 
 // =============================================================================
@@ -3991,7 +3998,7 @@ test('2.9 capture, PDF, vision et cdp_send : champs sensibles en disques pendant
 
 test('2.9 browser_logs : console masquée (texte, aperçus d\'objets, jetons cités, cartes), messages ordinaires gardés', async () => {
     const h = harness();
-    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
     await h.emit(1, 'Runtime.consoleAPICalled', {type: 'log', args: [
         {type: 'string', value: 'Connexion avec Authorization: Bearer abcdefgh12345678 ok'},
         {type: 'string', value: '{"access_token":"SECRETJSON1","user":"julien"}'},
@@ -4013,7 +4020,7 @@ test('2.9 journal réseau : carte, cryptogramme, code et IBAN masqués dans les 
     const body = JSON.stringify({cardNumber: '4970101234567890', card_cvc: '737', securityCode: '123', otp: '482913',
         iban: 'FR7630006000011234567890189', amount: 42, pin: 1234});
     const h = harness({}, {debuggerSendCommand: (target, method) => method === 'Network.getResponseBody' ? {body, base64Encoded: false} : undefined});
-    await h.run('evaluate', {tabId: 1, code: '1'});
+    await h.run('eval', {tabId: 1, code: '1'});
     await h.emit(1, 'Network.requestWillBeSent', {requestId: 'pay', timestamp: 1,
         request: {url: 'https://x.invalid/pay?cc_number=4970101234567890&lang=fr', method: 'POST', headers: {}}});
     await h.emit(1, 'Network.responseReceived', {requestId: 'pay', response: {status: 200, mimeType: 'application/json', headers: {}}});
@@ -4225,7 +4232,7 @@ test("logo de travail : dessiné dans l'onglet regardé pendant une commande d'a
     const drawn = () => h.scriptCalls.filter(c => c.name === 'drawBusyIndicator');
     await h.run('heartbeat', {}, AGENT_A);
     assert.equal(drawn().length, 0);
-    assert.equal((await h.run('evaluate', {tabId: 1, code: '1'}, AGENT_A)).data, 1);
+    assert.equal((await h.run('eval', {tabId: 1, code: '1'}, AGENT_A)).data, 1);
     await settle();
     assert.equal(drawn().length, 1);
     assert.deepEqual(plain(drawn()[0].target), {tabId: 1, frameIds: [0]});
@@ -4233,7 +4240,7 @@ test("logo de travail : dessiné dans l'onglet regardé pendant une commande d'a
     assert.equal(drawn()[0].args[0], true);
     assert.match(drawn()[0].args[2], /au travail$/);
     // Commande suivante dans le même onglet regardé : pas de nouveau dessin.
-    await h.run('evaluate', {tabId: 1, code: '2'}, AGENT_A);
+    await h.run('eval', {tabId: 1, code: '2'}, AGENT_A);
     await settle();
     assert.equal(drawn().length, 1);
     // Fin du délai sans commande : le logo est retiré.

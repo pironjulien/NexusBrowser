@@ -126,15 +126,6 @@ def triggers(data: dict, gestures: Iterable[str]) -> list[str]:
     return found
 
 
-def outward_trigger(data: dict, gestures: Iterable[str]) -> str:
-    """Premier libellé sortant (garde_fous.outward_word avec le titre de l'onglet), « » si le geste est libre."""
-    title = str(data.get("tabTitle") or data.get("title") or "")
-    for label in triggers(data, gestures):
-        if garde_fous.outward_word(label, title):
-            return label
-    return ""
-
-
 def describe_action(data: dict, gesture: str, label: str, typed: str = "") -> dict[str, Any]:
     """Action canonique : le texte frappé avec le geste (frappe puis Entrée) fait partie du contenu."""
     content = _content(data)

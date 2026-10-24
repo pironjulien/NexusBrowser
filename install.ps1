@@ -157,6 +157,10 @@ if (Test-Path $agyConfig) {
         New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
         Copy-Item $file.FullName $target -Force
     }
+    # Compétence : source unique skills\nexus-browser (lue aussi par les plugins de Claude et de Codex).
+    $pluginSkill = Join-Path $plugin 'skills\nexus-browser'
+    New-Item -ItemType Directory -Force $pluginSkill | Out-Null
+    Copy-Item (Join-Path $PSScriptRoot 'skills\nexus-browser\SKILL.md') (Join-Path $pluginSkill 'SKILL.md') -Force
     $pluginMcp = [PSCustomObject]@{ mcpServers = [PSCustomObject]@{ 'nexus-browser' = $entry } }
     [IO.File]::WriteAllText((Join-Path $plugin 'mcp_config.json'), ($pluginMcp | ConvertTo-Json -Depth 100), $utf8)
     # Compétence : seulement dans le plugin. Une ancienne copie globale (skills\nexus-browser) la doublait dans
@@ -225,8 +229,4 @@ if (-not $SkipLaunch) {
         Write-Host 'Démon MCP Browser rechargé ; Android et Relay conservés.'
     }
 }
-# Empreinte de l'installation (scripts\empreinte.ps1, formule unique) : Sync-NexusPoste (NexusInfra) la compare aux
-# sources pour savoir s'il faut réinstaller (uv.lock, install.ps1, installer-hote-natif.ps1, runtime.ps1).
-$stamp = & (Join-Path $PSScriptRoot 'scripts\empreinte.ps1')
-Set-Content (Join-Path $localRoot 'installed.stamp') $stamp -Encoding utf8NoBOM
 Write-Host 'NexusBrowser installé. Extension vérifiée si Chrome est connecté ; sources prises en compte au prochain lancement sinon.'

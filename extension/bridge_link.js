@@ -213,5 +213,4 @@
     }
 
     scope.AgyBridgeLink = BridgeLink;
-    scope.AGY_BRIDGE_PROTOCOL = PROTOCOL;
 })(typeof globalThis !== "undefined" ? globalThis : self);

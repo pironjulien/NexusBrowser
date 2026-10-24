@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-VERSION = "2.18.0"
+VERSION = "2.19.0"
 TOKEN_HEADER = "X-Nexus-Browser-Token"
 # Identité du client du pont (serveur MCP d'un agent, CLI, validation réelle) : nom de l'agent et identifiant de SA
 # session (un par processus MCP). Le pont la transmet à l'extension dans le canal signé ; l'extension s'en sert pour
@@ -180,47 +180,28 @@ READ_ONLY_ACTIONS = frozenset(
         "ping",
         "list-tabs",
         "active-tab",
-        "get-active-tab",
         "content",
-        "get-dom",
-        "get-content",
         "axtree",
-        "get-accessibility-tree",
         "logs",
-        "get-logs",
-        "console-logs",
         "screenshot",
-        "take-screenshot",
         "pdf",
-        "print-pdf",
-        "export-pdf",
         "check-handoff",
         "download-status",
         "wait-load",
-        "wait-for-load",
         "wait-network-idle",
-        "network-idle",
         "interactive-map",
-        "interactive-elements",
-        "som-map",
         "vision-inspect",
-        "som-inspect",
         "find",
         "field-state",
-        "find-elements",
-        "locate",
         "network-requests",
         "network-response",
-        "network-response-body",
         "wait-download",
         # Exports : lecture de la page ou fetch GET de l'export Google. La transcription YouTube peut activer un
         # instant les sous-titres du lecteur : elle reste une action, bloquée par l'arrêt d'urgence.
         "export-content",
-        "content-export",
         "export-gsuite",
-        "gsuite-export",
-        # Désescalades, sûres à renvoyer et permises pendant l'arrêt d'urgence : rendre un onglet à Julien (propriété
-        # retirée, débogueur détaché), arrêter l'enregistrement réseau (débogueur détaché).
+        # Désescalades, sûres à renvoyer et permises pendant l'arrêt d'urgence : rendre un onglet à l'utilisateur
+        # (propriété retirée, débogueur détaché), arrêter l'enregistrement réseau (débogueur détaché).
         "release-tab",
         "network-stop",
         # Signe de vie d'une session (serveur MCP) : aucune action sur une page.
@@ -240,12 +221,16 @@ def is_read_only_action(action: str) -> bool:
 # préfixes \\?\ et \\.\, partages administratifs locaux (\\localhost\C$\, \\127.0.0.1\C$\, nom du poste), liens
 # symboliques et jonctions résolus, points et espaces finaux retirés, casse ignorée.
 # -----------------------------------------------------------------------------
-UPLOAD_ACTIONS = frozenset({"upload", "upload-file", "set-files"})
+UPLOAD_ACTIONS = frozenset({"upload"})
 _ADMIN_SHARE = re.compile(r"^\\\\([^\\]+)\\([A-Za-z])\$(?:\\(.*))?$", re.S)
 _LOCAL_HOSTS = frozenset({"localhost", "localhost.localdomain", "::1", "[::1]", "0:0:0:0:0:0:0:1", ".", "?"})
 
 
-def is_upload_action(action: str) -> bool:
+def is_upload_action(action: str, params: object = None) -> bool:
+    """Commande qui envoie des fichiers à la page : l'action upload, ou toute commande dont les paramètres portent
+    « files », quel que soit son nom (le contrôle des dossiers secrets ne dépend jamais d'un alias)."""
+    if isinstance(params, dict) and "files" in params:
+        return True
     return action.strip().lower().replace("_", "-") in UPLOAD_ACTIONS
 
 

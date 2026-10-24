@@ -237,13 +237,14 @@ def test_default_cli_identity_is_accepted_by_the_bridge():
 
 
 def test_adopt_tab_user_asked(monkeypatch):
-    """user_asked envoie l'accord sous les deux clés lues par l'extension (julienAsked pour une extension d'avant
-    userAsked) ; l'ancien paramètre julien_asked n'est plus exposé aux clients."""
+    """user_asked envoie l'accord sous la seule clé lue par l'extension (userAsked) ; les anciens noms julienAsked et
+    julien_asked ne sont plus ni envoyés ni lus."""
     sent: list[dict] = []
     monkeypatch.setattr(mcp_server, "call_bridge", lambda action, params, timeout=20.0: sent.append(params) or {})
     mcp_server.browser_adopt_tab(7)
     mcp_server.browser_adopt_tab(7, user_asked=True)
-    assert [(p["userAsked"], p["julienAsked"]) for p in sent] == [(False, False), (True, True)]
+    assert [p["userAsked"] for p in sent] == [False, True]
+    assert all("julienAsked" not in p for p in sent)
 
 
 def test_client_texts_name_nobody():

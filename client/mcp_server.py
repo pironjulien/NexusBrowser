@@ -461,8 +461,7 @@ def browser_adopt_tab(
     ORPHAN tab of my agent (state "orphan" in browser_list_tabs: its session died, server restarted or crashed): taken
     back without user_asked. A tab of another agent, or of another live session, is always refused."""
     asked = bool(user_asked)
-    # julienAsked : clé lue par les extensions d'avant userAsked (même sens).
-    params: dict[str, object] = {"tab_id": tab_id, "userAsked": asked, "julienAsked": asked}
+    params: dict[str, object] = {"tab_id": tab_id, "userAsked": asked}
     return _call_bridge("adopt-tab", params)
 
 

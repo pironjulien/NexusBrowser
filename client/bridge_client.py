@@ -384,7 +384,7 @@ def call_bridge(action: str, params: dict[str, Any] | None = None, timeout: floa
     connectée), ou c'est une lecture. Après un délai dépassé, une action (clic, saisie, navigation...) n'est jamais
     renvoyée : elle a pu être exécutée.
     """
-    if is_upload_action(action):
+    if is_upload_action(action, params):
         check_upload_files((params or {}).get("files"))
     payload = {"action": action, "params": params or {}, "timeout": timeout}
     try:

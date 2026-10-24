@@ -18,7 +18,7 @@ from mcp.server.mcpserver import MCPServer  # noqa: E402
 
 from client import mcp_server  # noqa: E402
 
-SKILLS = ("skills/nexus-browser/SKILL.md", "plugins/nexus-browser/skills/nexus-browser/SKILL.md")
+SKILLS = ("skills/nexus-browser/SKILL.md",)
 
 
 def _tools() -> dict:
@@ -141,7 +141,8 @@ def test_eval_is_documented_as_full_page_access():
         assert "[masked value]" in text, skill
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "full access to the page" in readme and "[masked value]" in readme
-    assert (REPO_ROOT / SKILLS[0]).read_text(encoding="utf-8") == (REPO_ROOT / SKILLS[1]).read_text(encoding="utf-8")
+    install = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
+    assert r"skills\nexus-browser\SKILL.md" in install  # copiée dans le plugin d'Antigravity, source unique
 
 
 def test_masked_values_are_announced_to_the_agent(monkeypatch):

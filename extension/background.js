@@ -49,7 +49,7 @@ const NETWORK_RECORD_MAX_S = 600;
 //
 // Sessions vivantes : chaque commande (et le battement « heartbeat » des serveurs MCP) date le dernier signe de vie
 // de son client. Une session MORTE (silence de plus de SESSION_DEAD_MS, ou processus disparu, signalé par le pont dans
-// « gone ») laisse des onglets ORPHELINS : un client du MÊME agent peut les reprendre (adopt_tab sans julienAsked),
+// « gone ») laisse des onglets ORPHELINS : un client du MÊME agent peut les reprendre (adopt_tab sans userAsked),
 // les fermer ou les rendre. Une session vivante reste protégée, même contre une autre session de son agent.
 // -----------------------------------------------------------------------------
 const OWNERS_KEY = "nexusBrowserTabOwners";
@@ -185,15 +185,13 @@ function ownerLabel(owner) {
 const STOP_HOLD_MS = 120000;
 const stopWaiters = new Set();
 // Lectures permises pendant l'arrêt : miroir de READ_ONLY_ACTIONS (native-host/bridge_security.py), aux noms d'action
-// reçus par l'extension (vérifié par tests/test_cross_review.py).
+// reçus par l'extension (vérifié par tests/test_cross_review.py). Un seul nom par action : celui du client, tirets
+// remplacés par des soulignés (pont), sans alias à recopier dans chaque liste de garde-fous.
 const STOP_ALLOWED_ACTIONS = new Set([
-    "ping", "list_tabs", "get_active_tab", "active_tab", "get_dom", "get_content", "content", "axtree",
-    "get_accessibility_tree", "get_logs", "logs", "console_logs", "screenshot", "take_screenshot", "print_pdf", "pdf",
-    "export_pdf", "check_handoff", "download_status", "wait_load", "wait_for_load", "wait_network_idle",
-    "network_idle", "interactive_map", "field_state", "interactive_elements", "som_map", "vision_inspect", "som_inspect", "find",
-    "find_elements", "locate", "network_requests", "network_response", "network_response_body", "wait_download",
-    "export_content", "content_export", "export_gsuite", "gsuite_export", "release_tab", "network_stop",
-    "emergency_stop", "heartbeat"
+    "ping", "list_tabs", "active_tab", "content", "axtree", "logs", "screenshot", "pdf", "check_handoff",
+    "download_status", "wait_load", "wait_network_idle", "interactive_map", "field_state", "vision_inspect", "find",
+    "network_requests", "network_response", "wait_download", "export_content", "export_gsuite", "release_tab",
+    "network_stop", "emergency_stop", "heartbeat"
 ]);
 
 function stopActive() {
@@ -342,11 +340,9 @@ function connectBridgeWS() {
     }
 }
 
-function scheduleBridgeReconnect(overrideDelayMs = null) {
+function scheduleBridgeReconnect() {
     if (reconnectTimer) clearTimeout(reconnectTimer);
-    const delayMs = overrideDelayMs !== null
-        ? overrideDelayMs
-        : Math.min(30000, Math.round(1500 * Math.pow(1.618, Math.min(reconnectAttempts, 6))));
+    const delayMs = Math.min(30000, Math.round(1500 * Math.pow(1.618, Math.min(reconnectAttempts, 6))));
     reconnectAttempts++;
     reconnectTimer = setTimeout(connectBridgeWS, delayMs);
 }
@@ -620,7 +616,7 @@ if (chrome.tabs?.onReplaced?.addListener) {
 // -----------------------------------------------------------------------------
 // Commandes sans onglet visé (ou qui en créent un). Toutes les autres exigent un onglet du client qui les demande.
 const TAB_FREE_ACTIONS = new Set([
-    "ping", "list_tabs", "active_tab", "get_active_tab", "create_tab", "new_tab", "download_status", "download_erase",
+    "ping", "list_tabs", "active_tab", "create_tab", "download_status", "download_erase",
     "reload_extension", "adopt_tab", "heartbeat"
 ]);
 // Commandes permises sur un onglet ORPHELIN du même agent (session morte), sans le reprendre d'abord.
@@ -652,17 +648,21 @@ function authorizeCommand(action, params, client) {
     if (!client) return "Command without client identity (agent and session set by the bridge): refused. Run install.ps1 again (up-to-date bridge).";
     if (stopActive() && !STOP_ALLOWED_ACTIONS.has(action)) return stopMessage();
     if (TAB_FREE_ACTIONS.has(action)) return null;
-    if (action === "group_tabs" && Array.isArray(params.tabIds) && params.tabIds.length) {
+    // Toute commande qui vise plusieurs onglets (tabIds), quel que soit son nom : chacun doit être au client. Le contrôle
+    // ne dépend plus du nom d'action (l'alias tabs_group le contournait, relevé par Codex le 24/10).
+    if (Array.isArray(params.tabIds) && params.tabIds.length) {
         for (const raw of params.tabIds) {
             const tabId = Number(raw);
             if (!Number.isInteger(tabId)) return `Invalid tab_id: ${raw}`;
             if (!ownedBy(tabOwners.get(tabId), client)) return foreignTabMessage(tabId, tabOwners.get(tabId), client);
         }
-        return null;
+        // Les onglets de tabIds ne dispensent jamais du contrôle de l'onglet visé par tab_id (un tabIds à soi servait
+        // de leurre pour agir sur un onglet étranger, relevé par Codex le 24/10).
+        if (requestedTabId(params) === null) return null;
     }
     const tabId = requestedTabId(params);
     if (tabId === null) {
-        const given = params.tabId ?? params.tab_id ?? params.id;
+        const given = params.tabId ?? params.tab_id;
         if (given !== undefined && given !== null && given !== "") return `Invalid tab_id: ${given}`;
         return MISSING_TAB_MESSAGE;
     }
@@ -675,7 +675,9 @@ function authorizeCommand(action, params, client) {
 async function handleCommand(req) {
     await extensionStateReady;
     const action = normalizedAction(req);
-    const params = req.params || req.payload || {};
+    const canonical = canonicalTabParams(req.params || req.payload || {});
+    if (canonical.error) return { error: canonical.error };
+    const params = canonical.params;
     // Identité posée par le pont à côté des paramètres (jamais lue dans les paramètres eux-mêmes).
     const client = validClient(req.client) ? { agent: req.client.agent, id: req.client.id } : null;
     // Signe de vie noté AVANT l'autorisation (une commande refusée prouve aussi que la session vit) ; « gone » : posé
@@ -702,16 +704,47 @@ async function handleCommand(req) {
     }
     const visible = tabId !== null && ownedBy(tabOwners.get(tabId), client) ? tabId : null;
     // Evaluation may legitimately return an object containing an error field.
-    if (!["eval", "evaluate", "evaluate_js"].includes(action) && result?.data?.error) {
+    if (action !== "eval" && result?.data?.error) {
         return annotatePendingDialogs({ error: result.data.error }, visible);
     }
     return annotatePendingDialogs(result, visible);
 }
 
-/** Onglet explicitement visé par une commande (tab_id, tabId ou id), sinon null. */
+/**
+ * Numéros d'onglet lus UNE fois, strictement, avant l'autorisation : entier, ou chaîne de chiffres seuls. Le contrôle
+ * de propriété et l'exécution voient donc le même onglet (« 1e2 » valait 100 au contrôle et 1 à l'exécution, relevé
+ * par Codex le 24/10). tab_id et tabId différents, ou un tabIds mal formé : refusé.
+ */
+function strictTabId(value) {
+    if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0 ? value : null;
+    if (typeof value === "string" && /^\s*\d{1,15}\s*$/.test(value)) return Number(value.trim());
+    return null;
+}
+
+function canonicalTabParams(raw) {
+    const params = raw && typeof raw === "object" && !Array.isArray(raw) ? { ...raw } : {};
+    const given = ["tabId", "tab_id"].filter(key => params[key] !== undefined && params[key] !== null && params[key] !== "");
+    const ids = given.map(key => strictTabId(params[key]));
+    if (ids.some(id => id === null)) return { error: `Invalid tab_id: ${params[given[ids.indexOf(null)]]}` };
+    if (ids.length === 2 && ids[0] !== ids[1]) return { error: `Conflicting tab_id: ${params.tabId} and ${params.tab_id}` };
+    if (ids.length) {
+        params.tabId = ids[0];
+        delete params.tab_id;
+    }
+    if (params.tabIds !== undefined) {
+        if (!Array.isArray(params.tabIds)) return { error: `Invalid tab_ids: ${params.tabIds}` };
+        const list = params.tabIds.map(strictTabId);
+        const bad = list.indexOf(null);
+        if (bad !== -1) return { error: `Invalid tab_id: ${params.tabIds[bad]}` };
+        params.tabIds = list;
+    }
+    return { params };
+}
+
+/** Onglet explicitement visé par une commande (tab_id ou tabId), sinon null. */
 function requestedTabId(params) {
     if (!params || typeof params !== "object") return null;
-    for (const key of ["tabId", "tab_id", "id"]) {
+    for (const key of ["tabId", "tab_id"]) {
         const value = params[key];
         if (value === undefined || value === null || value === "") continue;
         const id = typeof value === "number" ? value : Number(String(value).trim());
@@ -828,14 +861,12 @@ async function routeCommand(req, client = null) {
                 return await listTabs(params, client);
 
             case "active_tab":
-            case "get_active_tab":
                 return await getActiveTab(client);
 
             case "select_tab":
                 return await selectTab(params);
 
             case "create_tab":
-            case "new_tab":
                 return await createTab(params, client);
 
             case "adopt_tab":
@@ -857,7 +888,6 @@ async function routeCommand(req, client = null) {
                 return await stopNetworkRecording(params);
 
             case "group_tabs":
-            case "tabs_group":
                 return await groupTabs(params);
 
             case "close_tab":
@@ -867,61 +897,39 @@ async function routeCommand(req, client = null) {
                 return await navigateTab(params);
 
             case "reload":
-            case "reload_tab":
                 return await reloadTab(params);
 
             case "hover":
-            case "hover_element":
                 return await hoverElement(params);
 
             case "eval":
-            case "evaluate":
-            case "evaluate_js":
                 return await evaluateScript(params);
 
             case "content":
-            case "get_dom":
-            case "get_content":
                 return await getPageContent(params);
 
-            case "get_accessibility_tree":
             case "axtree":
                 return await getAccessibilityTree(params);
 
             case "logs":
-            case "get_logs":
-            case "console_logs":
                 return await getConsoleLogs(params);
 
             case "click":
-            case "click_element":
                 return await clickElement(params);
 
             case "fill":
-            case "fill_element":
                 return await fillElement(params);
-
-            case "type":
-            case "type_text":
-                // Comme Playwright pressSequentially : ajoute au texte existant (replace:true pour remplacer).
-                return await fillElement(params, { replace: false });
 
             case "check":
                 return await setChecked({ ...params, checked: params.checked === undefined ? true : params.checked });
 
-            case "uncheck":
-                return await setChecked({ ...params, checked: false });
-
             case "find":
-            case "find_elements":
-            case "locate":
                 return await findElements(params);
 
             case "network_requests":
                 return await getNetworkRequests(params);
 
             case "network_response":
-            case "network_response_body":
                 return await getNetworkResponse(params);
 
             case "wait_download":
@@ -937,31 +945,24 @@ async function routeCommand(req, client = null) {
                 return await scrollPage(params);
 
             case "screenshot":
-            case "take_screenshot":
                 return await takeScreenshot(params);
 
             case "pdf":
-            case "print_pdf":
-            case "export_pdf":
                 return await printToPdf(params);
 
             case "handle_dialog":
                 return await handleJsDialog(params);
 
             case "upload":
-            case "upload_file":
-            case "set_files":
                 return await uploadFiles(params);
 
             case "vision_inspect":
-            case "som_inspect":
                 return await visionInspect(params);
 
             case "click_mark":
                 return await clickMark(params);
 
             case "semantic_click":
-            case "role_click":
                 return await semanticClick(params);
 
             case "semantic_fill":
@@ -974,7 +975,6 @@ async function routeCommand(req, client = null) {
                 return await getDownloadStatus(params);
 
             case "press_key":
-            case "send_key":
                 return await pressKey(params);
 
             case "select_option":
@@ -984,43 +984,30 @@ async function routeCommand(req, client = null) {
                 return await fieldState(params);
 
             case "wait_load":
-            case "wait_for_load":
                 return await waitForLoad(params);
 
             case "wait_network_idle":
-            case "network_idle":
                 return await waitForNetworkIdle(params);
 
             case "get_cookies":
-            case "cookies":
                 return await getCookies(params);
 
             case "cdp_send":
-            case "debugger_send":
                 return await sendCdpCommand(params);
 
             case "interactive_map":
-            case "interactive_elements":
-            case "som_map":
                 return await getInteractiveMap(params);
 
             case "drag_and_drop":
-            case "drag":
                 return await dragAndDrop(params);
 
-            case "form_fields":
-                return await getFormFields(params);
-
             case "export_content":
-            case "content_export":
                 return await exportContent(params);
 
             case "export_gsuite":
-            case "gsuite_export":
                 return await exportGsuite(params);
 
             case "export_youtube_transcript":
-            case "youtube_transcript":
                 return await exportYoutubeTranscript(params);
 
             case "reload_extension":
@@ -3046,7 +3033,7 @@ function checkNavigableUrl(url) {
 async function resolveTargetTab(params = {}) {
     const id = requestedTabId(params);
     if (id === null) {
-        const given = params.tabId ?? params.tab_id ?? params.id;
+        const given = params.tabId ?? params.tab_id;
         if (given !== undefined && given !== null && given !== "") throw new Error(`Invalid tab_id: ${given}`);
         throw new Error(MISSING_TAB_MESSAGE);
     }
@@ -3178,7 +3165,7 @@ if (typeof chrome !== "undefined") {
     chrome.windows?.onFocusChanged?.addListener?.(() => { if (busyAgents.size) refreshBusyIndicator(); });
 }
 
-/** Point visé par un vrai clic, montré dans l'onglet (même canal que la pastille). */
+/** Point visé par un vrai clic, montré dans l'onglet (canal du script de contenu). */
 function notifyRipple(tabId, x, y) {
     if (!tabId || typeof chrome === "undefined" || !chrome.tabs?.sendMessage) return;
     try {
@@ -3379,7 +3366,7 @@ async function ownOrClose(tabId, client) {
 }
 
 /**
- * Onglet de Julien confié à l'agent qui le demande : refusé par défaut, seulement avec julienAsked=true (Julien l'a
+ * Onglet de l'utilisateur confié à l'agent qui le demande : refusé par défaut, seulement avec userAsked=true (il l'a
  * demandé explicitement), jamais l'onglet d'un autre agent. Visible dans le poste de contrôle (« adopté »).
  */
 async function adoptTab(params = {}, client = null) {
@@ -3388,8 +3375,7 @@ async function adoptTab(params = {}, client = null) {
     if (ownedBy(owner, client)) return { data: { tabId, adopted: !!owner.adopted, already: true, owner: owner.agent } };
     if (orphanFor(owner, client)) return { data: await reclaimOrphan(tabId, owner, client) };
     if (owner) return { error: foreignTabMessage(tabId, owner, client) };
-    // userAsked (julienAsked, julien_asked : anciens noms, même sens).
-    if (![params.userAsked, params.user_asked, params.julienAsked, params.julien_asked].includes(true)) {
+    if (params.userAsked !== true) {
         return { error: `Adoption of tab ${tabId} refused by default: it is the user's tab. Only if the user explicitly asked for it, retry with user_asked=True.` };
     }
     let tab = null;
@@ -3400,7 +3386,7 @@ async function adoptTab(params = {}, client = null) {
 }
 
 /**
- * Onglet orphelin (session morte du même agent) repris par ce client : sans julienAsked, il était déjà à l'agent.
+ * Onglet orphelin (session morte du même agent) repris par ce client : sans userAsked, il était déjà à l'agent.
  * Un onglet de Julien adopté par l'ancienne session le reste (« adopté », rendu à Julien par release_tab).
  */
 async function reclaimOrphan(tabId, owner, client) {
@@ -4779,7 +4765,7 @@ async function visionInspect(params = {}) {
  * Click directly on an element identified by its visual Set-of-Mark number
  */
 async function clickMark(params = {}) {
-    const mark = parseInt(params.mark || params.number || params.id, 10);
+    const mark = parseInt(params.mark, 10);
     if (!mark) throw new Error("Missing 'mark' number to click");
     return await performMouseAction(params, {
         kind: "click",
@@ -5660,56 +5646,6 @@ async function getCookies(params = {}) {
             }))
         }
     };
-}
-
-/**
- * Champs de formulaire visibles du document principal et de ses cadres same-origin : balise, type, nom, id, libellé
- * (label associé, aria-label, aria-labelledby, placeholder, title), requis, rempli ou non. Aucune valeur n'est lue
- * hors du booléen « rempli ».
- */
-async function getFormFields(params = {}) {
-    const tabId = await resolveTargetTab(params);
-    const limit = Math.max(1, Math.min(200, parseInt(params.limit, 10) || 60));
-    return await evaluateIsolated({
-        tabId,
-        code: `(() => {
-            const limit = ${limit};
-            const fields = [];
-            let total = 0;
-            const text = (v) => String(v || "").replace(/\\s+/g, " ").trim().slice(0, 80);
-            function labelOf(doc, el) {
-                const ids = (el.getAttribute("aria-labelledby") || "").split(/\\s+/).filter(Boolean);
-                const byIds = ids.map(id => doc.getElementById(id)).filter(Boolean).map(n => n.textContent).join(" ");
-                const labels = el.labels ? Array.from(el.labels).map(l => l.textContent).join(" ") : "";
-                return text(byIds) || text(labels) || text(el.getAttribute("aria-label")) || text(el.getAttribute("placeholder")) || text(el.getAttribute("title"));
-            }
-            function scan(doc, frame) {
-                if (!doc || !doc.querySelectorAll) return;
-                for (const el of doc.querySelectorAll("input, textarea, select, [contenteditable=''], [contenteditable='true']")) {
-                    const type = String(el.type || (el.isContentEditable ? "contenteditable" : "")).toLowerCase();
-                    if (["hidden", "submit", "button", "reset", "image"].includes(type)) continue;
-                    const r = el.getBoundingClientRect();
-                    if (r.width <= 0 || r.height <= 0) continue;
-                    total++;
-                    if (fields.length >= limit) continue;
-                    const filled = el.isContentEditable ? !!text(el.textContent)
-                        : (type === "checkbox" || type === "radio") ? !!el.checked
-                        : String(el.value || "").length > 0;
-                    fields.push({
-                        tag: String(el.tagName || "").toLowerCase(), type: type || null,
-                        name: el.getAttribute("name") || null, id: el.id || null,
-                        label: labelOf(doc, el) || null, required: !!el.required, disabled: !!el.disabled,
-                        filled, frame
-                    });
-                }
-                for (const f of doc.querySelectorAll("iframe")) {
-                    try { if (f.contentDocument) scan(f.contentDocument, frame === "top" ? (f.src || "iframe") : frame); } catch (_) {}
-                }
-            }
-            scan(document, "top");
-            return { count: total, fields, truncated: total > fields.length };
-        })()`
-    });
 }
 
 // -----------------------------------------------------------------------------

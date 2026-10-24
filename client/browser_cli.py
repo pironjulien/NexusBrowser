@@ -120,10 +120,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_adopt.add_argument("--tab-id", required=True, type=int, help="Onglet de l'utilisateur")
     p_adopt.add_argument(
         "--user-asked",
-        "--julien-asked",
         dest="user_asked",
         action="store_true",
-        help="L'utilisateur l'a demandé explicitement (--julien-asked : ancien nom)",
+        help="L'utilisateur l'a demandé explicitement",
     )
     page_command(subparsers, "release-tab", "Rendre l'onglet à l'utilisateur (sans le fermer)")
     page_command(subparsers, "close-tab", "Fermer un onglet de cette session")
@@ -282,7 +281,7 @@ def run(args) -> object:
     command = args.subcommand
     simple = {
         "list-tabs": ("list_tabs", {}),
-        "active-tab": ("get_active_tab", {}),
+        "active-tab": ("active_tab", {}),
         "download-status": ("download_status", {}),
     }
     if command in simple:
@@ -290,19 +289,17 @@ def run(args) -> object:
     if command == "new-tab":
         return execute_command("create_tab", {"url": args.url})
     if command == "adopt-tab":
-        return execute_command(
-            "adopt_tab", {"tabId": tab, "userAsked": args.user_asked, "julienAsked": args.user_asked}
-        )
+        return execute_command("adopt_tab", {"tabId": tab, "userAsked": args.user_asked})
     tab_only = {
         "select-tab": "select_tab",
         "release-tab": "release_tab",
         "close-tab": "close_tab",
         "network-stop": "network_stop",
-        "logs": "get_logs",
+        "logs": "logs",
         "check-handoff": "check_handoff",
     }
     if command == "axtree":
-        return with_page_note(execute_command("get_accessibility_tree", {"tabId": tab}), tab)
+        return with_page_note(execute_command("axtree", {"tabId": tab}), tab)
     if command in tab_only:
         return execute_command(tab_only[command], {"tabId": tab})
     if command == "reload":
@@ -360,23 +357,23 @@ def run(args) -> object:
     if command == "scroll":
         return execute_command("scroll", {"direction": args.direction, "y": args.y, "tabId": tab})
     if command == "content":
-        return with_page_note(execute_command("get_content", {"mode": args.mode, "tabId": tab}), tab)
+        return with_page_note(execute_command("content", {"mode": args.mode, "tabId": tab}), tab)
     if command == "dialog":
         params = {"accept": args.action == "accept", "promptText": args.prompt_text, "tabId": tab}
         return execute_command("handle_dialog", params)
     if command == "eval":
-        return execute_command("evaluate", {"code": args.code, "tabId": tab})
+        return execute_command("eval", {"code": args.code, "tabId": tab})
     if command == "screenshot":
         res = execute_command("screenshot", {"selector": args.selector, "tabId": tab})
         _save(res.get("dataUrl", ""), args.output)
         return {"output": args.output}
     if command == "pdf":
-        res = execute_command("print_pdf", {"tabId": tab})
+        res = execute_command("pdf", {"tabId": tab})
         _save(res.get("pdfBase64", ""), args.output, is_data_url=False)
         return {"output": args.output}
     if command == "upload":
         params = {"files": args.files, "selector": args.selector, "tabId": tab}
-        return execute_command("upload_file", params, timeout=30.0)
+        return execute_command("upload", params, timeout=30.0)
     if command == "vision-inspect":
         res = execute_command("vision_inspect", {"tabId": tab}, timeout=20.0)
         _save(res.get("screenshotDataUrl", ""), args.output)

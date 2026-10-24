@@ -3,6 +3,36 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.19.0] - 2026-10-24
+
+Anti-bloat pass by the three agents (Claude, Codex, Antigravity): what all of them, or two with proof, found unused
+is removed; public tools are unchanged.
+
+### Security
+- Tab ownership: a command carrying several tabs (`tabIds`) has every one of them checked whatever its action name.
+  The `tabs_group` alias skipped that check: with one of its own tabs as `tab_id`, an agent could group the user's
+  or another agent's tabs (found by Codex). Owned `tabIds` never exempt the `tab_id` target from its own check.
+- Tab ids are read once and strictly (integer, or a string of digits only) before authorization, and the same value
+  is used to act: `"1e2"` meant tab 100 to the ownership check and tab 1 to the action (found by Codex, present
+  since the ownership checks). Conflicting `tab_id`/`tabId` or malformed `tabIds` are refused.
+- Upload: the secret-folder check applies to any command carrying `files`, whatever its action name, in the client
+  and in the bridge.
+
+### Removed
+- One name per bridge action: the alias table of the bridge and about 35 aliases in the extension (`get_dom`,
+  `evaluate`, `print_pdf`, `upload_file`, `take_screenshot`, `tabs_group`...) that no client sends. Each alias had to
+  be copied into every guard-rail list (emergency stop, retry of read-only commands, uploads).
+- Extension actions sent by no client: `form_fields`, `type`/`type_text`, `uncheck` (`fill` with `replace=false`
+  and `check` with `checked=false` do the same); tab id read from `params.id`; click mark read from `number` or `id`.
+- Former names of the adoption consent (`julienAsked`, `julien_asked`, CLI `--julien-asked`): only `userAsked` is
+  sent and read (renamed in 2.11).
+- `installed.stamp` and `scripts/empreinte.ps1`: nothing read them any more (the machine sync computes its own
+  stamp).
+- The copy of the skill in `plugins/nexus-browser/`: `skills/nexus-browser/SKILL.md` is the only source, copied into
+  Antigravity's plugin by `install.ps1`.
+- Dead code: an unused outward-label helper, an unused reconnection delay override, an unused protocol export, an
+  unused test helper; stale comments about the removed status pill.
+
 ## [2.18.0] - 2026-10-23
 
 ### Added

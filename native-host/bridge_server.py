@@ -330,41 +330,6 @@ async def watch_emergency_stop() -> None:
         await asyncio.sleep(STOP_POLL_S)
 
 
-ACTION_ALIASES = {
-    "list-tabs": "list_tabs",
-    "active-tab": "get_active_tab",
-    "active_tab": "get_active_tab",
-    "select-tab": "select_tab",
-    "new-tab": "create_tab",
-    "create-tab": "create_tab",
-    "close-tab": "close_tab",
-    "reload-tab": "reload",
-    "hover": "hover",
-    "wait-load": "wait_load",
-    "wait-network-idle": "wait_network_idle",
-    "get-cookies": "get_cookies",
-    "cookies": "get_cookies",
-    "cdp-send": "cdp_send",
-    "eval": "evaluate",
-    "content": "get_dom",
-    "pdf": "print_pdf",
-    "upload": "upload_file",
-    "vision-inspect": "vision_inspect",
-    "click-mark": "click_mark",
-    "semantic-click": "semantic_click",
-    "semantic-fill": "semantic_fill",
-    "select-option": "select_option",
-    "press-key": "press_key",
-    "check-handoff": "check_handoff",
-    "logs": "get_logs",
-    "interactive-map": "interactive_map",
-    "interactive_map": "interactive_map",
-    "drag-and-drop": "drag_and_drop",
-    "drag_and_drop": "drag_and_drop",
-    "reload-extension": "reload_extension",
-}
-
-
 def note_session(client: dict, pid: int | None) -> list[str]:
     """Retient le processus de la session qui commande et renvoie les sessions MORTES du même agent : processus annoncé
     qui ne tourne plus (redémarrage du serveur MCP, plantage). Seule la preuve compte : une session sans processus
@@ -382,7 +347,9 @@ def note_session(client: dict, pid: int | None) -> list[str]:
 
 
 def normalize_action(action: str) -> str:
-    return ACTION_ALIASES.get(action, (action or "").lower().replace("-", "_"))
+    """Nom reçu par l'extension : celui du client, tirets remplacés par des soulignés. Un seul nom par action, sans
+    table d'alias (chaque alias devait être recopié dans les listes de garde-fous)."""
+    return (action or "").lower().replace("-", "_")
 
 
 async def send_command_to_chrome(action, params=None, timeout=15.0, client=None, target=None, gone=None):
@@ -561,7 +528,7 @@ async def handle_http(reader, writer):
                     )
                     return
 
-            if is_upload_action(action):
+            if is_upload_action(action, params):
                 refusal = upload_refusal(params.get("files"))
                 if refusal is not None:
                     await send_json_response(writer, 403, {"success": False, "error": refusal})

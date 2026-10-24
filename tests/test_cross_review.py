@@ -73,7 +73,7 @@ def test_tool_texts_no_longer_promise_a_current_tab():
         assert "onglet courant" not in (tool.__doc__ or "")
     instructions = mcp_server.browser_mcp.instructions or ""
     assert "browser_new_tab" in instructions and "browser_adopt_tab" in instructions
-    for skill in ("skills/nexus-browser/SKILL.md", "plugins/nexus-browser/skills/nexus-browser/SKILL.md"):
+    for skill in ("skills/nexus-browser/SKILL.md",):
         text = (REPO_ROOT / skill).read_text(encoding="utf-8")
         assert "lastAgentTabId" not in text and "Un onglet par agent" in text and "browser_adopt_tab" in text
         assert "sidepanel" not in text
@@ -165,8 +165,12 @@ def test_upload_refuses_secret_folders_before_sending(fake_home, monkeypatch):
         assert payload["status"] == "error", path
         assert "Upload refused" in payload["error"]
     assert reached == []
-    with pytest.raises(PermissionError):
-        bridge_client.call_bridge("upload_file", {"files": [str(home / ".ssh" / "id")], "tab_id": 1})
+    # Contrôle indépendant du nom d'action : tout paramètre « files » est vérifié (plus d'alias à recopier).
+    for action in ("upload", "upload_file", "set-files", "anything"):
+        with pytest.raises(PermissionError):
+            bridge_client.call_bridge(action, {"files": [str(home / ".ssh" / "id")], "tab_id": 1})
+    assert bridge_security.is_upload_action("navigate", {"files": []})
+    assert not bridge_security.is_upload_action("navigate", {"url": "https://example.invalid"})
     # Un fichier ordinaire part bien au pont (refus de connexion simulé ensuite).
     allowed = str(home / "Docs" / "ok.pdf")
     assert json.loads(mcp_server.browser_upload(files=[allowed], tab_id=1))["status"] == "error"
@@ -246,4 +250,4 @@ def test_chrome_found_in_user_install_and_app_paths(tmp_path, monkeypatch):
 
 def test_versions_bumped_for_changed_tools():
     manifest = json.loads((REPO_ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == bridge_security.VERSION == "2.18.0"
+    assert manifest["version"] == bridge_security.VERSION == "2.19.0"

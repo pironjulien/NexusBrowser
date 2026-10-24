@@ -1,7 +1,7 @@
 /**
- * Nexus Browser Bridge — script de contenu : réveil du service worker, pastille d'état et point du clic.
+ * Nexus Browser Bridge — script de contenu : réveil du service worker et point du clic.
  *
- * Il n'écoute AUCUN événement de la page : pastille et point du clic ne répondent qu'aux messages de l'extension
+ * Il n'écoute AUCUN événement de la page : le point du clic ne répond qu'aux messages de l'extension
  * elle-même (chrome.tabs.sendMessage du service worker, expéditeur vérifié). Une page ne peut donc ni afficher une
  * fausse pastille « agent au travail » ni faire croire à un clic.
  */
