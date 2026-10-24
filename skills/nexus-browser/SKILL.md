@@ -68,8 +68,8 @@ interrompt les commandes en cours.
 * **Boîtes alert/confirm/prompt** : jamais acceptées d'office ; la réponse le signale (`dialogOpened`), puis
   `browser_handle_dialog(accept, tab_id=...)`.
 * **Gestes sortants : accord lié à l'action exacte** (2.12.0, accord de la trinité du 19/10/2026). Avant un clic
-  (`browser_click`, `browser_click_mark`, `browser_semantic_click`), une touche Entrée / Ctrl+Entrée / Espace
-  (`browser_press_key`, `keys` de `browser_fill` et `browser_semantic_fill`), une frappe avec saut de ligne
+  (`browser_click`), une touche Entrée / Ctrl+Entrée / Espace
+  (`browser_press_key`, `keys` de `browser_fill`), une frappe avec saut de ligne
   (`browser_type_keys`) ou un glisser, le serveur lit sans geste le déclencheur (l'élément cliqué, ou les boutons
   d'envoi du formulaire du champ actif). S'il dit envoyer, payer, acheter, commander, publier, poster, appeler,
   transférer, s'abonner, réserver... (politique commune `garde-fous.json`), le geste est **refusé** avec le résumé

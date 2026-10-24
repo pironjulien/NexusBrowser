@@ -457,7 +457,7 @@ test('one click event for CSS and marker clicks', async () => {
     const h = harness();
     await h.run('click', {tabId: 1, selector: 'button'});
     assert.equal(h.clicks, 1);
-    await h.run('click_mark', {tabId: 1, mark: 1});
+    await h.run('click', {tabId: 1, mark: 1});
     assert.equal(h.clicks, 2);
 });
 
@@ -694,7 +694,7 @@ test('getPageContent extracts interactive elements and handles SVG className', a
     assert.equal(res.data.elements[0].className, 'lucide-icon');
 });
 
-test('semanticFill and fill support textarea with prototype setter', async () => {
+test('fill supports a textarea with prototype setter, by label and by selector', async () => {
     let textVal = '';
     const textareaEl = {
         scrollIntoView() {},
@@ -715,7 +715,7 @@ test('semanticFill and fill support textarea with prototype setter', async () =>
             getElementById: () => null
         }
     });
-    const res1 = await h.run('semantic_fill', { tabId: 1, label: 'Votre message', value: 'NexusBrowser SOTA' });
+    const res1 = await h.run('fill', { tabId: 1, locator: { label: 'Votre message' }, value: 'NexusBrowser SOTA' });
     assert.equal(res1.data.success, true);
     assert.equal(textVal, 'NexusBrowser SOTA');
 
@@ -1088,16 +1088,6 @@ test('hover(text) survole le bouton visé et non <html>', async () => {
     assert.equal(dom.synthetic.length, 0);  // plus de mouseover/mouseenter synthétique en doublon
 });
 
-test('semantic_click sans rôle vise le contrôle nommé, pas la page', async () => {
-    const dom = fakeDom(toolbar);
-    const h = harness(domPage(dom));
-    const res = await h.run('semantic_click', {tabId: 1, name: 'Enregistrer', timeoutMs: 50});
-    assert.equal(res.data.success, true);
-    assert.equal(res.data.method, 'cdp');
-    assert.equal(dom.clicked.length, 1);
-    assert.equal(closestTag(dom.clicked[0], 'BUTTON').getAttribute('id'), 'save');
-});
-
 test('close_tab, navigate et reload sans tab_id ni onglet d\'agent connu sont refusés', async () => {
     let removed = 0;
     let updated = 0;
@@ -1277,12 +1267,12 @@ test('survol : un seul mouseMoved, aucun bouton, survol de confiance', async () 
     assert.equal(h.clicks, 0);
 });
 
-test('click_mark passe aussi par la souris CDP', async () => {
+test('click par repère (mark) passe aussi par la souris CDP', async () => {
     const h = harness();
-    const mark = await h.run('click_mark', {tabId: 1, mark: 1});
+    const mark = await h.run('click', {tabId: 1, mark: 1});
     assert.equal(mark.data.method, 'cdp');
     assert.equal(mark.data.trusted_click, true);
-    assert.match((await h.run('click_mark', {tabId: 1, mark: 7})).error, /No element registered for mark #7/);
+    assert.match((await h.run('click', {tabId: 1, mark: 7})).error, /No element registered for mark #7/);
     assert.equal(h.clicks, 1);
 });
 
@@ -1471,7 +1461,7 @@ test('les actions souris ne mettent jamais l\'onglet ni la fenêtre au premier p
     await h.run('click', {tabId: 1, selector: 'button'});
     await h.run('click', {tabId: 1, selector: 'button', click_count: 2});
     await h.run('hover', {tabId: 1, selector: 'button'});
-    await h.run('click_mark', {tabId: 1, mark: 1});
+    await h.run('click', {tabId: 1, mark: 1});
     const dp = dragPage();
     const h2 = harness(dp.page);
     await h2.run('drag_and_drop', {tabId: 1, from_selector: '#source', to_selector: '#zone', steps: 2, delayMs: 0});
@@ -1826,10 +1816,10 @@ test(`moteur AX : noms calculés et rôles filtrés (${fullTree ? 'arbre complet
 });
 }
 
-test('hover, semantic_click et drag acceptent le même localisateur', async () => {
+test('hover, click et drag acceptent le même localisateur', async () => {
     const {h} = richHarness(formPage);
     assert.equal((await h.run('hover', {tabId: 1, locator: {role: 'link', name: 'Accueil'}})).data.trusted_hover, true);
-    const sem = await h.run('semantic_click', {tabId: 1, locator: {role: 'button', name: 'Envoyer'}});
+    const sem = await h.run('click', {tabId: 1, locator: {role: 'button', name: 'Envoyer'}});
     assert.equal(sem.data.id, 'send');
     const before = h.mouse().length;
     const drag = await h.run('drag_and_drop', {tabId: 1, from_locator: {testId: 'submit-zone'}, to_locator: {role: 'heading'}, steps: 2, delayMs: 0});
@@ -1936,13 +1926,13 @@ test('saisie sans débogueur : repli JavaScript signalé ; champ non éditable r
     assert.match((await h2.run('fill', {tabId: 1, locator: {role: 'heading'}, value: 'x'})).error, /is not an input field/);
 });
 
-test('semantic_fill : libellé puis placeholder, strict, frappe de confiance', async () => {
+test('fill par libellé puis par placeholder : frappe de confiance', async () => {
     const {h, dom} = richHarness(formPage);
-    const res = await h.run('semantic_fill', {tabId: 1, label: 'Adresse e-mail', value: 'a@b.c'});
+    const res = await h.run('fill', {tabId: 1, locator: {label: 'Adresse e-mail'}, value: 'a@b.c'});
     assert.equal(res.data.verified, true);
     assert.equal(res.data.method, 'cdp');
     assert.equal(dom.byId('email').value, 'a@b.c');
-    const byPlaceholder = await h.run('semantic_fill', {tabId: 1, label: 'Rechercher un produit', value: 'souris'});
+    const byPlaceholder = await h.run('fill', {tabId: 1, locator: {placeholder: 'Rechercher un produit'}, value: 'souris'});
     assert.equal(byPlaceholder.data.verified, true);
     assert.equal(dom.byId('search').value, 'souris');
 });

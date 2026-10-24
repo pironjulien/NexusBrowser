@@ -3,6 +3,27 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.20.0] - 2026-10-24
+
+Second anti-bloat step, decided by the user: duplicated tools are entropy.
+
+### Removed
+- Three public tools that duplicated `browser_click` and `browser_fill` (52 -> 49 tools, so fewer tool descriptions
+  loaded into every agent's context):
+  - `browser_click_mark(mark)`: use `browser_click(mark=N)`;
+  - `browser_semantic_click(role, name)`: use `browser_click(locator={"role": ..., "name": ...})`, strict. The legacy
+    path without a locator (most specific element, not strict) is gone with it, in the extension and in the outward
+    accord check;
+  - `browser_semantic_fill(label, value)`: use `browser_fill(locator={"label": ...})` or `{"placeholder": ...}`.
+- The matching extension actions (`click_mark`, `semantic_click`, `semantic_fill`) and CLI commands (`click-mark`,
+  `semantic-click`, `semantic-fill`; `click --selector "#N"` clicks a mark).
+- Outward accord check: targets given as a list of alternatives (label then placeholder), used only by
+  `browser_semantic_fill`.
+
+### Fixed
+- Live validation: no field is focused during the PDF masking check; the blinking caret of the password field
+  ended up in one PDF out of two.
+
 ## [2.19.0] - 2026-10-24
 
 Anti-bloat pass by the three agents (Claude, Codex, Antigravity): what all of them, or two with proof, found unused

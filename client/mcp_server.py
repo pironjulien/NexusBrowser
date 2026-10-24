@@ -381,15 +381,10 @@ def _gated(
             emergency_stop.check()
             read_timeout = transport_timeout(wait_ms, timeout) if wait_ms is not None else timeout
 
-            def bound(target: Any) -> Any:
-                if isinstance(target, list):
-                    return [bound(option) for option in target]
-                return {**target, "tab_id": tab_id}
-
             outward_gate.check(
                 ACCORDS,
                 _read_trigger,
-                [bound(target) for target in targets],
+                [{**target, "tab_id": tab_id} for target in targets],
                 gestures,
                 confirm=confirm,
                 accord=accord,
@@ -610,29 +605,6 @@ def browser_click(
     return _gated("click", params, [target], gestures, confirm, accord, wait_ms=timeout_ms)
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Click by role and name"))
-def browser_semantic_click(
-    role: str | None = None,
-    name: str | None = None,
-    *,
-    tab_id: TabId,
-    locator: dict | None = None,
-    confirm: Confirm = False,
-    accord: Accord = "",
-) -> str:
-    """Clicks (real CDP mouse click) an element found by its ARIA role (button, link, tab) and accessible name.
-
-    With locator (strict, see browser_click and browser_find): same engine as browser_click(locator=...). Without
-    locator: the most specific element for role/name (legacy behavior, not strict). Outward click: accord required,
-    as for browser_click."""
-    params: dict = {"role": role, "name": name, "tab_id": tab_id}
-    if locator:
-        params["locator"] = _locator(locator)
-    target = _targeting(semantic=True, role=role, name=name, locator=params.get("locator"), timeoutMs=2500)
-    gestures = ["click"] if set(target) - {"semantic", "timeoutMs"} else []
-    return _gated("semantic-click", params, [target], gestures, confirm, accord)
-
-
 @browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Fill a field"))
 def browser_fill(
     selector: str | None = None,
@@ -692,44 +664,6 @@ def browser_fill(
         focus_ok=set(target) == {"timeoutMs"},
         typed=value,
     )
-
-
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Fill a field by label"))
-def browser_semantic_fill(
-    label: str | None = None,
-    value: str = "",
-    *,
-    tab_id: TabId,
-    locator: dict | None = None,
-    exact: bool = False,
-    keys: list[str] | None = None,
-    mode: str = "auto",
-    confirm: Confirm = False,
-    accord: Accord = "",
-) -> str:
-    """Fills (trusted typing, like browser_fill) the field found by its label (<label>, aria-label,
-    aria-labelledby), else by its placeholder, or by locator. Strict: several matching fields -> error listing the
-    candidates (use exact=True, or a locator with nth). Response: verified, value, trusted_input. keys that submit
-    toward an outward button: accord required, as for browser_fill."""
-    params: dict = {"label": label, "value": value, "tab_id": tab_id, "mode": mode}
-    if exact:
-        params["exact"] = True
-    if keys:
-        params["keys"] = keys
-    if locator:
-        params["locator"] = _locator(locator)
-    if locator:
-        targets: list = [{"locator": params["locator"], "timeoutMs": 2500}]
-    else:
-        exactness = {"exact": True} if exact else {}
-        targets = [
-            [
-                {"locator": {"label": label, **exactness}, "timeoutMs": 2500},
-                {"locator": {"placeholder": label, **exactness}, "timeoutMs": 0},
-            ]
-        ]
-    gestures = outward_gate.typed_gestures("", keys) if (locator or label) else []
-    return _gated("semantic-fill", params, targets, gestures, confirm, accord, typed=value)
 
 
 @browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Select an option"))
@@ -1088,14 +1022,6 @@ def browser_vision_inspect(tab_id: TabId, output_path: str | None = None, inline
     """
     output = None if inline else (output_path or _default_capture_path("vision"))
     return _call_bridge("vision-inspect", {"output": output, "tab_id": tab_id})
-
-
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Click a mark"))
-def browser_click_mark(mark: int, *, tab_id: TabId, confirm: Confirm = False, accord: Accord = "") -> str:
-    """Clicks (real CDP mouse click) the element of a Set-of-Mark (SoM) badge, at its center or first uncovered point.
-    Outward click: accord required, as for browser_click."""
-    params = {"mark": mark, "tab_id": tab_id}
-    return _gated("click-mark", params, [{"mark": mark, "timeoutMs": 0}], ["click"], confirm, accord)
 
 
 @browser_mcp.tool(annotations=_titled(PAGE_READ, "Check a handoff"))

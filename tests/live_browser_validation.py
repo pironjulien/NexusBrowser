@@ -457,25 +457,34 @@ def run_live_validation():
         print("[OK] browser_fill Shadow DOM piercing validé (valeur: 'Shadow Pierced SOTA').")
         results["browser_fill_shadow"] = True
 
-        # 11. browser_semantic_fill
-        print("\n--- [11/31] Test: browser_semantic_fill ---")
+        # 11. browser_fill par libellé et par placeholder
+        print("\n--- [11/31] Test: browser_fill (libellé, placeholder) ---")
         sfill_res = parse_response(
-            mcp.browser_semantic_fill(label="Adresse Email", value="julien@exemple.fr", tab_id=test_tab_id)
+            mcp.browser_fill(locator={"label": "Adresse Email"}, value="julien@exemple.fr", tab_id=test_tab_id)
         )
-        assert sfill_res.get("status") == "success", f"Semantic fill failed: {sfill_res}"
+        assert sfill_res.get("status") == "success", f"Fill by label failed: {sfill_res}"
         email_val = mcp.browser_eval("document.getElementById('email').value", tab_id=test_tab_id)
         assert get_eval_val(email_val) == "julien@exemple.fr"
 
         sfill_text = parse_response(
-            mcp.browser_semantic_fill(
-                label="Remarques & Notes", value="Multi-line SOTA text\nLine 2", tab_id=test_tab_id
+            mcp.browser_fill(
+                locator={"label": "Remarques & Notes"}, value="Multi-line SOTA text\nLine 2", tab_id=test_tab_id
             )
         )
-        assert sfill_text.get("status") == "success", f"Textarea semantic fill failed: {sfill_text}"
+        assert sfill_text.get("status") == "success", f"Textarea fill by label failed: {sfill_text}"
         comm_val = mcp.browser_eval("document.getElementById('comments').value", tab_id=test_tab_id)
         assert "Multi-line SOTA text" in str(get_eval_val(comm_val))
-        print("[OK] browser_semantic_fill validé (input + textarea sans TypeError).")
-        results["browser_semantic_fill"] = True
+
+        sfill_ph = parse_response(
+            mcp.browser_fill(
+                locator={"placeholder": "Entrez votre email"}, value="marie@example.invalid", tab_id=test_tab_id
+            )
+        )
+        assert sfill_ph.get("status") == "success", f"Fill by placeholder failed: {sfill_ph}"
+        email_val = mcp.browser_eval("document.getElementById('email').value", tab_id=test_tab_id)
+        assert get_eval_val(email_val) == "marie@example.invalid"
+        print("[OK] browser_fill par libellé et placeholder validé (input + textarea sans TypeError).")
+        results["browser_fill_label_placeholder"] = True
 
         # 12. browser_hover
         print("\n--- [12/31] Test: browser_hover ---")
@@ -507,18 +516,18 @@ def run_live_validation():
         print("[OK] browser_click Shadow DOM piercing validé.")
         results["browser_click_shadow"] = True
 
-        # 15. browser_semantic_click
-        print("\n--- [15/31] Test: browser_semantic_click ---")
+        # 15. browser_click par rôle et nom
+        print("\n--- [15/31] Test: browser_click (rôle et nom) ---")
         sclick_res = with_accord(
-            lambda tab=test_tab_id, **accord: mcp.browser_semantic_click(
-                role="button", name="Valider la commande", tab_id=tab, **accord
+            lambda tab=test_tab_id, **accord: mcp.browser_click(
+                locator={"role": "button", "name": "Valider la commande"}, tab_id=tab, **accord
             )
         )
         assert sclick_res.get("status") == "success"
         order_res = mcp.browser_eval("document.getElementById('btn-result').textContent", tab_id=test_tab_id)
         assert "Order Validated!" in str(get_eval_val(order_res))
-        print("[OK] browser_semantic_click validé.")
-        results["browser_semantic_click"] = True
+        print("[OK] browser_click par rôle et nom validé.")
+        results["browser_click_role_name"] = True
 
         # 16. browser_select_option
         print("\n--- [16/31] Test: browser_select_option ---")
@@ -667,8 +676,8 @@ def run_live_validation():
             if os.path.exists(pdf_path):
                 os.remove(pdf_path)
 
-        # 27. browser_vision_inspect & browser_click_mark
-        print("\n--- [27/31] Test: browser_vision_inspect & [28/31] browser_click_mark ---")
+        # 27. browser_vision_inspect & 28. browser_click(mark=N)
+        print("\n--- [27/31] Test: browser_vision_inspect & [28/31] browser_click(mark) ---")
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_som:
             som_path = tmp_som.name
         try:
@@ -688,12 +697,12 @@ def run_live_validation():
                 normal_btn_mark = markers[0]["mark"]
             assert normal_btn_mark is not None, f"No mark found to click: {markers}"
 
-            cmark_res = parse_response(mcp.browser_click_mark(mark=normal_btn_mark, tab_id=test_tab_id))
+            cmark_res = parse_response(mcp.browser_click(mark=normal_btn_mark, tab_id=test_tab_id))
             assert cmark_res.get("status") == "success", f"Click mark failed: {cmark_res}"
             mark_btn_txt = mcp.browser_eval("document.getElementById('btn-result').textContent", tab_id=test_tab_id)
             assert "Normal Clicked!" in str(get_eval_val(mark_btn_txt))
-            print(f"[OK] browser_click_mark validé (clic sur le badge #{normal_btn_mark} avec succès).")
-            results["browser_click_mark"] = True
+            print(f"[OK] browser_click(mark) validé (clic sur le badge #{normal_btn_mark} avec succès).")
+            results["browser_click_by_mark"] = True
         finally:
             if os.path.exists(som_path):
                 os.remove(som_path)
@@ -1716,16 +1725,16 @@ def capture_masking_checks(check, tab_id: int, value_of) -> None:
             {"identiques": a == b, "temoin_different": control != b, "style_apres": inline_style(field_id)},
         )
 
-    # PDF : mêmes valeurs, même document ; témoin ordinaire : document différent (plus de pastille d'état depuis le 22/10).
-    def pdf_without_pill() -> bytes:
-        return _pdf(tab_id)
-
+    # PDF : mêmes valeurs, même document ; témoin ordinaire : document différent. Aucun champ actif pendant l'export :
+    # le curseur clignotant du champ mot de passe (rempli plus haut) entrait ou non dans le PDF selon l'instant
+    # (un trait de 1 px en plus), d'où un échec d'une fois sur deux sans rapport avec la carte (vu le 24/10).
+    value_of("document.activeElement && document.activeElement.blur(); 1")
     set_field("cardname", "5131420000001111", "cardNumber")
-    pdf_a = pdf_without_pill()
+    pdf_a = _pdf(tab_id)
     set_field("cardname", "4000056655665556", "cardNumber")
-    pdf_b = pdf_without_pill()
+    pdf_b = _pdf(tab_id)
     set_field("cardname", "4000056655665556", "note")
-    pdf_control = pdf_without_pill()
+    pdf_control = _pdf(tab_id)
     set_field("cardname", "5131420000001111", "cardNumber")
     check(
         "pdf_carte_en_disques",

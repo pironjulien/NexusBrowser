@@ -207,19 +207,19 @@ def test_line_break_typed_or_submitting_keys_need_the_accord(page):
 
 def test_click_on_a_neutral_link_is_free(page):
     assert reply(mcp_server.browser_click(selector="#pricing", tab_id=1))["status"] == "success"
-    assert reply(mcp_server.browser_click_mark(mark=8, tab_id=1))["status"] == "success"
+    assert reply(mcp_server.browser_click(mark=8, tab_id=1))["status"] == "success"
     assert reply(mcp_server.browser_click(selector="#body", tab_id=1))["status"] == "success"  # un champ : focus
     assert reply(mcp_server.browser_click(selector="#send", button="right", tab_id=1))["status"] == "success"
-    assert [action for action, _ in page.gestures] == ["click", "click-mark", "click", "click"]
+    assert [action for action, _ in page.gestures] == ["click", "click", "click", "click"]
 
 
 def test_concurrent_paths_cannot_skip_the_accord(page):
     for out in (
-        mcp_server.browser_click_mark(mark=7, tab_id=1),
-        mcp_server.browser_semantic_click(role="button", name="Send", tab_id=1),
+        mcp_server.browser_click(mark=7, tab_id=1),
+        mcp_server.browser_click(selector="#7", tab_id=1),  # sélecteur « #N » = mark
         mcp_server.browser_click(locator={"role": "button", "name": "Send"}, tab_id=1),
         mcp_server.browser_drag_and_drop(from_selector="#pricing", to_selector="#send", tab_id=1),
-        mcp_server.browser_click_mark(mark=7, tab_id=1, confirm=True, accord="deadbeef"),  # jeton lu dans la page
+        mcp_server.browser_click(mark=7, tab_id=1, confirm=True, accord="deadbeef"),  # jeton lu dans la page
     ):
         assert reply(out)["accord_required"], out
     assert page.gestures == []
@@ -276,12 +276,9 @@ def test_gated_tools_expose_confirm_and_accord():
     tools = {tool.name: tool for tool in asyncio.run(mcp_server.browser_mcp.list_tools())}
     for name in (
         "browser_click",
-        "browser_semantic_click",
-        "browser_click_mark",
         "browser_press_key",
         "browser_type_keys",
         "browser_fill",
-        "browser_semantic_fill",
         "browser_drag_and_drop",
     ):
         properties = tools[name].input_schema["properties"]

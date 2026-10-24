@@ -194,16 +194,9 @@ def _probe(call: Reader, tab_id: Any, spec: dict, timeout: float) -> dict:
 
 
 def _found(call: Reader, tab_id: Any, target: dict, timeout: float) -> list[dict]:
-    """Cible par localisateur (ou rôle et nom) : l'action find, en lecture seule, comme le geste (strict, nth, tous les
-    cadres) ; puis le formulaire de l'élément trouvé lu par le script (cadre principal). Rôle et nom sans localisateur
-    (ancien clic sémantique, non strict) : chaque candidat est contrôlé."""
-    legacy = target.get("semantic") and not target.get("locator")
-    if legacy:
-        locator = {key: target[key] for key in ("role", "name") if target.get(key)}
-        if target.get("text"):
-            locator["hasText"] = target["text"]
-    else:
-        locator = dict(target["locator"])
+    """Cible par localisateur : l'action find, en lecture seule, comme le geste (strict, nth, tous les cadres) ; puis
+    le formulaire de l'élément trouvé lu par le script (cadre principal)."""
+    locator = dict(target["locator"])
     found = call("find", {"locator": locator, "limit": 100, "tab_id": tab_id}, timeout)
     if isinstance(found, dict) and found.get("dialogOpened"):
         return [found]
@@ -213,9 +206,7 @@ def _found(call: Reader, tab_id: Any, target: dict, timeout: float) -> list[dict
     if not candidates:
         return [{"notFound": True, "reason": f"No element matches the locator {json.dumps(locator)}"}]
     nth = locator.get("nth")
-    if legacy:
-        chosen = candidates[:10]
-    elif nth is None:
+    if nth is None:
         if len(candidates) > 1:
             return [{"success": True, "ambiguous": True}]  # le geste strict refusera lui-même, sans rien faire
         chosen = candidates
@@ -265,7 +256,7 @@ def read_trigger(call: Reader, target: dict, timeout: float, wait_s: float = 0.0
     target = {k: v for k, v in target.items() if k not in ("tab_id", "timeoutMs")}
     deadline = time.monotonic() + max(0.0, wait_s)
     while True:
-        if target.get("locator") or target.get("semantic"):
+        if target.get("locator"):
             result = _found(call, tab_id, target, timeout)
         else:
             spec = {k: target[k] for k in ("mark", "selector", "index", "text") if target.get(k) is not None}
@@ -281,7 +272,7 @@ def read_trigger(call: Reader, target: dict, timeout: float, wait_s: float = 0.0
 def check(
     accords: garde_fous.Accords,
     read: Reader,
-    targets: Sequence[dict | list[dict]],
+    targets: Sequence[dict],
     gestures: list[str],
     *,
     confirm: Any = False,
@@ -291,8 +282,7 @@ def check(
     typed: str = "",
 ) -> None:
     """Contrôle avant le geste. targets : éléments du geste (glisser : source puis destination), chacun donné par ses
-    paramètres de ciblage (tab_id compris : locator, semantic/role/name, mark, selector, text, ou rien = élément actif)
-    ou par une liste d'alternatives essayées dans l'ordre (libellé puis placeholder, comme browser_semantic_fill).
+    paramètres de ciblage (tab_id compris : locator, mark, selector, text, ou rien = élément actif).
     gestures : « click », « drag », « Enter », « Control+Enter », « Space »... focus_ok : aucun élément actif = la touche
     part sur la page, libre ; sinon une cible introuvable refuse (jamais un clic non lu). typed : texte frappé avec le
     geste. Lève AccordRequired si un accord manque, RuntimeError/ValueError/OSError si la lecture échoue."""
@@ -300,15 +290,9 @@ def check(
         return
     keys = any(g.rsplit("+", 1)[-1] in ("Enter", "Space") for g in gestures)
     found: tuple[dict, str] | None = None
-    for choice in targets:
-        options: list[dict] = choice if isinstance(choice, list) else [choice]
-        datas: list[dict] = []
-        for params in options:
-            wait_s = 0.0 if focus_ok else float(params.get("timeoutMs") or 0) / 1000
-            datas = read_trigger(read, params, timeout, wait_s)
-            if not (len(datas) == 1 and datas[0].get("notFound")):
-                break
-        for data in datas:
+    for params in targets:
+        wait_s = 0.0 if focus_ok else float(params.get("timeoutMs") or 0) / 1000
+        for data in read_trigger(read, params, timeout, wait_s):
             if data.get("dialogOpened") or data.get("ambiguous"):
                 return  # le geste lui-même rapportera la boîte de dialogue ou l'ambiguïté, sans rien déclencher
             if data.get("notFound"):

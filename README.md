@@ -59,13 +59,13 @@ bridge shared by several agents.
 
 ## Tools
 
-52 MCP tools.
+49 MCP tools.
 
 | Area | Tools |
 | --- | --- |
 | Tabs | `browser_list_tabs`, `browser_active_tab` (read only), `browser_new_tab`, `browser_select_tab`, `browser_adopt_tab`, `browser_release_tab`, `browser_group_tabs`, `browser_close_tab`, `browser_reload`, `browser_navigate` (URL, back, forward), `browser_wait_load`, `browser_wait_for` (text or element appears or disappears) |
-| Input (trusted CDP events) | `browser_click`, `browser_semantic_click`, `browser_hover`, `browser_fill`, `browser_semantic_fill`, `browser_fill_form`, `browser_select_option`, `browser_check`, `browser_press_key`, `browser_type_keys`, `browser_drag_and_drop`, `browser_scroll`, `browser_upload`, `browser_handle_dialog` |
-| Finding elements | `browser_find` (Playwright-style locators: role, label, text, placeholder, test id, in every frame), `browser_interactive_map`, `browser_vision_inspect` and `browser_click_mark` (Set-of-Mark badges), `browser_axtree`, `browser_content`, `browser_check_handoff` (2FA, CAPTCHA) |
+| Input (trusted CDP events) | `browser_click` (by locator, mark, selector or text), `browser_hover`, `browser_fill`, `browser_fill_form`, `browser_select_option`, `browser_check`, `browser_press_key`, `browser_type_keys`, `browser_drag_and_drop`, `browser_scroll`, `browser_upload`, `browser_handle_dialog` |
+| Finding elements | `browser_find` (Playwright-style locators: role, label, text, placeholder, test id, in every frame), `browser_interactive_map`, `browser_vision_inspect` (Set-of-Mark badges, clicked with `browser_click(mark=N)`), `browser_axtree`, `browser_content`, `browser_check_handoff` (2FA, CAPTCHA) |
 | Network and downloads | `browser_network_record`, `browser_network_stop`, `browser_network_requests`, `browser_network_response`, `browser_wait_network_idle`, `browser_download_status`, `browser_wait_download`, `browser_get_cookies` |
 | Output | `browser_screenshot` (view, full page or element), `browser_pdf`, `browser_export` (main content as Markdown, text or HTML), `browser_export_gsuite` (Google Docs, Sheets, Slides through Google's export URLs), `browser_youtube_transcript`, `browser_logs` |
 | Site-provided tools (WebMCP) | `browser_webmcp_tools`, `browser_webmcp_call` (tools a page exposes through `document.modelContext`) |
@@ -109,7 +109,7 @@ Once the bridge and the extension are installed (above), any MCP client can also
 claude mcp add nexus-browser --scope user -e NEXUS_BROWSER_AGENT=Claude -- uvx nexus-browser
 ```
 
-Without the bridge, the server still starts and lists its 52 tools, and every call answers with a clear error that
+Without the bridge, the server still starts and lists its 49 tools, and every call answers with a clear error that
 points to the one-time install.
 
 ## Security (held by the extension and the bridge, not by the agent)
@@ -139,8 +139,8 @@ points to the one-time install.
   (`DOM.getOuterHTML`, `Accessibility.getFullAXTree`...): kept on purpose, said plainly in the tool, the skill and
   the server instructions. `Page.reload` with `scriptToEvaluateOnLoad` is refused (script injected at load).
 - **Outward gestures need the user's accord for the exact action** (2.12.0): before a click
-  (`browser_click`, `browser_click_mark`, `browser_semantic_click`), Enter / Control+Enter / Space
-  (`browser_press_key`, `keys` of `browser_fill` and `browser_semantic_fill`), a typed line break
+  (`browser_click`), Enter / Control+Enter / Space
+  (`browser_press_key`, `keys` of `browser_fill`), a typed line break
   (`browser_type_keys`) or a drag, the server reads the trigger without any gesture, through the bridge's existing
   read paths (`find` for locators, and a read-only script, `client/trigger_probe.js`, evaluated by `cdp-send` in the
   extension's isolated world): no new extension action, so it works with the extension already loaded. It reads the

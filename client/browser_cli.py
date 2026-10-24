@@ -71,10 +71,7 @@ def gate(args, targets, gestures, *, focus_ok=False, typed="", timeout=20.0):
     """Contrôle d'accord avant le geste (outward_gate.check) ; lève outward_gate.AccordRequired pour un geste sortant."""
     if not gestures:
         return
-    bound = [
-        [{**option, "tab_id": args.tab_id} for option in t] if isinstance(t, list) else {**t, "tab_id": args.tab_id}
-        for t in targets
-    ]
+    bound = [{**t, "tab_id": args.tab_id} for t in targets]
     try:
         outward_gate.check(
             accords(),
@@ -209,18 +206,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_som = page_command(subparsers, "vision-inspect", "Badges numérotés et capture")
     p_som.add_argument("--output", default="vision_som.png", help="Fichier PNG")
-
-    p_cmark = page_command(subparsers, "click-mark", "Cliquer un élément par son numéro de badge")
-    p_cmark.add_argument("--mark", required=True, type=int, help="Numéro (vision-inspect, interactive-map)")
-
-    p_sclick = page_command(subparsers, "semantic-click", "Clic par rôle et nom accessible")
-    p_sclick.add_argument("--role", help="Rôle (button, link, tab...)")
-    p_sclick.add_argument("--name", help="Nom accessible")
-    p_sclick.add_argument("--text", help="Texte visible")
-
-    p_sfill = page_command(subparsers, "semantic-fill", "Remplir un champ par son libellé ou son placeholder")
-    p_sfill.add_argument("--label", required=True, help="Libellé ou placeholder")
-    p_sfill.add_argument("--value", required=True, help="Texte")
 
     page_command(subparsers, "check-handoff", "Détecter CAPTCHA, Turnstile ou 2FA")
     subparsers.add_parser("download-status", help="Téléchargements récents")
@@ -378,17 +363,6 @@ def run(args) -> object:
         res = execute_command("vision_inspect", {"tabId": tab}, timeout=20.0)
         _save(res.get("screenshotDataUrl", ""), args.output)
         return {"output": args.output, "markers": res.get("markers", [])}
-    if command == "click-mark":
-        gate(args, [{"mark": args.mark, "timeoutMs": 0}], ["click"])
-        return execute_command("click_mark", {"mark": args.mark, "tabId": tab})
-    if command == "semantic-click":
-        target = {"semantic": True, "role": args.role, "name": args.name, "text": args.text, "timeoutMs": 2500}
-        gate(args, [target], ["click"] if (args.role or args.name or args.text) else [])
-        return execute_command(
-            "semantic_click", {"role": args.role, "name": args.name, "text": args.text, "tabId": tab}
-        )
-    if command == "semantic-fill":
-        return execute_command("semantic_fill", {"label": args.label, "value": args.value, "tabId": tab})
     if command == "press-key":
         gesture = outward_gate.key_gesture(args.key)
         gate(args, [{}], [gesture] if gesture else [], focus_ok=True)

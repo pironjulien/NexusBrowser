@@ -959,15 +959,6 @@ async function routeCommand(req, client = null) {
             case "vision_inspect":
                 return await visionInspect(params);
 
-            case "click_mark":
-                return await clickMark(params);
-
-            case "semantic_click":
-                return await semanticClick(params);
-
-            case "semantic_fill":
-                return await semanticFill(params);
-
             case "check_handoff":
                 return await checkHandoff(params);
 
@@ -1228,26 +1219,6 @@ function agyMouseKit(spec, textKit, locatorKit) {
         }
         return null;
     }
-    function semantic(loc) {
-        if (!kit) return null;
-        const role = loc.role ? String(loc.role).toLowerCase() : null;
-        const nameSearch = loc.name ? kit.__agyNorm(loc.name) : null;
-        const textSearch = loc.semanticText ? kit.__agyNorm(loc.semanticText) : null;
-        const candidates = kit.__agyAllElements(doc0).filter(el => {
-            if (kit.__agySkipped(el)) return false;
-            const tag = String(el.tagName || "").toUpperCase();
-            const implicit = tag === "BUTTON" ? "button" : (tag === "A" ? "link" : (tag === "INPUT" && (el.type === "button" || el.type === "submit") ? "button" : ""));
-            const elRole = String(kit.__agyAttr(el, "role") || implicit).toLowerCase();
-            if (role && elRole !== role) return false;
-            const textContent = kit.__agyNorm(el.innerText !== undefined && el.innerText !== null ? el.innerText : (el.value || ""));
-            if (nameSearch && !kit.__agyLabels(el, true).some(l => l.includes(nameSearch))) return false;
-            if (textSearch && !textContent.includes(textSearch)) return false;
-            return true;
-        });
-        // Rôle seul : premier élément visible du rôle. Avec un nom ou un texte : le plus spécifique.
-        const hit = kit.__agyPick(candidates, nameSearch || textSearch);
-        return hit && !role ? kit.__agyInteractiveTarget(hit) : hit;
-    }
     function axPool(token) {
         const reg = win0.__nexusBrowserAx;
         const list = reg && token ? reg[token] : null;
@@ -1312,7 +1283,6 @@ function agyMouseKit(spec, textKit, locatorKit) {
             return findDeep(doc0, sel, loc.index || 0);
         }
         if (loc.text) return kit ? kit.__agyFindByText(loc.text) : null;
-        if (loc.role || loc.name || loc.semanticText) return semantic(loc);
         if (loc.point) {
             const hit = deepHit(doc0, Number(loc.point.x), Number(loc.point.y));
             return hit || null;
@@ -2742,8 +2712,7 @@ async function mouseJsFallback(tabId, spec, reason, timeoutMs) {
 }
 
 /**
- * Clic ou survol réel sur l'élément décrit par locate ({selector,index} | {text} | {mark} | {role,name,semanticText}
- * | {locator}), dans le cadre principal ou un cadre d'une autre origine.
+ * Clic ou survol réel sur l'élément décrit par locate ({selector,index} | {text} | {mark} | {locator}), dans le cadre principal ou un cadre d'une autre origine.
  */
 async function performMouseAction(params, options) {
     const tabId = await resolveTargetTab(params);
@@ -4741,7 +4710,7 @@ async function visionInspect(params = {}) {
         format: "png"
     }));
 
-    // 4. Clean up visual marker badges from DOM (keeps window.__nexus_som_elements for clickMark)
+    // 4. Clean up visual marker badges from DOM (keeps window.__nexus_som_elements for clicks by mark)
     await evaluateIsolated({
         tabId,
         code: `document.querySelectorAll(".__nexus_som_marker").forEach(m => {
@@ -4759,62 +4728,6 @@ async function visionInspect(params = {}) {
             screenshotDataUrl: `data:image/png;base64,${shot.data}`
         }
     };
-}
-
-/**
- * Click directly on an element identified by its visual Set-of-Mark number
- */
-async function clickMark(params = {}) {
-    const mark = parseInt(params.mark, 10);
-    if (!mark) throw new Error("Missing 'mark' number to click");
-    return await performMouseAction(params, {
-        kind: "click",
-        locate: { mark },
-        button: mouseButton(params),
-        clickCount: mouseClickCount(params),
-        timeoutMs: mouseTimeout(params, 0)
-    });
-}
-
-/**
- * Clic sémantique (vrai clic CDP) : locator, ou role + name (+ text) comme avant (élément le plus spécifique).
- */
-async function semanticClick(params = {}) {
-    const locator = parseLocator(params.locator);
-    if (!locator && !params.role && !params.name && !params.text) return { error: "Missing locator, role, name or text for semantic click" };
-    return await performMouseAction(params, {
-        kind: "click",
-        locate: locator ? { locator } : { role: params.role || null, name: params.name || null, semanticText: params.text || null },
-        button: mouseButton(params),
-        clickCount: mouseClickCount(params),
-        timeoutMs: mouseTimeout(params, 2500)
-    });
-}
-
-/**
- * Saisie sémantique (frappe de confiance) : locator, sinon champ trouvé par son libellé (label, aria-label,
- * aria-labelledby), puis par son placeholder. Strict : plusieurs champs correspondants -> erreur listant les candidats.
- */
-async function semanticFill(params = {}) {
-    const tabId = await resolveTargetTab(params);
-    let locator = parseLocator(params.locator);
-    if (!locator) {
-        const label = params.label || params.placeholder;
-        if (!label) return { error: "Missing locator, label or placeholder for semantic fill" };
-        locator = params.placeholder && !params.label ? { placeholder: label } : { label };
-        // Aucun champ par libellé : le placeholder (comme l'ancien semantic_fill).
-        if (locator.label) {
-            const target = await ensureDebugger(tabId);
-            const found = await findAcrossRoots(target, { label, exact: params.exact }, { limit: 1 });
-            if (!found.dialog && !found.invalid && found.total === 0) {
-                const byPlaceholder = await findAcrossRoots(target, { placeholder: label, exact: params.exact }, { limit: 1 });
-                if (!byPlaceholder.dialog && byPlaceholder.total > 0) locator = { placeholder: label };
-            }
-        }
-        if (params.exact !== undefined) locator.exact = !!params.exact;
-        if (params.nth !== undefined && params.nth !== null) locator.nth = params.nth;
-    }
-    return await fillElement(params, { locate: { locator }, replace: true, timeoutMs: 2500 });
 }
 
 /**

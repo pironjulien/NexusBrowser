@@ -104,8 +104,8 @@ def test_browser_actions_blocked_reads_allowed_during_stop(monkeypatch):
         mcp_server.browser_click(selector="button", tab_id=1, click_count=2),
         mcp_server.browser_click(selector="button", tab_id=1, button="right"),
         mcp_server.browser_hover(selector="button", tab_id=1),
-        mcp_server.browser_click_mark(mark=1, tab_id=1),
-        mcp_server.browser_semantic_click(role="button", name="OK", tab_id=1),
+        mcp_server.browser_click(mark=1, tab_id=1),
+        mcp_server.browser_click(locator={"role": "button", "name": "OK"}, tab_id=1),
         mcp_server.browser_drag_and_drop(from_selector="#a", to_selector="#b", tab_id=1),
     ):
         assert json.loads(blocked)["status"] == "error"

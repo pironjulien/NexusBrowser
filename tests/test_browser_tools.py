@@ -39,9 +39,8 @@ def sent(monkeypatch):
 def test_locator_reaches_every_targeting_tool(sent):
     mcp_server.browser_click(locator=LOCATOR, tab_id=1)
     mcp_server.browser_hover(locator=LOCATOR, tab_id=1)
-    mcp_server.browser_semantic_click(locator=LOCATOR, tab_id=1)
     mcp_server.browser_fill(locator={"label": "Email"}, value="a@b.c", tab_id=1)
-    mcp_server.browser_semantic_fill(locator={"placeholder": "Rechercher"}, value="x", tab_id=1)
+    mcp_server.browser_fill(locator={"placeholder": "Rechercher"}, value="x", tab_id=1)
     mcp_server.browser_select_option(locator={"label": "Formule"}, value="pro", tab_id=1)
     mcp_server.browser_check(locator={"role": "checkbox", "name": "J'accepte"}, tab_id=1)
     mcp_server.browser_type_keys("abc", locator={"label": "Code"}, tab_id=1)
@@ -50,23 +49,23 @@ def test_locator_reaches_every_targeting_tool(sent):
     assert actions == [
         "click",
         "hover",
-        "semantic-click",
         "fill",
-        "semantic-fill",
+        "fill",
         "select-option",
         "check",
         "type-keys",
         "drag-and-drop",
     ]
     assert sent[0][1]["locator"] == LOCATOR
-    assert sent[3][1]["locator"] == {"label": "Email"}
-    assert sent[6][1] == {
+    assert sent[2][1]["locator"] == {"label": "Email"}
+    assert sent[3][1]["locator"] == {"placeholder": "Rechercher"}
+    assert sent[5][1] == {
         "checked": True,
         "tab_id": 1,
         "timeoutMs": 1200,
         "locator": {"role": "checkbox", "name": "J'accepte"},
     }
-    assert sent[8][1]["from_locator"] == {"text": "A"} and sent[8][1]["to_locator"] == {"testId": "zone"}
+    assert sent[7][1]["from_locator"] == {"text": "A"} and sent[7][1]["to_locator"] == {"testId": "zone"}
     # Sans localisateur : aucun champ vide transmis (ciblage historique inchangé).
     mcp_server.browser_click(selector="#a", tab_id=1)
     assert "locator" not in sent[-1][1]
@@ -82,8 +81,8 @@ def test_trusted_typing_options_are_forwarded(sent):
     assert params["keys"] == ["Enter"]
     assert params["perKey"] is True
     assert params["mode"] == "trusted"
-    mcp_server.browser_semantic_fill(label="Email", value="x", exact=True, keys=["Tab"], tab_id=2)
-    assert sent[1][1] == {"label": "Email", "value": "x", "tab_id": 2, "mode": "auto", "exact": True, "keys": ["Tab"]}
+    mcp_server.browser_fill(locator={"label": "Email", "exact": True}, value="x", keys=["Tab"], tab_id=2)
+    assert sent[1][1]["locator"] == {"label": "Email", "exact": True} and sent[1][1]["keys"] == ["Tab"]
 
 
 def test_find_network_and_download_tools(sent):
