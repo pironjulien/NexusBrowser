@@ -4324,6 +4324,27 @@ async function takeScreenshot(params = {}) {
 
     const target = await ensureDebugger(tabId);
     
+    if (params.region) {
+        // Zone de la vue (pixels CSS de la vue) agrandie : clip.scale (1/4 à 4) choisi par le serveur pour que l'image
+        // tienne dans les plafonds de la règle commune ; lire un petit texte sans envoyer tout l'écran en grand.
+        const r = params.region;
+        const values = [r.x, r.y, r.width, r.height].map(Number);
+        if (values.some(v => !Number.isFinite(v)) || values[2] <= 0 || values[3] <= 0) {
+            return { error: "Invalid region: {x, y, width, height} in CSS pixels of the view." };
+        }
+        const scale = Math.min(4, Math.max(0.25, Number(params.scale) || 1));
+        const clip = { ...(await pageClip(target, { x: values[0], y: values[1], width: values[2], height: values[3] })), scale };
+        const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, { format: cdpFormat, clip }));
+        let zoom = 1;
+        try {
+            const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+            if (Number(metrics?.cssVisualViewport?.zoom) > 0) zoom = Number(metrics.cssVisualViewport.zoom);
+        } catch (_) {}
+        const ratio = await evaluateIsolated({ tabId, code: "window.devicePixelRatio" });
+        const devicePixelRatio = Number(ratio?.data) > 0 ? Number(ratio.data) : null;
+        return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip, zoom, devicePixelRatio } };
+    }
+
     if (params.selector) {
         const sel = JSON.stringify(params.selector);
         const elRect = await evaluateIsolated({

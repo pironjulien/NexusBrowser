@@ -3,6 +3,35 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.22.0] - 2026-10-24
+
+Rest of the common image rule of the Nexus tools (points 3 to 5; point 2, text first, was already the default here:
+an image is attached only when the agent asks for it with `inline=True`).
+
+### Added
+- No duplicate image: the fingerprint of every attached image (64 × 64 grey levels) is kept per MCP session, tab and
+  target; when the view has not changed since the last image sent, the answer says `image.unchanged` with a note and
+  attaches nothing (`force=True` resends it). Never shared between the sessions of the shared daemon.
+- Zoom: `browser_screenshot(region=[x1, y1, x2, y2])`, in pixels of the last whole-view image attached for the tab,
+  captures that area enlarged (Chrome `clip.scale`, up to 4×) within the same limits, to read small text without
+  sending the whole view in large.
+- Numbers and coordinates: each marker of `browser_vision_inspect(inline=True)` gets `image_box` [x1, y1, x2, y2] in
+  pixels of the attached image (the badge numbers are drawn on it); `box_2d` (0-1000) stays for Gemini.
+- Common journal of the Nexus tools (product `browser`): one line per tool call in
+  `%LOCALAPPDATA%\NexusJournal\browser\<agent>\<YYYY-MM>.jsonl`, with the calling AI (identity of the MCP session),
+  the action, the outcome (`✓`, `=`, `~`, `✗`, `refus`, `arrêt`), the duration and the technique. `app` is the
+  registrable domain of the tab only (`google.com`, `bbc.co.uk`; `ip`, `localhost`, `local`, or the scheme for
+  `data:`/`about:`), taken from the address the browser returns (WHATWG parsing: a backslash counts as a slash), never
+  the address; never page text, typed value, title or image; the error is a category from a fixed list (`timeout`,
+  `not found`, `refused`...), never a piece of the message. A batch refused before any step still gets its line.
+  Writing never blocks an action; lines already queued are written at a normal shutdown (1.6 s at most).
+  `NEXUS_JOURNAL_HOME` moves it.
+- `browser_batch` attaches the images of its capture steps (`inline=True`), in step order.
+
+### Fixed
+- A view seen again at another size or device pixel ratio is never reported as unchanged, and the zoom uses the scale
+  of the last image actually attached.
+
 ## [2.21.0] - 2026-10-24
 
 ### Changed

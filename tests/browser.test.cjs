@@ -3441,6 +3441,22 @@ test('onglet ouvert mais attribution non enregistrée : refermé, sans fenêtre 
     assert.doesNotMatch(kept.error, /: closed\./);
 });
 
+test('zone agrandie (region) : zone de la vue en repère de la page, clip.scale borné à [0,25 ; 4], jamais captureBeyondViewport', async () => {
+    const h = harness({}, {
+        debuggerSendCommand: (target, method) => method === 'Page.getLayoutMetrics' ? {cssVisualViewport: {pageX: 0, pageY: 500, zoom: 1}} : undefined
+    });
+    assert.equal((await h.run('screenshot', {tabId: 1, region: {x: 100, y: 50, width: 200, height: 80}, scale: 3.5})).error, undefined);
+    const shot = h.calls.find(c => c.method === 'Page.captureScreenshot').params;
+    assert.deepEqual(plain(shot.clip), {x: 100, y: 550, width: 200, height: 80, scale: 3.5});
+    assert.equal(shot.captureBeyondViewport, undefined);
+    const big = harness({}, {debuggerSendCommand: (t, m) => m === 'Page.getLayoutMetrics' ? {cssVisualViewport: {pageX: 0, pageY: 0}} : undefined});
+    await big.run('screenshot', {tabId: 1, region: {x: 0, y: 0, width: 10, height: 10}, scale: 99});
+    assert.equal(big.calls.find(c => c.method === 'Page.captureScreenshot').params.clip.scale, 4);
+    for (const region of [{x: 0, y: 0, width: 0, height: 5}, {x: 'a', y: 0, width: 5, height: 5}]) {
+        assert.match((await big.run('screenshot', {tabId: 1, region})).error, /Invalid region/);
+    }
+});
+
 test('capture d\'élément : zone en repère de la PAGE (défilement ajouté), au-delà de la vue', async () => {
     const el = {scrollIntoView() {}, getBoundingClientRect: () => ({x: 10, y: 20, width: 200, height: 100})};
     const h = harness({document: {querySelectorAll: (sel) => sel === '#card' ? [el] : []}}, {

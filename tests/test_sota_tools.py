@@ -82,8 +82,14 @@ def test_wait_for_needs_a_target_and_a_tab(bridge):
     )
 
 
+def _batch_json(result) -> dict:
+    """Réponse d'un lot : toujours texte + structured_content {"result": texte} (anciens clients compris)."""
+    assert isinstance(result.structured_content, dict) and isinstance(result.structured_content["result"], str)
+    return json.loads(result.structured_content["result"])
+
+
 def test_batch_runs_steps_in_order_with_default_tab(bridge):
-    result = json.loads(
+    result = _batch_json(
         mcp_server.browser_batch(
             steps=[
                 {"tool": "browser_fill", "args": {"locator": {"label": "Email"}, "value": "a@b.c"}},
@@ -106,7 +112,7 @@ def test_batch_runs_steps_in_order_with_default_tab(bridge):
 
 
 def test_batch_stops_at_first_error(bridge):
-    result = json.loads(
+    result = _batch_json(
         mcp_server.browser_batch(
             steps=[
                 {"tool": "browser_wait_for", "args": {}},
@@ -121,7 +127,7 @@ def test_batch_stops_at_first_error(bridge):
 
 def test_batch_keeps_the_outward_accord(bridge):
     bridge["trigger"] = {"name": "Envoyer", "role": "button", "tag": "button"}
-    result = json.loads(
+    result = _batch_json(
         mcp_server.browser_batch(
             steps=[
                 {"tool": "browser_fill", "args": {"locator": {"label": "Objet"}, "value": "Bonjour"}},
@@ -147,7 +153,7 @@ def test_batch_keeps_the_outward_accord(bridge):
     ],
 )
 def test_batch_refusals(bridge, steps, message):
-    result = json.loads(mcp_server.browser_batch(steps=steps, tab_id=3))
+    result = _batch_json(mcp_server.browser_batch(steps=steps, tab_id=3))
     assert result["status"] == "error" and message in json.dumps(result)
     assert bridge["calls"] == []
 
@@ -162,16 +168,18 @@ def test_wait_for_never_takes_an_unreadable_page_for_gone(bridge, monkeypatch):
 
 
 def test_batch_without_tab_and_unexpected_failure(bridge, monkeypatch):
-    listed = json.loads(mcp_server.browser_batch(steps=[{"tool": "browser_list_tabs"}]))
+    listed = _batch_json(mcp_server.browser_batch(steps=[{"tool": "browser_list_tabs"}]))
     assert listed["status"] == "success"
-    missing = json.loads(mcp_server.browser_batch(steps=[{"tool": "browser_reload"}]))
+    missing = _batch_json(mcp_server.browser_batch(steps=[{"tool": "browser_reload"}]))
     assert missing["status"] == "error" and missing["stopped_at"] == 0
 
     def boom(action, params, timeout=20.0):
         raise LookupError("panne imprévue")
 
     monkeypatch.setattr(mcp_server, "call_bridge", boom)
-    crashed = json.loads(mcp_server.browser_batch(steps=[{"tool": "browser_list_tabs"}, {"tool": "browser_list_tabs"}]))
+    crashed = _batch_json(
+        mcp_server.browser_batch(steps=[{"tool": "browser_list_tabs"}, {"tool": "browser_list_tabs"}])
+    )
     assert (
         crashed["status"] == "error"
         and crashed["stopped_at"] == 0

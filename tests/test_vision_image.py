@@ -20,6 +20,16 @@ sys.path.insert(0, str(REPO_ROOT / "client"))
 from client import mcp_server, vision_image  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _fresh_image_memory():
+    """Mémoire des images jointes (empreintes, échelle de la vue) vide pour chaque test."""
+    mcp_server._SENT_PRINTS.clear()
+    mcp_server._VIEW_SCALES.clear()
+    yield
+    mcp_server._SENT_PRINTS.clear()
+    mcp_server._VIEW_SCALES.clear()
+
+
 def _png(width: int, height: int, noise: bool = False) -> bytes:
     image = Image.new("RGB", (width, height), (240, 240, 240))
     if noise:  # photo-like : incompressible, pour éprouver les plafonds de taille
@@ -120,9 +130,9 @@ def test_inline_capture_is_an_mcp_webp_image_with_scale(monkeypatch, tmp_path, t
     assert list(tmp_path.iterdir()) == []  # rien sur disque
     # Sessions ouvertes avant la 2.21 (ancien schéma {"result": texte} en cache) : la réponse leur reste valide.
     result = (
-        mcp_server.browser_screenshot(tab_id=1, inline=True)
+        mcp_server.browser_screenshot(tab_id=1, inline=True, force=True)
         if tool == "browser_screenshot"
-        else (mcp_server.browser_vision_inspect(tab_id=1, inline=True))
+        else (mcp_server.browser_vision_inspect(tab_id=1, inline=True, force=True))
     )
     assert result.structured_content == {"result": texts[0].text}
     assert "output" not in calls[0][1]
@@ -224,3 +234,131 @@ def test_dialog_during_capture_is_reported_never_accepted(monkeypatch):
         assert result["status"] == "error" and result["dialogOpened"] is True, inline
         assert result["error"] == "The command opened a dialog." and result["data"]["dialog"]["message"] == "pause"
     assert not Path("unused.png").exists()
+
+
+def test_unchanged_view_is_not_attached_twice(monkeypatch):
+    # Règle commune, point 3 : même onglet, même cible, écran inchangé -> texte seul « unchanged ».
+    _bridge(monkeypatch, "dataUrl", _png(1600, 900), devicePixelRatio=1)
+    first = mcp_server.browser_screenshot(tab_id=1, inline=True)
+    again = mcp_server.browser_screenshot(tab_id=1, inline=True)
+    assert any(isinstance(b, ImageContent) for b in first.content)
+    assert not any(isinstance(b, ImageContent) for b in again.content)
+    data = _json(again)["data"]
+    assert data["image"]["unchanged"] is True and "force=True" in data["note"]
+    forced = mcp_server.browser_screenshot(tab_id=1, inline=True, force=True)
+    assert any(isinstance(b, ImageContent) for b in forced.content)
+    other_tab = mcp_server.browser_screenshot(tab_id=2, inline=True)  # autre onglet : sa propre première image
+    assert any(isinstance(b, ImageContent) for b in other_tab.content)
+    _bridge(monkeypatch, "dataUrl", _png(1600, 900, noise=True), devicePixelRatio=1)  # l'écran a changé
+    changed = mcp_server.browser_screenshot(tab_id=1, inline=True)
+    assert any(isinstance(b, ImageContent) for b in changed.content)
+
+
+def test_unchanged_is_per_session(monkeypatch):
+    _bridge(monkeypatch, "dataUrl", _png(800, 600), devicePixelRatio=1)
+    sessions = iter(["claude-aaa", "codex-bbb"])
+    monkeypatch.setattr(mcp_server, "_session_key", lambda: current[0])
+    current = [next(sessions)]
+    assert any(isinstance(b, ImageContent) for b in mcp_server.browser_screenshot(tab_id=1, inline=True).content)
+    current[0] = next(
+        sessions
+    )  # autre session du démon partagé : jamais « inchangée » pour une image qu'elle n'a pas vue
+    assert any(isinstance(b, ImageContent) for b in mcp_server.browser_screenshot(tab_id=1, inline=True).content)
+
+
+def test_region_zooms_in_pixels_of_the_last_view_image(monkeypatch):
+    # Vue 2560 × 1440 px de capture à DPR 1,25 (2048 × 1152 CSS) envoyée en 1429 × 804 ; zone [100, 50, 300, 150]
+    # de cette image = 200 × 100 px d'image = 358,4 × 179,2 px CSS, agrandie dans les plafonds (au plus ×4).
+    calls = _bridge(monkeypatch, "dataUrl", _png(2560, 1440), devicePixelRatio=1.25)
+    view = _json(mcp_server.browser_screenshot(tab_id=1, inline=True))["data"]["image"]
+    factor = view["css_per_image_px"]
+    clip = {"x": 100 * factor, "y": 50 * factor, "width": 200 * factor, "height": 100 * factor}
+    zoomed_px = (round(clip["width"] * 1.25 * 3.5), round(clip["height"] * 1.25 * 3.5))
+    calls.clear()
+    zoom_calls = _bridge(monkeypatch, "dataUrl", _png(*zoomed_px), devicePixelRatio=1.25, clip={**clip, "scale": 3.5})
+    result = mcp_server.browser_screenshot(tab_id=1, inline=True, region=[100, 50, 300, 150])
+    data = _json(result)["data"]
+    sent = zoom_calls[0][1]
+    assert sent["region"] == pytest.approx(clip) and 1 < sent["scale"] <= 4 and "selector" not in sent
+    image = data["image"]
+    assert max(image["width"], image["height"]) <= 1568 and image["width"] * image["height"] <= 1_150_000
+    assert image["css_origin"] == {"x": pytest.approx(clip["x"], abs=0.01), "y": pytest.approx(clip["y"], abs=0.01)}
+    # Un pixel de la zone agrandie vaut bien moins qu'un pixel CSS (lecture d'un petit texte).
+    assert image["css_per_image_px"] < factor / 2
+
+
+def test_region_params_fit_the_limits_and_need_a_view(monkeypatch):
+    with pytest.raises(ValueError, match="whole-view image of this tab first"):
+        mcp_server._region_params(9, [0, 0, 10, 10], None, None, False)
+    mcp_server._VIEW_SCALES[(mcp_server._session_key(), 9)] = {"css_per_image_px": 1.25, "dpr": 1.25}
+    params = mcp_server._region_params(9, [100, 50, 300, 150], None, None, False)
+    region, scale = params["region"], params["scale"]
+    assert region == {"x": 125.0, "y": 62.5, "width": 250.0, "height": 125.0}
+    out_w, out_h = region["width"] * 1.25 * scale, region["height"] * 1.25 * scale
+    assert max(out_w, out_h) <= 1568.5 and out_w * out_h <= 1_150_000 * 1.001 and scale <= 4
+    for bad in ([0, 0, 0, 10], [1, 2, 3], "x", [0, 0, True, 5]):
+        with pytest.raises(ValueError):
+            mcp_server._region_params(9, bad, None, None, False)
+    with pytest.raises(ValueError, match="cannot be combined"):
+        mcp_server._region_params(9, [0, 0, 10, 10], "#a", None, False)
+
+
+def test_vision_markers_get_boxes_in_image_pixels(monkeypatch):
+    markers = [{"mark": 1, "rect": {"x": 948, "y": 17, "width": 70, "height": 32}, "box_2d": [18, 463, 52, 497]}]
+    _bridge(monkeypatch, "screenshotDataUrl", _png(2560, 1182), devicePixelRatio=1.25, markers=markers)
+    data = _json(mcp_server.browser_vision_inspect(tab_id=1, inline=True))["data"]
+    factor = data["image"]["css_per_image_px"]
+    box = data["markers"][0]["image_box"]
+    assert box == [round(948 / factor), round(17 / factor), round((948 + 70) / factor), round((17 + 32) / factor)]
+    assert data["markers"][0]["box_2d"] == [18, 463, 52, 497]  # gardé pour Gemini
+
+
+def test_small_change_on_a_large_view_is_never_unchanged():
+    # Une case cochée (16 × 16 px) sur une vue de 1568 × 882 : l'image doit repartir, jamais « inchangée ».
+    base = Image.new("RGB", (1568, 882), (255, 255, 255))
+    checked = base.copy()
+    checked.paste((20, 20, 20), (700, 400, 716, 416))
+
+    def webp(image):
+        out = io.BytesIO()
+        image.save(out, "WEBP", lossless=True)
+        return out.getvalue()
+
+    assert vision_image.same_image(vision_image.fingerprint(webp(base)), vision_image.fingerprint(webp(base)))
+    assert not vision_image.same_image(vision_image.fingerprint(webp(base)), vision_image.fingerprint(webp(checked)))
+
+
+def test_resized_view_is_never_unchanged_and_region_uses_the_last_sent_image(monkeypatch):
+    # Relevé par Codex le 24/10 : vue blanche 800×600 puis 1600×1200 (même empreinte) ; la 2e doit être jointe, et
+    # region se lit dans ses pixels à elle.
+    def blank(width, height):
+        out = io.BytesIO()
+        Image.new("RGB", (width, height), (255, 255, 255)).save(out, "PNG")
+        return out.getvalue()
+
+    _bridge(monkeypatch, "dataUrl", blank(800, 600), devicePixelRatio=1)
+    first = mcp_server.browser_screenshot(tab_id=1, inline=True)
+    _bridge(monkeypatch, "dataUrl", blank(1600, 1200), devicePixelRatio=1)
+    second = mcp_server.browser_screenshot(tab_id=1, inline=True)
+    assert any(isinstance(b, ImageContent) for b in first.content)
+    assert any(isinstance(b, ImageContent) for b in second.content)  # géométrie changée : jamais « inchangée »
+    factor = _json(second)["data"]["image"]["css_per_image_px"]
+    params = mcp_server._region_params(1, [100, 100, 200, 200], None, None, False)
+    assert params["region"]["x"] == pytest.approx(100 * factor) and factor > 1.2
+
+
+def test_device_pixel_ratio_change_is_a_new_view(monkeypatch):
+    # Relevé par Codex : 3200×1800 à DPR 2 puis 1600×900 à DPR 1 donnent la même image envoyée ; la 2e doit repartir et
+    # region doit utiliser le DPR courant (zoom pleine résolution).
+    def blank(width, height):
+        out = io.BytesIO()
+        Image.new("RGB", (width, height), (255, 255, 255)).save(out, "PNG")
+        return out.getvalue()
+
+    _bridge(monkeypatch, "dataUrl", blank(3200, 1800), devicePixelRatio=2)
+    mcp_server.browser_screenshot(tab_id=1, inline=True)
+    _bridge(monkeypatch, "dataUrl", blank(1600, 900), devicePixelRatio=1)
+    second = mcp_server.browser_screenshot(tab_id=1, inline=True)
+    assert any(isinstance(b, ImageContent) for b in second.content)
+    params = mcp_server._region_params(1, [0, 0, 400, 40], None, None, False)
+    assert params["region"]["width"] * 1 * params["scale"] == pytest.approx(1568, rel=0.01)

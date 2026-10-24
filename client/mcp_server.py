@@ -20,6 +20,8 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable
+from contextvars import ContextVar
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -32,12 +34,13 @@ from PIL import Image as PILImage  # noqa: E402
 from pydantic import Field  # noqa: E402
 
 try:
-    from . import bridge_client, emergency_stop, garde_fous, outward_gate, vision_image, webmcp
+    from . import bridge_client, emergency_stop, garde_fous, journal, outward_gate, vision_image, webmcp
     from .bridge_client import call_bridge, is_read_only_action, set_identity, start_heartbeat
 except ImportError:
     import bridge_client
     import emergency_stop
     import garde_fous
+    import journal
     import outward_gate
     import vision_image
     import webmcp
@@ -363,7 +366,26 @@ def _compat(text: str, *blocks: Any) -> CallToolResult:
     return CallToolResult(content=[TextContent(type="text", text=text), *blocks], structured_content={"result": text})
 
 
-def _inline_capture(action: str, params: dict) -> CallToolResult:
+# Mémoire des images jointes, par session MCP et par onglet (démon partagé : jamais celle d'une autre session) :
+# empreinte de la dernière image envoyée par cible (règle commune, point 3 : pas d'image en double) et échelle de la
+# dernière vue entière (point 4 : region donnée en pixels de cette image). Bornée, les plus anciennes oubliées.
+_SENT_PRINTS: dict[tuple, tuple[tuple, bytes]] = {}
+_VIEW_SCALES: dict[tuple, dict[str, float]] = {}
+_MEMORY_MAX = 512
+
+
+def _remember(store: dict, key: tuple, value: Any) -> None:
+    store.pop(key, None)
+    store[key] = value
+    while len(store) > _MEMORY_MAX:
+        store.pop(next(iter(store)))
+
+
+def _session_key() -> str:
+    return bridge_client.identity()["id"]
+
+
+def _inline_capture(action: str, params: dict, target: str = "view", force: bool = False) -> CallToolResult:
     """Capture jointe à la réponse : un vrai bloc image MCP (WebP, réduit selon la règle commune, vision_image), pas
     un texte base64. Le texte dit comment relire une position sur l'image en pixels CSS de la page :
     css = origine + pixel_image × css_per_image_px (origine : coin de la zone capturée, ou de la vue)."""
@@ -384,6 +406,9 @@ def _inline_capture(action: str, params: dict) -> CallToolResult:
             raise ValueError(f"Capture too large to attach: {error}") from error
         clip = data.get("clip") if isinstance(data.get("clip"), dict) else None
         ratio, zoom = _positive(data.get("devicePixelRatio")), _positive(data.get("zoom")) or 1.0
+        # Zone agrandie (region) : clip.scale > 1 multiplie les pixels de capture par pixel CSS.
+        if ratio and clip and _positive(clip.get("scale")):
+            ratio *= float(clip["scale"])
         # Pixels CSS par pixel d'origine, puis divisés par le facteur de réduction (le même sur les deux axes : la
         # position relue tombe à moins d'un pixel d'image près sur X comme sur Y).
         # Un pixel de capture vaut 1 / devicePixelRatio pixel CSS (zoom de la page compris), pour la vue comme pour
@@ -400,6 +425,53 @@ def _inline_capture(action: str, params: dict) -> CallToolResult:
             image["css_per_image_px"] = round(css_per_source_px / image["scale"], 6)
         data.pop("mimeType", None)
         data["image"] = image
+        tab = params.get("tab_id")
+        factor = image.get("css_per_image_px")
+        # Repères (capture repérée) : boîte aussi en pixels de l'image envoyée (règle commune, point 5) ; box_2d
+        # (0-1000) reste pour Gemini.
+        if factor and isinstance(data.get("markers"), list):
+            origin = image.get("css_origin") or {"x": 0, "y": 0}
+            for marker in data["markers"]:
+                rect = marker.get("rect") if isinstance(marker, dict) else None
+                if isinstance(rect, dict) and all(
+                    isinstance(rect.get(k), (int, float)) for k in ("x", "y", "width", "height")
+                ):
+                    x1, y1 = (rect["x"] - origin["x"]) / factor, (rect["y"] - origin["y"]) / factor
+                    marker["image_box"] = [
+                        round(x1),
+                        round(y1),
+                        round(x1 + rect["width"] / factor),
+                        round(y1 + rect["height"] / factor),
+                    ]
+        # Pas d'image en double (point 3) : même cible, même session, même géométrie (taille envoyée, échelle, origine)
+        # et écran inchangé -> texte seul. Une vue redimensionnée n'est jamais « inchangée », même si elle paraît
+        # identique (page blanche) : region se lit dans les pixels de la DERNIÈRE image réellement jointe.
+        print_key = (_session_key(), tab, target)
+        # DPR compris : même image à 200 % puis 100 % (écran changé) = vue nouvelle, region recalculée au DPR courant.
+        geometry = (
+            image["width"],
+            image["height"],
+            factor,
+            json.dumps(image.get("css_origin"), sort_keys=True),
+            ratio,
+        )
+        current = vision_image.fingerprint(webp)
+        previous = _SENT_PRINTS.get(print_key)
+        if (
+            previous is not None
+            and not force
+            and previous[0] == geometry
+            and vision_image.same_image(previous[1], current)
+        ):
+            image["unchanged"] = True
+            data["note"] = (
+                "Image unchanged since the last one sent for this tab and target: not attached again "
+                "(force=True to resend it)."
+            )
+            return _compat(json.dumps({"status": "success", "data": data}, ensure_ascii=False, indent=2))
+        _remember(_SENT_PRINTS, print_key, (geometry, current))
+        if factor and not clip:  # vue entière jointe : son échelle sert à region (pixels de cette image)
+            _remember(_VIEW_SCALES, (_session_key(), tab), {"css_per_image_px": factor, "dpr": ratio or 1.0})
     except (OSError, RuntimeError, ValueError, KeyError, IndexError) as error:
         return _compat(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False))
     text = json.dumps({"status": "success", "data": data}, ensure_ascii=False, indent=2)
@@ -1074,18 +1146,22 @@ def browser_upload(files: list[str], selector: str | None = None, *, tab_id: Tab
 
 
 @browser_mcp.tool(annotations=_titled(PAGE_READ, "Marked screenshot"), structured_output=False)
-def browser_vision_inspect(tab_id: TabId, output_path: str | None = None, inline: bool = False) -> Any:
+def browser_vision_inspect(
+    tab_id: TabId, output_path: str | None = None, inline: bool = False, force: bool = False
+) -> Any:
     """Places numbered Set-of-Mark (SoM) badges on interactive elements and captures the view for visual analysis;
     the numbers are then used with browser_click(mark=N).
 
     Returns the list of elements with box_2d [ymin, xmin, ymax, xmax] on a [0-1000] scale.
     The capture is written by default to ~/.nexus/nexus-browser/screenshots/ (full-resolution PNG, path returned in
     output_path). inline=True attaches it to the response as an image instead: WebP, long side at most 1568 px and
-    1.15 megapixels, at most 500 KB; data.image gives its size and css_per_image_px to read a position on it.
+    1.15 megapixels, at most 500 KB; data.image gives its size and css_per_image_px to read a position on it, and
+    each marker its image_box [x1, y1, x2, y2] in pixels of that image (the badge numbers are drawn on it). Same view
+    as the last image sent for this tab: no image again ("unchanged"), unless force=True.
     Do not open a raw PNG capture larger than 500 KB with an image reading tool (rejected with HTTP 400).
     """
     if inline:
-        return _inline_capture("vision-inspect", {"tab_id": tab_id})
+        return _inline_capture("vision-inspect", {"tab_id": tab_id}, target="vision", force=force)
     return _compat(
         _call_bridge("vision-inspect", {"output": output_path or _default_capture_path("vision"), "tab_id": tab_id})
     )
@@ -1126,6 +1202,8 @@ def browser_screenshot(
     mark: int | None = None,
     inline: bool = False,
     full_page: bool = False,
+    region: list[float] | None = None,
+    force: bool = False,
 ) -> Any:
     """Screenshot of the tab, of the whole page (full_page=True), or of one element cropped to the pixel (PNG), even
     if the page has scrolled.
@@ -1140,7 +1218,11 @@ def browser_screenshot(
       says so). Ignored when an element is targeted.
     - inline=True: attaches the image to the response (no file): WebP, long side at most 1568 px and 1.15
       megapixels, at most 500 KB, so every model reads it as sent. data.image: width, height, scale and
-      css_per_image_px, css_origin to turn a position on the image into page CSS pixels.
+      css_per_image_px, css_origin to turn a position on the image into page CSS pixels. Same target as the last
+      image sent for this tab and nothing changed: no image again ("unchanged"), unless force=True.
+    - region=[x1, y1, x2, y2]: zoom on that area, in pixels of the last whole-view image attached for this tab
+      (browser_screenshot(inline=True) first): enlarged up to 4× within the same limits, to read small text
+      without sending the whole view in large.
     """
     if inline and full_page and mark is None and not selector:
         return _compat(
@@ -1153,15 +1235,46 @@ def browser_screenshot(
             )
         )
     params: dict = {"tab_id": tab_id}
-    if mark is not None:
+    if region is not None:
+        try:
+            params.update(_region_params(tab_id, region, selector, mark, full_page))
+        except ValueError as error:
+            return _compat(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False))
+    elif mark is not None:
         params["selector"] = f"#{mark}"
     elif selector:
         params["selector"] = selector
     elif full_page:
         params["fullPage"] = True
     if inline:
-        return _inline_capture("screenshot", params)
+        target = json.dumps([params.get(k) for k in ("selector", "fullPage", "region", "scale")])
+        return _inline_capture("screenshot", params, target=target, force=force)
     return _compat(_call_bridge("screenshot", {**params, "output": output_path or _default_capture_path("browser")}))
+
+
+def _region_params(tab_id: Any, region: Any, selector: Any, mark: Any, full_page: bool) -> dict:
+    """region (pixels de la dernière vue entière jointe pour cet onglet) -> zone en pixels CSS de la vue et facteur
+    d'agrandissement (clip.scale) qui fait tenir l'image dans les plafonds de la règle commune, au plus ×4."""
+    if selector or mark is not None or full_page:
+        raise ValueError("region cannot be combined with selector, mark or full_page")
+    numbers = region if isinstance(region, list) and len(region) == 4 else None
+    if not numbers or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in numbers):
+        raise ValueError("region: [x1, y1, x2, y2] in pixels of the last whole-view image")
+    x1, y1, x2, y2 = (float(v) for v in numbers)
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError("region: x2 must be greater than x1 and y2 greater than y1")
+    view = _VIEW_SCALES.get((_session_key(), tab_id))
+    if not view:
+        raise ValueError("region needs a whole-view image of this tab first: browser_screenshot(inline=True)")
+    factor, dpr = view["css_per_image_px"], view["dpr"]
+    width, height = (x2 - x1) * factor, (y2 - y1) * factor
+    fit = min(
+        vision_image.MAX_SIDE / (max(width, height) * dpr), (vision_image.MAX_PIXELS / (width * height)) ** 0.5 / dpr
+    )
+    return {
+        "region": {"x": x1 * factor, "y": y1 * factor, "width": width, "height": height},
+        "scale": round(max(0.25, min(4.0, fit)), 4),
+    }
 
 
 @browser_mcp.tool(annotations=_titled(PAGE_READ, "Save page as PDF"))
@@ -1257,7 +1370,7 @@ BATCH_MAX_STEPS = 30
 
 
 @browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Run several actions"))
-def browser_batch(steps: list[dict], tab_id: TabId | None = None) -> str:
+def browser_batch(steps: list[dict], tab_id: TabId | None = None) -> Any:
     """Runs several NexusBrowser tools in order in ONE call (fewer round trips), and stops at the first error.
 
     steps: [{"tool": "browser_fill", "args": {"locator": {"label": "Email"}, "value": "a@b.c"}},
@@ -1266,14 +1379,22 @@ def browser_batch(steps: list[dict], tab_id: TabId | None = None) -> str:
     tab_id (optional) applies to every step that does not give its own. At most 30 steps; browser_batch cannot be nested.
     Each step goes through its own tool's checks: an outward gesture without the user's accord stops the batch with
     its accord_required refusal; after the user's yes, resend that step (with confirm and accord) and the rest.
-    Response: one result per step run (tool, status, result), stopped_at (index of the failing step) if any."""
+    Response: one result per step run (tool, status, result), stopped_at (index of the failing step) if any; the images
+    of capture steps (inline=True) are attached after it, in step order."""
+    images: list[Any] = []
+    batch_started = time.monotonic()
+
+    def answer(payload: dict) -> Any:
+        # Toujours le même contrat (texte + structured_content {"result": texte}) : un client qui garde l'ancien schéma
+        # de sortie accepte toute réponse du lot. Une image jointe par une étape l'est aussi au lot : sinon son
+        # empreinte, retenue comme envoyée, ferait répondre « inchangée » à la capture suivante sans que l'IA l'ait
+        # jamais vue (relevés par Codex le 24/10).
+        return _compat(json.dumps(payload, ensure_ascii=False, indent=2), *images)
+
     if not isinstance(steps, list) or not steps:
-        return json.dumps({"status": "error", "error": "steps must be a non-empty list"}, ensure_ascii=False)
+        return answer({"status": "error", "error": "steps must be a non-empty list"})
     if len(steps) > BATCH_MAX_STEPS:
-        return json.dumps(
-            {"status": "error", "error": f"At most {BATCH_MAX_STEPS} steps per batch ({len(steps)} given)"},
-            ensure_ascii=False,
-        )
+        return answer({"status": "error", "error": f"At most {BATCH_MAX_STEPS} steps per batch ({len(steps)} given)"})
     results: list[dict] = []
     for index, step in enumerate(steps):
         name = step.get("tool") if isinstance(step, dict) else None
@@ -1282,20 +1403,39 @@ def browser_batch(steps: list[dict], tab_id: TabId | None = None) -> str:
         if tool is None or name == "browser_batch" or not isinstance(args, dict):
             error = f"Step {index}: unknown tool {name!r}" if name != "browser_batch" else "browser_batch cannot nest"
             results.append({"tool": name, "status": "error", "result": {"status": "error", "error": error}})
-            return json.dumps({"status": "error", "stopped_at": index, "steps": results}, ensure_ascii=False, indent=2)
+            # Étape refusée : sa ligne « batch » (jamais le nom donné), reliée au même appel que les étapes déjà faites.
+            refusal = json.dumps({"status": "error", "error": error})
+            _journal_line(
+                "browser_batch",
+                {"tab_id": tab_id},
+                refusal,
+                False,
+                batch_started,
+                _CURRENT_CALL.get() or uuid.uuid4().hex[:12],
+            )
+            return answer({"status": "error", "stopped_at": index, "steps": results})
         if tab_id is not None and "tab_id" in tool.parameters.get("properties", {}):
             args = {"tab_id": tab_id, **args}
+        step_started, output, failed = time.monotonic(), None, False
         try:
             model = tool.fn_metadata.arg_model.model_validate(args)
             output = tool.fn(**{field: getattr(model, field) for field in type(model).model_fields})
-            result = json.loads(output)
+            # Les outils de capture rendent un CallToolResult (image jointe) : leur texte est dans structured_content.
+            result = _answer_of(output) if not isinstance(output, str) else json.loads(output)
+            if result is None:
+                raise ValueError("unreadable step answer")
+            images.extend(
+                block for block in getattr(output, "content", None) or [] if getattr(block, "type", "") == "image"
+            )
         except Exception as error:  # noqa: BLE001 - toute panne d'une étape arrête le lot proprement
+            failed = output is None
             result = {"status": "error", "error": f"Step {index} ({name}): {error}"}
+        _journal_line(str(name), args, output, failed, step_started, _CURRENT_CALL.get() or uuid.uuid4().hex[:12])
         status = result.get("status", "success") if isinstance(result, dict) else "success"
         results.append({"tool": name, "status": status, "result": result})
         if status == "error":
-            return json.dumps({"status": "error", "stopped_at": index, "steps": results}, ensure_ascii=False, indent=2)
-    return json.dumps({"status": "success", "steps": results}, ensure_ascii=False, indent=2)
+            return answer({"status": "error", "stopped_at": index, "steps": results})
+    return answer({"status": "success", "steps": results})
 
 
 @browser_mcp.tool(annotations=_titled(PAGE_READ, "Read cookies"))
@@ -1650,6 +1790,99 @@ def browser_youtube_transcript(
     if lang:
         params["lang"] = lang
     return _call_bridge("export-youtube-transcript", params, timeout=45.0, note=_page_text(tab_id))
+
+
+# --- Journal commun des outils Nexus (journal.py, FORMAT.md) : une ligne par appel d'outil, IA appelante repérée par
+# l'identité de la session (démon partagé) ou du processus (stdio). Domaine de l'onglet suivi par session à partir des
+# adresses que les outils voient passer (ouverture, navigation, réponses) : jamais l'adresse elle-même dans le journal.
+_TAB_DOMAINS: dict[tuple, str] = {}
+_tool_call = browser_mcp.call_tool
+# Appel en cours (relie les étapes d'un lot) ; techniques connues seulement : jamais une valeur libre de la page (eval).
+_CURRENT_CALL: ContextVar[str | None] = ContextVar("nexus_browser_call", default=None)
+# Lignes d'étapes écrites pendant le lot en cours : un lot refusé avant toute étape a alors sa propre ligne.
+_STEP_LINES: ContextVar[list[int] | None] = ContextVar("nexus_browser_step_lines", default=None)
+KNOWN_TECHNIQUES = frozenset({"cdp", "js_fallback", "native_setter_fallback", "direct_dom", "none"})
+FREE_DATA_TOOLS = frozenset({"browser_eval", "browser_cdp_send", "browser_webmcp_call", "browser_webmcp_tools"})
+
+
+def _answer_of(result: Any) -> dict | None:
+    """Réponse JSON d'un outil (texte ou CallToolResult), ou None."""
+    try:
+        text = result if isinstance(result, str) else None  # réponse d'une étape de lot (outil appelé directement)
+        structured = getattr(result, "structured_content", None)
+        if isinstance(structured, dict) and isinstance(structured.get("result"), str):
+            text = structured["result"]
+        elif text is None:
+            for block in getattr(result, "content", None) or (result if isinstance(result, list) else []):
+                if isinstance(getattr(block, "text", None), str):
+                    text = block.text
+                    break
+        parsed = json.loads(text) if text else None
+        return parsed if isinstance(parsed, dict) else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _journal_line(name: str, arguments: dict, result: Any, failed: bool, started: float, appel: str) -> None:
+    try:
+        session = _session_key()
+        tab = arguments.get("tab_id")
+        answer = _answer_of(result)
+        data: dict[str, Any] = (
+            answer["data"] if isinstance(answer, dict) and isinstance(answer.get("data"), dict) else {}
+        )
+        # Adresse rendue par le navigateur (canonique) d'abord ; l'argument brut seulement à défaut.
+        url = data.get("url") or data.get("pendingUrl")
+        url = url or (arguments.get("url") if name in ("browser_navigate", "browser_new_tab") else None)
+        tab = tab if tab is not None else data.get("id")
+        if isinstance(url, str) and tab is not None and (found := journal.domaine(url)):
+            _remember(_TAB_DOMAINS, (session, tab), found)
+        method = data.get("method") if name not in FREE_DATA_TOOLS else None
+        error = answer.get("error") if isinstance(answer, dict) else None
+        if error is None and isinstance(answer, dict) and isinstance(answer.get("steps"), list) and answer["steps"]:
+            last = answer["steps"][-1].get("result") if isinstance(answer["steps"][-1], dict) else None
+            error = last.get("error") if isinstance(last, dict) else None  # lot refusé : cause de son étape
+        journal.ecrire(
+            _agent_name(),
+            {
+                "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                "outil": VERSION,
+                "appel": appel,
+                "app": _TAB_DOMAINS.get((session, tab)),
+                "cadre": None,
+                "action": name.removeprefix("browser_"),
+                "technique": method if method in KNOWN_TECHNIQUES else None,
+                "issue": journal.issue(answer, failed),
+                "ms": round((time.monotonic() - started) * 1000),
+                "premier_plan": name == "browser_select_tab",
+                "erreur": journal.erreur_propre(error) if not failed else "exception",
+            },
+        )
+        if (counter := _STEP_LINES.get()) is not None:  # pendant un lot (étapes et étape refusée)
+            counter[0] += 1
+    except Exception:  # noqa: BLE001 - journal : jamais bloquant
+        pass
+
+
+async def _journaled_call_tool(name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+    started, appel, steps = time.monotonic(), uuid.uuid4().hex[:12], [0]
+    token, steps_token = _CURRENT_CALL.set(appel), _STEP_LINES.set(steps)
+    try:
+        result = await _tool_call(name, arguments, *args, **kwargs)
+    except BaseException:
+        if name != "browser_batch" or not steps[0]:
+            _journal_line(name, arguments or {}, None, True, started, appel)
+        raise
+    finally:
+        _CURRENT_CALL.reset(token)
+        _STEP_LINES.reset(steps_token)
+    # Un lot : une ligne par étape (browser_batch), reliées par le même appel ; une seule ligne s'il est refusé avant.
+    if name != "browser_batch" or not steps[0]:
+        _journal_line(name, arguments or {}, result, False, started, appel)
+    return result
+
+
+browser_mcp.call_tool = _journaled_call_tool  # type: ignore[method-assign]
 
 
 def listed_tool_names(server: MCPServer) -> list[str]:

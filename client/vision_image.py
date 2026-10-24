@@ -35,6 +35,22 @@ def _scaled(width: int, height: int, scale: float) -> tuple[int, int]:
     return max(1, math.floor(width * scale)), max(1, math.floor(height * scale))
 
 
+# Empreinte d'une image envoyée (règle commune, point 3) : réduite en 64 × 64 niveaux de gris. « Même écran » seulement
+# si AUCUNE case ne bouge de plus de 2 niveaux sur 255 : un écart moyen laisserait passer une case cochée ou un mot
+# changé sur un grand écran (l'IA croirait que rien ne s'est passé). Une image identique s'encode à l'identique.
+FINGERPRINT_SIDE = 64
+SAME_MAX_DIFF = 2
+
+
+def fingerprint(data: bytes) -> bytes:
+    with Image.open(io.BytesIO(data)) as image:
+        return image.convert("L").resize((FINGERPRINT_SIDE, FINGERPRINT_SIDE), Image.Resampling.BOX).tobytes()
+
+
+def same_image(a: bytes, b: bytes) -> bool:
+    return len(a) == len(b) and all(abs(x - y) <= SAME_MAX_DIFF for x, y in zip(a, b))
+
+
 def _webp(image: Image.Image, quality: int | None) -> bytes:
     out = io.BytesIO()
     if quality is None:
