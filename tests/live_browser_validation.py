@@ -1716,10 +1716,8 @@ def capture_masking_checks(check, tab_id: int, value_of) -> None:
             {"identiques": a == b, "temoin_different": control != b, "style_apres": inline_style(field_id)},
         )
 
-    # PDF : mêmes valeurs, même document ; témoin ordinaire : document différent. La pastille d'état de l'agent
-    # (« Nexus · ... », animée) est retirée avant chaque export : elle seule changeait d'un PDF à l'autre.
+    # PDF : mêmes valeurs, même document ; témoin ordinaire : document différent (plus de pastille d'état depuis le 22/10).
     def pdf_without_pill() -> bytes:
-        value_of("(() => { const p = document.getElementById('__nexus_status_pill'); if (p) p.remove(); return 1; })()")
         return _pdf(tab_id)
 
     set_field("cardname", "5131420000001111", "cardNumber")

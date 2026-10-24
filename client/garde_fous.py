@@ -190,15 +190,6 @@ def confirm_word(
     return ""
 
 
-def refusal(what: str, label: Any, word: str) -> str:
-    """Message de refus commun : rien n'a été fait, ordre explicite de Julien → confirm=true."""
-    return (
-        f"{what} sur « {str(label).strip()[:60]} » : irréversible ou chez un tiers (« {word} »), rien n'a été fait. "
-        "Ordre explicite de Julien pour CE geste → renvoyer l'étape avec confirm=true ; initiative de l'agent → lui "
-        "demander d'abord."
-    )
-
-
 def check_blind_paste(steps: Any) -> str:
     """Interdiction formelle de chaîner un collage (Ctrl+V) et une validation (Entrée, confirm) dans le même lot."""
     if not isinstance(steps, list):

@@ -3,12 +3,49 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.18.0] - 2026-10-23
+
+### Added
+- `browser_webmcp_call` checks the input against the tool's `inputSchema` before anything is called (or any accord
+  token issued): a wrong type, a value outside an enum or `const`, a missing required field, a number or length out
+  of bounds, an unexpected property when `additionalProperties` is false are refused with the exact problems. Chrome
+  passes such input to the page's handler unchecked (seen on Chrome's pizza-maker demo). The schema is page text, so
+  only keywords with a linear cost are applied, without regular expressions or references: `$ref`, `allOf`/`anyOf`/
+  `oneOf`, `pattern`, `format` and the like are left to the page. A full JSON Schema validator would download remote
+  `$ref`s from the PC (localhost included), and could be frozen for days by a 2 KB chain of references or by a
+  catastrophic regular expression. A schema the checker does not understand never blocks a call; neither does an
+  older or unknown dialect (`$schema` other than draft-06, draft-07, 2019-09 or 2020-12).
+
+### Security
+- `browser_webmcp_call`: `readOnlyHint` no longer exempts a tool from the outward-word check. It is the page's own
+  claim: a tool named `send_email` declared read-only ran without the user's accord. Only a tool with no outward
+  word, consequential hint or outward submit button runs freely.
 
 ### Changed
+- `browser_webmcp_call` and `browser_webmcp_tools`: the main status is `error` when the page's handler failed or
+  timed out, or when a dialog interrupted the read or the call (`dialogOpened`, never accepted); it was `success`
+  with the failure only inside `data`.
 - Development dependency: pyright 1.1.407 → 1.1.414.
+- Working indicator: the breathing blue-violet glow behind the logo is removed; only the spinning logo and its drop
+  shadow remain.
+- Shared guard rails (`client/garde_fous.py`): copy aligned on the common policy, an unused French refusal removed.
+
+- CI: the Scorecard job only runs on the public repository (it cannot score a private copy).
+
+### Removed
+- In-tab status pill (« agent · action », bottom right): noise next to the working indicator and the agents' tab
+  groups, which already show which tab belongs to whom.
 
 ### Fixed
+- `browser_new_tab`: a tab opened but whose ownership could not be saved is closed and the error reported; before, the
+  window fallback opened a second tab and the first one was left behind (same fix as chrome-devtools-mcp 1.12 for
+  `new_page`). Only a failure of `chrome.tabs.create` itself leads to the window fallback. If Chrome refuses to close
+  it, the error says so and the tab stays the agent's (to close with `browser_close_tab`), never reported as closed.
+- `install.ps1` no longer creates the daemons' shared token when it is missing: it stops and points to the machine
+  sync, the only place where the token is born (once the secrets vault has been synced). Run too early on a new PC,
+  it created a second token that broke the other PC.
+- Outward-action summary: the text of a field (contenteditable or input) is captured up to 128 KiB instead of being
+  cut at 4,000 characters, so the summary shown before a send covers the whole message.
 - Emergency stop: the remaining time is now bounded to [0, HOLD_S]; floating-point rounding could report
   120.00000000000003 s, above the 120 s hold.
 

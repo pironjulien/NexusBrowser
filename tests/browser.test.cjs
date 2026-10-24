@@ -321,7 +321,8 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
                     return Object.fromEntries(list.filter(k => k in sessionData).map(k => [k, sessionData[k]]));
                 },
                 set: async (items) => { Object.assign(sessionData, JSON.parse(JSON.stringify(items))); },
-                remove: async (key) => { delete sessionData[key]; }
+                remove: async (key) => { delete sessionData[key]; },
+                ...(chromeOverrides.storageSession || {})
             },
             local: {
                 get: async (keys) => {
@@ -3419,6 +3420,29 @@ test('repli windows.create : id de l\'ONGLET créé (relu par tabs.query), jamai
     assert.deepEqual(none.owners(), {});
 });
 
+test('onglet ouvert mais attribution non enregistrée : refermé, sans fenêtre de repli', async () => {
+    const removed = [];
+    let windows = 0;
+    const h = harness({}, {autoOwn: false, storageSession: {set: async (items) => {
+        if (Object.values(items).some(v => v && typeof v === 'object' && '99' in v)) throw new Error('quota');
+    }},
+        windows: {getLastFocused: async () => ({id: 5, type: 'normal'}), create: async () => { windows++; return {id: 12}; }},
+        tabs: {remove: async (id) => { removed.push(id); }}});
+    const res = await h.run('create_tab', {url: 'https://x.invalid', group: false}, AGENT_A);
+    assert.match(res.error, /Tab 99 opened but not assigned to the agent \(quota\): closed/);
+    assert.deepEqual(removed, [99]);
+    assert.equal(windows, 0);
+    assert.equal(h.owners()['99'], undefined);
+    // Fermeture refusée par Chrome : jamais dit « closed », l'onglet reste à l'agent pour browser_close_tab.
+    const stuck = harness({}, {autoOwn: false, storageSession: {set: async (items) => {
+        if (Object.values(items).some(v => v && typeof v === 'object' && '99' in v)) throw new Error('quota');
+    }}, windows: {getLastFocused: async () => ({id: 5, type: 'normal'})},
+        tabs: {remove: async () => { throw new Error('Chrome unavailable'); }}});
+    const kept = await stuck.run('create_tab', {url: 'https://x.invalid', group: false}, AGENT_A);
+    assert.match(kept.error, /could not be closed \(Chrome unavailable\): close it with browser_close_tab\(99\)/);
+    assert.doesNotMatch(kept.error, /: closed\./);
+});
+
 test('capture d\'élément : zone en repère de la PAGE (défilement ajouté), au-delà de la vue', async () => {
     const el = {scrollIntoView() {}, getBoundingClientRect: () => ({x: 10, y: 20, width: 200, height: 100})};
     const h = harness({document: {querySelectorAll: (sel) => sel === '#card' ? [el] : []}}, {
@@ -3514,7 +3538,7 @@ test('discussion du panneau retirée : son fil est effacé, le pont ne reçoit p
     assert.ok(res.error);
 });
 
-test('pastille et point du clic : seulement sur message de l\'extension, jamais sur un événement de la page', () => {
+test('point du clic (plus de pastille) : seulement sur message de l\'extension, jamais sur un événement de la page', () => {
     const appended = [];
     const windowListeners = {};
     let listener = null;
@@ -3528,12 +3552,14 @@ test('pastille et point du clic : seulement sur message de l\'extension, jamais 
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/content_script.js'), 'utf8'), ctx);
     assert.deepEqual(Object.keys(windowListeners), []);  // aucun écouteur d'événement de la page
-    listener({nexusPill: {agent: 'Claude', text: 'Faux'}}, {id: EXT_ID, tab: {id: 3}});  // script de contenu ou page
+    listener({nexusRipple: {x: 1, y: 2}}, {id: EXT_ID, tab: {id: 3}});  // script de contenu ou page
     listener({nexusRipple: {x: 1, y: 2}}, {id: 'autre-extension'});
     assert.equal(appended.length, 0);
+    // Pastille d'état retirée (Julien, 22/10 : du bruit ; le logo et les groupes d'onglets suffisent) : ignorée.
     listener({nexusPill: {agent: 'Claude', text: 'Onglet créé'}}, {id: EXT_ID});
+    assert.equal(appended.length, 0);
     listener({nexusRipple: {x: 5, y: 6}}, {id: EXT_ID});
-    assert.equal(appended.length, 2);
+    assert.equal(appended.length, 1);
 });
 // =============================================================================
 // Revue d'Antigravity du 17/10 (partie 2) : régressions de la 2.7.0

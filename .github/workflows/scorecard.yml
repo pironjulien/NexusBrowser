@@ -13,6 +13,8 @@ permissions: read-all
 
 jobs:
   analysis:
+    # Scorecard only scores public repositories: the private development copy skips it.
+    if: github.repository == 'pironjulien/NexusBrowser'
     runs-on: ubuntu-latest
     permissions:
       security-events: write

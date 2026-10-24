@@ -3058,19 +3058,6 @@ async function resolveTargetTab(params = {}) {
     return id;
 }
 
-/**
- * Pastille d'état dans l'onglet (agent qui le pilote et action) : message de l'extension au script de contenu du cadre
- * principal (chrome.tabs.sendMessage), qu'une page ne peut pas émettre. Aucun événement de fenêtre.
- */
-function notifyTabStatus(tabId, text, autoHideMs = 3000, agent = undefined) {
-    if (!tabId || typeof chrome === "undefined" || !chrome.tabs?.sendMessage) return;
-    const who = agent === undefined ? (tabOwners.get(tabId)?.agent || "Nexus") : (agent || "Nexus");
-    try {
-        const pending = chrome.tabs.sendMessage(tabId, { nexusPill: { agent: who, text: String(text).slice(0, 80), autoHideMs } }, { frameId: 0 });
-        if (pending && typeof pending.catch === "function") pending.catch(() => {});
-    } catch (_) {}
-}
-
 // -----------------------------------------------------------------------------
 // Indicateur « agent au travail » : le logo NexusBrowser tourne sur lui-même en bas à droite de l'onglet que
 // l'utilisateur regarde (les agents travaillent dans des onglets de fond), comme un écran de chargement de jeu, et un
@@ -3133,11 +3120,6 @@ function drawBusyIndicator(on, logo, label) {
         });
         // Racine fermée : la page ne lit ni ne restyle l'indicateur.
         const root = host.attachShadow({ mode: "closed" });
-        const halo = document.createElement("div");
-        Object.assign(halo.style, {
-            position: "absolute", inset: "-10px", borderRadius: "50%",
-            background: "radial-gradient(circle, rgba(66, 133, 244, 0.55), rgba(155, 114, 203, 0.25) 55%, transparent 72%)"
-        });
         const coin = document.createElement("div");
         Object.assign(coin.style, { position: "absolute", inset: "0", transformStyle: "preserve-3d" });
         const face = document.createElement("div");
@@ -3147,13 +3129,11 @@ function drawBusyIndicator(on, logo, label) {
             boxShadow: "0 0 0 2px rgba(255, 255, 255, 0.18), 0 8px 22px rgba(0, 0, 0, 0.55)"
         });
         coin.appendChild(face);
-        root.append(halo, coin);
+        root.append(coin);  // sans halo bleu-violet (demande de Julien du 22/10) : le logo seul, avec son ombre
         document.documentElement.appendChild(host);
-        // Le logo roule sur lui-même (axe vertical), le halo respire.
+        // Le logo roule sur lui-même (axe vertical).
         coin.animate([{ transform: "rotateY(0deg)" }, { transform: "rotateY(360deg)" }],
             { duration: 1618, iterations: Infinity, easing: "cubic-bezier(0.45, 0, 0.55, 1)" });
-        halo.animate([{ opacity: 0.55, transform: "scale(0.92)" }, { opacity: 1, transform: "scale(1.08)" }],
-            { duration: 809, iterations: Infinity, direction: "alternate", easing: "ease-in-out" });
     }
     host.title = label;
     requestAnimationFrame(() => { host.style.opacity = "1"; host.style.transform = "scale(1)"; });
@@ -3288,7 +3268,6 @@ async function selectTab(params) {
     if (tab?.windowId && chrome.windows?.update) {
         await chrome.windows.update(tab.windowId, { focused: true });
     }
-    notifyTabStatus(tabId, "Au premier plan", 2000);
     return { data: { success: true, tab } };
 }
 
@@ -3341,41 +3320,61 @@ async function createTab(params, client = null) {
         // Seule une fenêtre d'application existe : nouvelle fenêtre normale réduite, sans focus.
         const win = await chrome.windows.create({ url, focused: false, state: "minimized", type: "normal" });
         const createdTab = await tabOfNewWindow(win);
-        await rememberTabOwner(createdTab.id, client);
-        notifyTabStatus(createdTab.id, "Onglet créé (fenêtre réduite)", 2500);
+        await ownOrClose(createdTab.id, client);
         return { data: { ...createdTab, windowCreated: true, owner: client?.agent || null } };
     }
 
+    let tab;
     try {
-        const tab = await chrome.tabs.create(windowId === undefined ? { url, active } : { url, active, windowId });
-        await rememberTabOwner(tab.id, client);
-        let assignedGroupId = tab.groupId !== undefined ? tab.groupId : -1;
-
-        const groupParam = params.group !== undefined ? params.group : "Nexus";
-        if (groupParam && chrome.tabGroups && chrome.tabs?.group) {
-            try {
-                const groupTitle = typeof groupParam === "string" ? groupParam : "Nexus";
-                const grpRes = await groupTabs({
-                    tabIds: [tab.id],
-                    title: groupTitle,
-                    color: params.groupColor || "purple",
-                    collapsed: Boolean(params.collapsed)
-                });
-                if (grpRes?.data?.groupId) {
-                    assignedGroupId = grpRes.data.groupId;
-                }
-            } catch (grpErr) {
-                console.log("[NexusBrowser] Auto-group notice:", grpErr.message);
-            }
-        }
-
-        notifyTabStatus(tab.id, "Onglet créé", 2500);
-        return { data: { ...tab, groupId: assignedGroupId, owner: client?.agent || null } };
-    } catch(e) {
+        tab = await chrome.tabs.create(windowId === undefined ? { url, active } : { url, active, windowId });
+    } catch (e) {
         const win = await chrome.windows.create(active ? { url, focused: true } : { url, focused: false, state: "minimized" });
         const createdTab = await tabOfNewWindow(win);
-        await rememberTabOwner(createdTab.id, client);
+        await ownOrClose(createdTab.id, client);
         return { data: { ...createdTab, windowCreated: true, owner: client?.agent || null } };
+    }
+    // Seul l'échec de chrome.tabs.create mène à la fenêtre de repli : un onglet ouvert n'est jamais doublé.
+    await ownOrClose(tab.id, client);
+    let assignedGroupId = tab.groupId !== undefined ? tab.groupId : -1;
+
+    const groupParam = params.group !== undefined ? params.group : "Nexus";
+    if (groupParam && chrome.tabGroups && chrome.tabs?.group) {
+        try {
+            const groupTitle = typeof groupParam === "string" ? groupParam : "Nexus";
+            const grpRes = await groupTabs({
+                tabIds: [tab.id],
+                title: groupTitle,
+                color: params.groupColor || "purple",
+                collapsed: Boolean(params.collapsed)
+            });
+            if (grpRes?.data?.groupId) {
+                assignedGroupId = grpRes.data.groupId;
+            }
+        } catch (grpErr) {
+            console.log("[NexusBrowser] Auto-group notice:", grpErr.message);
+        }
+    }
+
+    return { data: { ...tab, groupId: assignedGroupId, owner: client?.agent || null } };
+}
+
+/**
+ * Onglet ouvert pour l'agent mais dont l'attribution n'a pas pu être enregistrée : refermé, jamais laissé à l'abandon
+ * (même correctif que chrome-devtools-mcp 1.12 pour new_page).
+ */
+async function ownOrClose(tabId, client) {
+    try {
+        await rememberTabOwner(tabId, client);
+    } catch (error) {
+        const reason = error?.message || error;
+        try {
+            await chrome.tabs.remove(tabId);
+        } catch (closeError) {
+            // Fermeture impossible : la propriété en mémoire reste, l'onglet n'est jamais laissé sans maître ni dit fermé.
+            throw new Error(`Tab ${tabId} opened but not assigned to the agent (${reason}), and it could not be closed (${closeError?.message || closeError}): close it with browser_close_tab(${tabId}).`);
+        }
+        tabOwners.delete(tabId);
+        throw new Error(`Tab ${tabId} opened but not assigned to the agent (${reason}): closed.`);
     }
 }
 
@@ -3397,7 +3396,6 @@ async function adoptTab(params = {}, client = null) {
     try { tab = await chrome.tabs.get(tabId); } catch (_) {}
     if (tab && isProtectedUrl(tab.url)) return { error: `Tab ${tabId} is protected (${tab.url}): never handed to an agent.` };
     await rememberTabOwner(tabId, client, "adopted");
-    notifyTabStatus(tabId, "Onglet confié à l'agent par l'utilisateur", 3500, client.agent);
     return { data: { tabId, adopted: true, owner: client.agent, title: tab?.title || "", url: maskUrl(tab?.url || "") } };
 }
 
@@ -3407,7 +3405,6 @@ async function adoptTab(params = {}, client = null) {
  */
 async function reclaimOrphan(tabId, owner, client) {
     await rememberTabOwner(tabId, client, owner.adopted ? "adopted" : "created");
-    notifyTabStatus(tabId, "Onglet repris par la nouvelle session", 2500, client.agent);
     return { tabId, reclaimed: true, adopted: !!owner.adopted, owner: client.agent };
 }
 
@@ -3435,7 +3432,6 @@ async function releaseTab(params = {}) {
     networkRecording.delete(tabId);
     await detachDebugger(tabId);
     await forgetTabOwner(tabId);
-    notifyTabStatus(tabId, "Onglet rendu à l'utilisateur", 2500, null);
     return { data: { tabId, released: true } };
 }
 
@@ -3462,7 +3458,6 @@ async function navigateTab(params) {
         checkNavigableUrl(entry.url);
         await chrome.debugger.sendCommand(target, "Page.navigateToHistoryEntry", { entryId: entry.id });
         scheduleDebuggerDetach(tabId);
-        notifyTabStatus(tabId, params.history === "back" ? "Page précédente" : "Page suivante", 2000);
         return { data: { success: true, history: params.history } };
     }
     if (!params.url) throw new Error("Missing url parameter");
@@ -3471,7 +3466,6 @@ async function navigateTab(params) {
 
     resetNetworkTracking(tabId);
     const updatedTab = await chrome.tabs.update(tabId, { url });
-    notifyTabStatus(tabId, `Navigation : ${url.slice(0, 30)}…`, 2500);
     return { data: updatedTab };
 }
 
@@ -3497,7 +3491,6 @@ async function reloadTab(params) {
     const tabId = await resolveTargetTab(params);
     resetNetworkTracking(tabId);
     await chrome.tabs.reload(tabId, { bypassCache: params.bypassCache || false });
-    notifyTabStatus(tabId, "Rechargement", 2000);
     return { data: { success: true } };
 }
 

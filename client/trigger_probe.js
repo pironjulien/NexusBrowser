@@ -179,9 +179,9 @@
                 const chosen = opts.filter(o => o.selected);
                 value = (chosen.length ? chosen : opts.slice(0, 1)).map(o => clip(o.text !== undefined ? o.text : o.textContent, 120)).join(", ");
             } else if (f.isContentEditable || (typeof f.value !== "string")) {
-                value = clip(f.innerText !== undefined && f.innerText !== null ? f.innerText : f.textContent, 4000);
+                value = clip(f.innerText !== undefined && f.innerText !== null ? f.innerText : f.textContent, 131072);
             } else {
-                value = clip(f.value, 4000);
+                value = clip(f.value, 131072);
             }
             const hints = [type, attr(f, "autocomplete"), attr(f, "name"), attr(f, "id"), attr(f, "aria-label"), label].map(v => clip(v, 80)).join(" ");
             if (type === "email" || type === "tel" || RECIPIENT.test(hints)) {

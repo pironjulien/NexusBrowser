@@ -44,60 +44,9 @@ function showRipple(x, y) {
     setTimeout(() => { if (ripple.parentNode) ripple.parentNode.removeChild(ripple); }, 400);
 }
 
-// 2. Pastille d'état discrète : agent qui pilote l'onglet et action en cours
-let nexusPillTimer = null;
-
-function hidePill(pill) {
-    if (!pill) return;
-    pill.style.opacity = "0";
-    pill.style.transform = "translateY(8px)";
-    setTimeout(() => { if (pill.parentNode) pill.parentNode.removeChild(pill); }, 300);
-}
-
-function showPill(detail) {
-    if (!document.documentElement) return;
-    let pill = document.getElementById("__nexus_status_pill");
-    if (detail.remove) {
-        hidePill(pill);
-        return;
-    }
-    if (!pill) {
-        pill = document.createElement("div");
-        pill.id = "__nexus_status_pill";
-        Object.assign(pill.style, {
-            position: "fixed", bottom: "50px", right: "116px", zIndex: "2147483647", display: "flex",
-            alignItems: "center", gap: "8px", padding: "6px 12px", background: "rgba(24, 24, 27, 0.92)",
-            border: "1px solid rgba(255, 255, 255, 0.18)", borderRadius: "8px", boxShadow: "0 4px 16px rgba(0, 0, 0, 0.35)",
-            color: "#f4f4f5", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif", fontSize: "12px",
-            fontWeight: "500", pointerEvents: "none", userSelect: "none", opacity: "0", transform: "translateY(8px)",
-            transition: "opacity 0.2s ease-out, transform 0.2s ease-out"
-        });
-        const dot = document.createElement("span");
-        Object.assign(dot.style, { width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#2563eb", display: "inline-block" });
-        const label = document.createElement("span");
-        label.className = "__nexus_pill_text";
-        pill.appendChild(dot);
-        pill.appendChild(label);
-        document.documentElement.appendChild(pill);
-        requestAnimationFrame(() => {
-            pill.style.opacity = "1";
-            pill.style.transform = "translateY(0)";
-        });
-    }
-    const label = pill.querySelector(".__nexus_pill_text");
-    const agent = String(detail.agent || "Nexus").slice(0, 32);
-    if (label) label.textContent = `${agent} · ${String(detail.text || "En tâche de fond").slice(0, 80)}`;
-    pill.style.opacity = "1";
-    pill.style.transform = "translateY(0)";
-    if (nexusPillTimer) clearTimeout(nexusPillTimer);
-    const autoHideMs = Number.isFinite(detail.autoHideMs) ? detail.autoHideMs : 3500;
-    if (autoHideMs > 0) nexusPillTimer = setTimeout(() => hidePill(pill), autoHideMs);
-}
-
 if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
     chrome.runtime.onMessage.addListener((message, sender) => {
         if (!message || !fromExtension(sender)) return;
-        if (message.nexusPill && typeof message.nexusPill === "object") showPill(message.nexusPill);
         if (message.nexusRipple && typeof message.nexusRipple === "object") showRipple(Number(message.nexusRipple.x), Number(message.nexusRipple.y));
     });
 }

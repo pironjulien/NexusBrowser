@@ -121,11 +121,9 @@ $server = Join-Path $repositoryRoot 'client\mcp_server.py'
 $args_ = @('-B', $server)
 $port = 16182
 $tokenFile = Join-Path $env:OneDrive 'Documents\NexusSecure\agents\nexus-mcp-token.txt'
-if (-not (Test-Path $tokenFile)) {
-    $bytes = [byte[]]::new(32); [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    New-Item -ItemType Directory -Force (Split-Path $tokenFile) | Out-Null
-    [IO.File]::WriteAllText($tokenFile, [Convert]::ToHexString($bytes).ToLower())
-}
+# Jeton commun aux deux PC : créé une seule fois par Sync-NexusPoste (étape « Démons MCP partagés »), jamais ici. Un
+# installeur lancé sur un PC neuf avant que OneDrive ait descendu le coffre en créait un autre, qui cassait l'autre PC.
+if (-not (Test-Path $tokenFile)) { throw "Jeton absent ($tokenFile) : attendre la synchro OneDrive du coffre, puis lancer Sync-NexusPoste.ps1 -Apply." }
 $token = (Get-Content $tokenFile -Raw).Trim()
 function Get-Url([string]$Agent) { "http://127.0.0.1:$port/mcp?agent=$($Agent.ToLower())" }
 $spec = [ordered]@{ port = $port; python = $pythonExe; args = $args_; env = [ordered]@{ PYTHONUTF8 = '1'; PYTHONDONTWRITEBYTECODE = '1' } }
