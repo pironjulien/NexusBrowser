@@ -1,6 +1,6 @@
 [project]
 name = "nexus-browser"
-version = "2.20.0"
+version = "2.21.0"
 description = "Your real Chrome, driven by Claude, Codex and Antigravity in background tabs: the nexus-browser MCP server (needs the NexusBrowser bridge and extension)"
 authors = [{ name = "Julien Piron" }]
 license = "MIT"
@@ -16,6 +16,7 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=2.3.0,<3",
+    "pillow>=11,<14",
     "websockets>=13.0,<17",
 ]
 

@@ -3,6 +3,28 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.21.0] - 2026-10-24
+
+### Changed
+- `browser_screenshot(inline=True)` and `browser_vision_inspect(inline=True)` attach a real MCP image block instead
+  of a base64 PNG inside the JSON text (which no model sees as an image, and which was never reduced). The image
+  follows the common rule of the Nexus tools: long side at most 1568 px and 1.15 megapixels (Claude's standard limit,
+  read as is by GPT-5.x and Gemini 3, so positions on the image stay exact), lossless WebP, quality 85 above 200 KB,
+  never more than 500 KB (Antigravity answers HTTP 400 above). `data.image` gives the sent and source sizes, `scale`,
+  and `css_per_image_px` with `css_origin` to turn a position on the image into page CSS pixels (the extension now
+  returns `devicePixelRatio` for the viewport and the marked capture). Files written to disk keep the full-resolution
+  PNG.
+- New dependency: Pillow.
+
+### Fixed
+- Element screenshot: `captureBeyondViewport` (which removes the scrollbar space and shifted the page during the
+  capture, so the crop landed beside the element and the page stayed shifted) is used only for an element larger
+  than the view. Such an element is then measured with the scrollbar hidden, the geometry the capture uses (same
+  element, Shadow DOM included), and only `scrollbar-width` is restored afterwards; a fallback restore runs by itself
+  if a dialog blocks the normal one. A dialog opened during a capture is reported (`dialogOpened`), never accepted,
+  in file mode too (it raised a bare `'dataUrl'` error).
+- A capture too large to attach (over 40 megapixels) is refused cleanly before decoding.
+
 ## [2.20.0] - 2026-10-24
 
 Second anti-bloat step, decided by the user: duplicated tools are entropy.

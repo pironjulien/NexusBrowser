@@ -4191,6 +4191,8 @@ async function scrollPage(params = {}) {
     });
 }
 
+// Remise de secours de la barre de défilement après une capture d'élément au-delà de la vue (voir takeScreenshot).
+const SCROLLBAR_RESTORE_FALLBACK_MS = 15000;
 const SCREENSHOT_FORMATS = { png: "image/png", jpeg: "image/jpeg", jpg: "image/jpeg", webp: "image/webp" };
 // Plus grande dimension d'image que Chrome sait rendre en une capture (limite de texture de Skia).
 const FULL_PAGE_MAX_PX = 16384;
@@ -4354,20 +4356,100 @@ async function takeScreenshot(params = {}) {
                 }
                 const el = findIn(document);
                 if (!el) return null;
+                // Élément gardé dans le monde isolé : la remesure (élément au-delà de la vue) vise exactement le même,
+                // composants (Shadow DOM) et repères compris.
+                globalThis.__nexusCaptureTarget = el;
                 el.scrollIntoView({ behavior: "instant", block: "center" });
                 const r = el.getBoundingClientRect();
                 if (r.width <= 0 || r.height <= 0) return null;
-                return { x: r.x, y: r.y, width: r.width, height: r.height };
+                return {
+                    x: r.x, y: r.y, width: r.width, height: r.height,
+                    viewWidth: document.documentElement?.clientWidth, viewHeight: document.documentElement?.clientHeight,
+                    devicePixelRatio: window.devicePixelRatio
+                };
             })()`
         });
         if (elRect?.data) {
-            const clip = await pageClip(target, elRect.data);
-            const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, {
-                format: cdpFormat,
-                clip,
-                captureBeyondViewport: true
-            }));
-            return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip } };
+            let rect = elRect.data;
+            // captureBeyondViewport retire l'espace de la barre de défilement : la page se décale PENDANT la capture
+            // (zone mesurée avant, image rognée à côté ; relevé par Codex le 24/10). Seulement pour un élément qui
+            // dépasse vraiment la vue, et alors mesuré dans cette géométrie-là : barre masquée (scrollbar-width: none
+            // sur <html>) le temps de la mesure et de la capture. Seule cette propriété est notée puis remise (les
+            // autres styles, même changés par la page entre-temps, restent) ; une remise de secours part toute seule
+            // (minuterie du monde isolé) si la remise normale est bloquée, par une boîte de dialogue par exemple.
+            const inView = rect.viewWidth > 0 && rect.viewHeight > 0 && rect.x >= 0 && rect.y >= 0
+                && rect.x + rect.width <= rect.viewWidth && rect.y + rect.height <= rect.viewHeight;
+            let restoreScrollbar = null;
+            if (!inView) {
+                const measured = await evaluateIsolated({
+                    tabId,
+                    code: `(() => {
+                        const root = document.documentElement, P = "scrollbar-width";
+                        if (!root || !root.style || typeof root.style.getPropertyValue !== "function") return { applied: false };
+                        // Remise encore en attente d'une capture précédente (boîte de dialogue fermée, nouvel essai
+                        // avant la minuterie) : faite AVANT de noter l'état, sinon « none » serait pris pour l'origine
+                        // (relevé par Codex le 24/10).
+                        if (typeof globalThis.__nexusScrollbarRestore === "function") globalThis.__nexusScrollbarRestore();
+                        const state = {
+                            value: root.style.getPropertyValue(P), priority: root.style.getPropertyPriority(P),
+                            hadStyle: typeof root.hasAttribute === "function" && root.hasAttribute("style"), done: false
+                        };
+                        // Remise liée à CETTE capture (sa minuterie n'appelle jamais celle d'une autre), idempotente.
+                        const restore = () => {
+                            if (state.done) return true;
+                            state.done = true;
+                            if (state.value) root.style.setProperty(P, state.value, state.priority);
+                            else root.style.removeProperty(P);
+                            if (!state.hadStyle && root.getAttribute("style") === "") root.removeAttribute("style");
+                            if (globalThis.__nexusScrollbarRestore === finish) globalThis.__nexusScrollbarRestore = null;
+                            return true;
+                        };
+                        const timer = typeof setTimeout === "function" ? setTimeout(restore, ${SCROLLBAR_RESTORE_FALLBACK_MS}) : null;
+                        const finish = () => { if (timer !== null && typeof clearTimeout === "function") clearTimeout(timer); return restore(); };
+                        globalThis.__nexusScrollbarRestore = finish;
+                        root.style.setProperty(P, "none");
+                        const el = globalThis.__nexusCaptureTarget;
+                        const r = el && el.isConnected !== false ? el.getBoundingClientRect() : null;
+                        return { applied: true, rect: r && r.width > 0 && r.height > 0 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null };
+                    })()`
+                });
+                // Boîte de dialogue ouverte par la page pendant la mesure : aucune capture (elle attendrait la boîte),
+                // l'interruption est rendue telle quelle ; la minuterie remet la barre dès la boîte fermée.
+                if (measured?.data?.dialogOpened) return measured;
+                if (measured?.data?.applied) {
+                    restoreScrollbar = async () => {
+                        const done = await evaluateIsolated({
+                            tabId, code: "globalThis.__nexusScrollbarRestore ? globalThis.__nexusScrollbarRestore() : true"
+                        }).catch(() => null);
+                        if (done?.data !== true) console.log("[NexusBrowser] Scrollbar restore deferred to the isolated-world timer.");
+                    };
+                }
+                if (measured?.data?.applied && !measured.data.rect) {
+                    await restoreScrollbar();
+                    // Jamais une zone périmée annoncée juste : l'élément a disparu ou changé pendant la mesure.
+                    return { error: "Element moved or disappeared while measuring the screenshot: try again." };
+                }
+                if (measured?.data?.rect) rect = { ...rect, ...measured.data.rect };
+            }
+            const clip = await pageClip(target, rect);
+            let shot;
+            try {
+                shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, {
+                    format: cdpFormat,
+                    clip,
+                    captureBeyondViewport: !inView
+                }));
+            } finally {
+                if (restoreScrollbar) await restoreScrollbar();
+            }
+            // clip est en pixels CSS × zoom de la page (pageClip) : zoom rendu pour revenir aux pixels CSS.
+            let zoom = 1;
+            try {
+                const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+                if (Number(metrics?.cssVisualViewport?.zoom) > 0) zoom = Number(metrics.cssVisualViewport.zoom);
+            } catch (_) {}
+            const devicePixelRatio = Number(rect.devicePixelRatio) > 0 ? Number(rect.devicePixelRatio) : null;
+            return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip, zoom, devicePixelRatio } };
         } else {
             return { error: "Element not found for screenshot selector: " + params.selector };
         }
@@ -4386,14 +4468,18 @@ async function takeScreenshot(params = {}) {
         const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, {
             format: cdpFormat, clip, captureBeyondViewport: true
         }));
+        const ratio = await evaluateIsolated({ tabId, code: "window.devicePixelRatio" });
+        const devicePixelRatio = Number(ratio?.data) > 0 ? Number(ratio.data) : null;
         return { data: {
-            dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip,
+            dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip, zoom, devicePixelRatio,
             fullPage: { width, height, truncated: height < fullHeight || width < Math.ceil(Number(size.width) || 0) }
         } };
     }
 
     const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, { format: cdpFormat }));
-    return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType } };
+    const ratio = await evaluateIsolated({ tabId, code: "window.devicePixelRatio" });
+    const devicePixelRatio = Number(ratio?.data) > 0 ? Number(ratio.data) : null;
+    return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, devicePixelRatio } };
 }
 
 /**
@@ -4698,7 +4784,7 @@ async function visionInspect(params = {}) {
                 markerId++;
             }
 
-            return { markers, title: document.title, url: window.location.href };
+            return { markers, title: document.title, url: window.location.href, devicePixelRatio: window.devicePixelRatio };
         })()`
     });
 
@@ -4725,6 +4811,7 @@ async function visionInspect(params = {}) {
             url: markerData?.data?.url,
             markerCount: markerData?.data?.markers?.length || 0,
             markers: markerData?.data?.markers || [],
+            devicePixelRatio: Number(markerData?.data?.devicePixelRatio) > 0 ? Number(markerData.data.devicePixelRatio) : null,
             screenshotDataUrl: `data:image/png;base64,${shot.data}`
         }
     };

@@ -224,7 +224,7 @@ def capture_dir(tmp_path, monkeypatch):
 )
 def test_browser_captures_are_written_to_disk_by_default(monkeypatch, capture_dir, tool, key):
     monkeypatch.setattr(mcp_server, "call_bridge", lambda action, params, timeout=20.0: {key: PNG, "markers": []})
-    result = json.loads(getattr(mcp_server, tool)(tab_id=1))
+    result = json.loads(getattr(mcp_server, tool)(tab_id=1).structured_content["result"])
     assert result["status"] == "success"
     assert key not in result["data"]
     written = Path(result["data"]["output_path"])
@@ -232,14 +232,7 @@ def test_browser_captures_are_written_to_disk_by_default(monkeypatch, capture_di
     assert written.read_bytes() == b"png-bytes"
 
 
-@pytest.mark.parametrize(
-    "tool,key", [("browser_screenshot", "dataUrl"), ("browser_vision_inspect", "screenshotDataUrl")]
-)
-def test_browser_captures_inline_on_request(monkeypatch, capture_dir, tool, key):
-    monkeypatch.setattr(mcp_server, "call_bridge", lambda action, params, timeout=20.0: {key: PNG})
-    result = json.loads(getattr(mcp_server, tool)(tab_id=1, inline=True))
-    assert result["data"][key] == PNG
-    assert list(capture_dir.iterdir()) == []
+# Capture jointe (inline=True) : vrai bloc image WebP réduit, voir tests/test_vision_image.py.
 
 
 def test_new_browser_tools_reach_the_extension(monkeypatch):

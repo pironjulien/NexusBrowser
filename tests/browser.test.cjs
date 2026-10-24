@@ -3449,7 +3449,52 @@ test('capture d\'élément : zone en repère de la PAGE (défilement ajouté), a
     assert.equal((await h.run('screenshot', {tabId: 1, selector: '#card'})).error, undefined);
     const shot = h.calls.find(c => c.method === 'Page.captureScreenshot');
     assert.deepEqual(plain(shot.params.clip), {x: 40, y: 1520, width: 200, height: 100, scale: 1});
-    assert.equal(shot.params.captureBeyondViewport, true);
+    assert.equal(shot.params.captureBeyondViewport, true);  // taille de la vue inconnue : au-delà par prudence
+    // Élément entièrement dans la vue : jamais captureBeyondViewport (il retire la barre de défilement et décale la
+    // page pendant la capture, image rognée à côté ; relevé par Codex le 24/10).
+    const inView = harness({document: {querySelectorAll: (sel) => sel === '#card' ? [el] : [], documentElement: {clientWidth: 1280, clientHeight: 720}}}, {
+        debuggerSendCommand: (target, method) => method === 'Page.getLayoutMetrics' ? {cssVisualViewport: {pageX: 0, pageY: 0}} : undefined
+    });
+    assert.equal((await inView.run('screenshot', {tabId: 1, selector: '#card'})).error, undefined);
+    assert.equal(inView.calls.find(c => c.method === 'Page.captureScreenshot').params.captureBeyondViewport, false);
+    // Élément plus grand que la vue : mesuré barre de défilement masquée (la géométrie de captureBeyondViewport),
+    // même élément (composants compris), puis seule la propriété de la barre remise ; un autre style posé par la page
+    // pendant la capture est gardé.
+    const props = {color: ['red', '']};
+    let hasStyle = true;
+    const root = {
+        clientWidth: 2033, clientHeight: 900,
+        hasAttribute: (n) => n === 'style' && hasStyle,
+        getAttribute: (n) => (n === 'style' && hasStyle ? Object.entries(props).map(([k, [v]]) => `${k}: ${v};`).join(' ') : null),
+        removeAttribute: (n) => { if (n === 'style') hasStyle = false; },
+        style: {
+            getPropertyValue: (k) => (props[k] ? props[k][0] : ''),
+            getPropertyPriority: (k) => (props[k] ? props[k][1] : ''),
+            setProperty: (k, v, pr = '') => { props[k] = [v, pr]; hasStyle = true; if (k === 'scrollbar-width') props['--site-theme'] = ['dark', '']; },
+            removeProperty: (k) => { delete props[k]; }
+        }
+    };
+    const shadowHost = {shadowRoot: null};
+    const tall = {isConnected: true, scrollIntoView() {}, getBoundingClientRect: () => ({x: props['scrollbar-width'] ? 524 : 516.4, y: 120, width: 500, height: 2000})};
+    shadowHost.shadowRoot = {querySelectorAll: (sel) => sel === '#tall' ? [tall] : []};
+    const beyond = harness({document: {querySelectorAll: (sel) => sel === '*' ? [shadowHost] : [], documentElement: root}}, {
+        debuggerSendCommand: (target, method) => method === 'Page.getLayoutMetrics' ? {cssVisualViewport: {pageX: 0, pageY: 0}} : undefined
+    });
+    assert.equal((await beyond.run('screenshot', {tabId: 1, selector: '#tall'})).error, undefined);
+    const big = beyond.calls.find(c => c.method === 'Page.captureScreenshot').params;
+    assert.equal(big.captureBeyondViewport, true);
+    assert.equal(big.clip.x, 524);  // mesuré dans la géométrie de la capture, élément du Shadow DOM retrouvé
+    assert.equal(props['scrollbar-width'], undefined);  // barre remise
+    assert.deepEqual(props['--site-theme'], ['dark', '']);  // changement de la page gardé
+    assert.deepEqual(props.color, ['red', '']);
+    // Remise en attente (boîte de dialogue fermée, nouvel essai avant la minuterie) : faite avant de noter l'état,
+    // jamais « none » pris pour l'origine (relevé par Codex le 24/10).
+    props['scrollbar-width'] = ['none', ''];
+    let pendingDone = false;
+    vm.runInContext('globalThis', [...beyond.worlds.values()][0].context).__nexusScrollbarRestore = () => { delete props['scrollbar-width']; pendingDone = true; return true; };
+    assert.equal((await beyond.run('screenshot', {tabId: 1, selector: '#tall'})).error, undefined);
+    assert.equal(pendingDone, true);
+    assert.equal(props['scrollbar-width'], undefined);
     // Chrome zoomé à 90 % (vu chez Julien le 18/10) : zone en pixels non zoomés, sinon image blanche.
     const zoomed = harness({document: {querySelectorAll: (sel) => sel === '#card' ? [el] : []}}, {
         debuggerSendCommand: (target, method) => method === 'Page.getLayoutMetrics' ? {cssVisualViewport: {pageX: 30, pageY: 1500, zoom: 0.9}} : undefined

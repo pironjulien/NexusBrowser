@@ -26,18 +26,20 @@ from typing import Annotated, Any, Literal
 # Aucun __pycache__ à côté des sources (OneDrive), quel que soit le lanceur.
 sys.dont_write_bytecode = True
 
-from mcp.server.mcpserver import MCPServer  # noqa: E402
-from mcp.types import ToolAnnotations  # noqa: E402
+from mcp.server.mcpserver import Image, MCPServer  # noqa: E402
+from mcp.types import CallToolResult, TextContent, ToolAnnotations  # noqa: E402
+from PIL import Image as PILImage  # noqa: E402
 from pydantic import Field  # noqa: E402
 
 try:
-    from . import bridge_client, emergency_stop, garde_fous, outward_gate, webmcp
+    from . import bridge_client, emergency_stop, garde_fous, outward_gate, vision_image, webmcp
     from .bridge_client import call_bridge, is_read_only_action, set_identity, start_heartbeat
 except ImportError:
     import bridge_client
     import emergency_stop
     import garde_fous
     import outward_gate
+    import vision_image
     import webmcp
     from bridge_client import call_bridge, is_read_only_action, set_identity, start_heartbeat
 
@@ -313,6 +315,13 @@ def _call_bridge(
         if params is not None and "tab_id" in params and not _valid_tab(params["tab_id"]):
             raise ValueError(NO_TAB_MESSAGE if params["tab_id"] is None else f"Invalid tab_id: {params['tab_id']!r}")
         data = call_bridge(action, params, timeout)
+        if action in CAPTURE_KEYS and isinstance(data, dict) and data.get("dialogOpened"):
+            # Capture interrompue par une boîte ouverte par la page (jamais acceptée ici) : dit clairement, pas une
+            # KeyError sur l'image absente.
+            error = str(data.get("message") or "A dialog interrupted the page.")
+            return json.dumps(
+                {"status": "error", "error": error, "dialogOpened": True, "data": data}, ensure_ascii=False
+            )
         output = (params or {}).get("output")
         if output and action in CAPTURE_KEYS and isinstance(data, dict):
             key = CAPTURE_KEYS[action]
@@ -341,6 +350,60 @@ def _call_bridge(
         return json.dumps(payload, ensure_ascii=False, indent=2)
     except (OSError, RuntimeError, ValueError, KeyError, IndexError) as error:
         return json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False)
+
+
+def _positive(value: Any) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 else None
+
+
+def _compat(text: str, *blocks: Any) -> CallToolResult:
+    """Réponse des deux outils de capture, quelle qu'elle soit (fichier, image jointe, refus, erreur) : texte puis
+    blocs, et structured_content reprenant le texte. Une session ouverte avant la 2.21 garde en cache l'ancien
+    schéma de sortie ({"result": texte}) et rejetterait sinon toute réponse de ces outils."""
+    return CallToolResult(content=[TextContent(type="text", text=text), *blocks], structured_content={"result": text})
+
+
+def _inline_capture(action: str, params: dict) -> CallToolResult:
+    """Capture jointe à la réponse : un vrai bloc image MCP (WebP, réduit selon la règle commune, vision_image), pas
+    un texte base64. Le texte dit comment relire une position sur l'image en pixels CSS de la page :
+    css = origine + pixel_image × css_per_image_px (origine : coin de la zone capturée, ou de la vue)."""
+    key = CAPTURE_KEYS[action]
+    try:
+        if params.get("tab_id") is not None and not _valid_tab(params["tab_id"]):
+            raise ValueError(f"Invalid tab_id: {params['tab_id']!r}")
+        data = call_bridge(action, params, 20.0)
+        if isinstance(data, dict) and data.get("dialogOpened"):  # boîte ouverte par la page : jamais acceptée ici
+            error = str(data.get("message") or "A dialog interrupted the page.")
+            return _compat(json.dumps({"status": "error", "error": error, "dialogOpened": True, "data": data}))
+        if not isinstance(data, dict) or not isinstance(data.get(key), str):
+            raise RuntimeError(f"Unexpected capture answer: {json.dumps(data, ensure_ascii=False)[:300]}")
+        encoded = data.pop(key).split(",", 1)[-1]
+        try:
+            webp, image = vision_image.for_model(base64.b64decode(encoded, validate=True))
+        except PILImage.DecompressionBombError as error:
+            raise ValueError(f"Capture too large to attach: {error}") from error
+        clip = data.get("clip") if isinstance(data.get("clip"), dict) else None
+        ratio, zoom = _positive(data.get("devicePixelRatio")), _positive(data.get("zoom")) or 1.0
+        # Pixels CSS par pixel d'origine, puis divisés par le facteur de réduction (le même sur les deux axes : la
+        # position relue tombe à moins d'un pixel d'image près sur X comme sur Y).
+        # Un pixel de capture vaut 1 / devicePixelRatio pixel CSS (zoom de la page compris), pour la vue comme pour
+        # une zone : jamais déduit de la largeur arrondie d'une zone étroite (2 px CSS -> 3 px de capture faussait Y
+        # de 1000 px, relevé par Codex le 24/10). Sans devicePixelRatio (ancienne extension) : largeur de la zone.
+        css_per_source_px = 1 / ratio if ratio else None
+        if clip and _positive(clip.get("width")):
+            # clip : pixels CSS × zoom de la page (pageClip) ; origine ramenée en pixels CSS de la page.
+            css_per_source_px = css_per_source_px or float(clip["width"]) / zoom / image["source_width"]
+            image["css_origin"] = {"x": round(clip.get("x", 0) / zoom, 3), "y": round(clip.get("y", 0) / zoom, 3)}
+        elif css_per_source_px:
+            image["css_origin"] = {"x": 0, "y": 0}  # coin de la vue
+        if css_per_source_px:
+            image["css_per_image_px"] = round(css_per_source_px / image["scale"], 6)
+        data.pop("mimeType", None)
+        data["image"] = image
+    except (OSError, RuntimeError, ValueError, KeyError, IndexError) as error:
+        return _compat(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False))
+    text = json.dumps({"status": "success", "data": data}, ensure_ascii=False, indent=2)
+    return _compat(text, Image(data=webp, format="webp").to_image_content())
 
 
 def _page_text(tab_id: Any) -> Callable[[Any], str]:
@@ -1010,18 +1073,22 @@ def browser_upload(files: list[str], selector: str | None = None, *, tab_id: Tab
     return _call_bridge("upload", {"files": files, "selector": selector, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Marked screenshot"))
-def browser_vision_inspect(tab_id: TabId, output_path: str | None = None, inline: bool = False) -> str:
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Marked screenshot"), structured_output=False)
+def browser_vision_inspect(tab_id: TabId, output_path: str | None = None, inline: bool = False) -> Any:
     """Places numbered Set-of-Mark (SoM) badges on interactive elements and captures the view for visual analysis;
     the numbers are then used with browser_click(mark=N).
 
     Returns the list of elements with box_2d [ymin, xmin, ymax, xmax] on a [0-1000] scale.
-    The capture is written by default to ~/.nexus/nexus-browser/screenshots/ (path returned in output_path);
-    inline=True returns it as base64 in the response (avoid).
+    The capture is written by default to ~/.nexus/nexus-browser/screenshots/ (full-resolution PNG, path returned in
+    output_path). inline=True attaches it to the response as an image instead: WebP, long side at most 1568 px and
+    1.15 megapixels, at most 500 KB; data.image gives its size and css_per_image_px to read a position on it.
     Do not open a raw PNG capture larger than 500 KB with an image reading tool (rejected with HTTP 400).
     """
-    output = None if inline else (output_path or _default_capture_path("vision"))
-    return _call_bridge("vision-inspect", {"output": output, "tab_id": tab_id})
+    if inline:
+        return _inline_capture("vision-inspect", {"tab_id": tab_id})
+    return _compat(
+        _call_bridge("vision-inspect", {"output": output_path or _default_capture_path("vision"), "tab_id": tab_id})
+    )
 
 
 @browser_mcp.tool(annotations=_titled(PAGE_READ, "Check a handoff"))
@@ -1051,7 +1118,7 @@ def browser_logs(tab_id: TabId) -> str:
     return _call_bridge("logs", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Screenshot"))
+@browser_mcp.tool(annotations=_titled(PAGE_READ, "Screenshot"), structured_output=False)
 def browser_screenshot(
     tab_id: TabId,
     output_path: str | None = None,
@@ -1059,7 +1126,7 @@ def browser_screenshot(
     mark: int | None = None,
     inline: bool = False,
     full_page: bool = False,
-) -> str:
+) -> Any:
     """Screenshot of the tab, of the whole page (full_page=True), or of one element cropped to the pixel (PNG), even
     if the page has scrolled.
 
@@ -1071,22 +1138,30 @@ def browser_screenshot(
     - output_path: absolute PNG path (optional, otherwise the local cache)
     - full_page=True: the whole scrollable page, beyond the visible area (height capped at 16384 px; fullPage.truncated
       says so). Ignored when an element is targeted.
-    - inline=True: returns the image as a base64 dataUrl in the response, without writing a file (avoid).
+    - inline=True: attaches the image to the response (no file): WebP, long side at most 1568 px and 1.15
+      megapixels, at most 500 KB, so every model reads it as sent. data.image: width, height, scale and
+      css_per_image_px, css_origin to turn a position on the image into page CSS pixels.
     """
     if inline and full_page and mark is None and not selector:
-        return json.dumps(
-            {"status": "error", "error": "full_page with inline=True refused (image too large): write it to a file"},
-            ensure_ascii=False,
+        return _compat(
+            json.dumps(
+                {
+                    "status": "error",
+                    "error": "full_page with inline=True refused (image too large): write it to a file",
+                },
+                ensure_ascii=False,
+            )
         )
-    output = None if inline else (output_path or _default_capture_path("browser"))
-    params: dict = {"output": output, "tab_id": tab_id}
+    params: dict = {"tab_id": tab_id}
     if mark is not None:
         params["selector"] = f"#{mark}"
     elif selector:
         params["selector"] = selector
     elif full_page:
         params["fullPage"] = True
-    return _call_bridge("screenshot", params)
+    if inline:
+        return _inline_capture("screenshot", params)
+    return _compat(_call_bridge("screenshot", {**params, "output": output_path or _default_capture_path("browser")}))
 
 
 @browser_mcp.tool(annotations=_titled(PAGE_READ, "Save page as PDF"))

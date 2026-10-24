@@ -48,9 +48,11 @@ def test_navigate_back_and_forward(bridge):
 def test_full_page_screenshot_flag_and_element_wins(bridge):
     mcp_server.browser_screenshot(tab_id=3, full_page=True, output_path="C:/x/page.png")
     mcp_server.browser_screenshot(tab_id=3, full_page=True, mark=4, inline=True)
-    refused = json.loads(mcp_server.browser_screenshot(tab_id=3, full_page=True, inline=True))
+    refused = json.loads(
+        mcp_server.browser_screenshot(tab_id=3, full_page=True, inline=True).structured_content["result"]
+    )
     assert bridge["calls"][0] == ("screenshot", {"output": "C:/x/page.png", "tab_id": 3, "fullPage": True})
-    assert bridge["calls"][1] == ("screenshot", {"output": None, "tab_id": 3, "selector": "#4"})
+    assert bridge["calls"][1] == ("screenshot", {"tab_id": 3, "selector": "#4"})  # jointe : aucun fichier
     assert refused["status"] == "error" and "inline" in refused["error"] and len(bridge["calls"]) == 2
 
 

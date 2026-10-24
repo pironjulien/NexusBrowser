@@ -47,6 +47,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 # Aucun __pycache__ dans OneDrive, même lancé sans scripts\runtime.ps1.
 sys.dont_write_bytecode = True
@@ -307,10 +308,16 @@ def get_free_port() -> int:
         return s.getsockname()[1]
 
 
-def parse_response(raw_json_or_dict: str | dict) -> dict:
+def response_text(raw: Any) -> str:
+    """Texte d'une réponse d'outil : chaîne, ou CallToolResult des outils de capture (structured_content)."""
+    structured = getattr(raw, "structured_content", None)
+    return structured["result"] if isinstance(structured, dict) else raw
+
+
+def parse_response(raw_json_or_dict: Any) -> dict:
     if isinstance(raw_json_or_dict, dict):
         return raw_json_or_dict
-    return json.loads(raw_json_or_dict)
+    return json.loads(response_text(raw_json_or_dict))
 
 
 def with_accord(call) -> dict:
@@ -1522,7 +1529,7 @@ def run_full_validation() -> dict[str, bool]:
             time.sleep(0.2)
             if value_of(in_view) is True:
                 break
-        reads["vision"] = mcp.browser_vision_inspect(tab_id=tab_id)
+        reads["vision"] = response_text(mcp.browser_vision_inspect(tab_id=tab_id))
         leaked = {name: [x for x in secrets_live if x in raw] for name, raw in reads.items()}
         check(
             "secrets_valeurs_masquees_en_lecture",
