@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Planned
+- Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the π icon is sent and the
+  listing's 128 px icon is replaced by the π one.
+
 ## [2.24.5] - 2026-10-25
 
 ### Fixed
@@ -21,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Page export no longer picks a references or bibliography block as the main content (Wikipedia articles).
 
 ### Changed
+- Extension icon (16, 32, 48, 128) back to the julienpiron.fr π medallion of 2.16.1 to 2.24.2; the popup already
+  shows it.
 - Tool results are compact JSON (no indentation): fewer tokens for the same content.
 - Gemini CLI extension (`gemini-extension.json`) and one-click install badges for VS Code and VS Code Insiders.
 - The public English skill lives in `skills/nexus-browser/SKILL.md`.
