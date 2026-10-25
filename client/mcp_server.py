@@ -48,6 +48,8 @@ except ImportError:
 
 
 VERSION = (Path(__file__).resolve().parent.parent / "VERSION").read_text(encoding="utf-8").strip()
+# Réponses en JSON compact : l'indentation coûtait 30 à 40 % de tokens à l'agent, sans rien lui apprendre.
+COMPACT = (",", ":")
 
 browser_mcp = MCPServer(
     name="nexus-browser",
@@ -352,7 +354,7 @@ def _call_bridge(
             payload["untrusted_note"] = warning
         if stop_note := emergency_stop.hotkey_note():  # raccourci d'arrêt d'urgence tenu par personne : dit à l'IA
             payload["warning"] = stop_note
-        return json.dumps(payload, ensure_ascii=False, indent=2)
+        return json.dumps(payload, ensure_ascii=False, separators=COMPACT)
     except (OSError, RuntimeError, ValueError, KeyError, IndexError) as error:
         return json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False)
 
@@ -470,13 +472,13 @@ def _inline_capture(action: str, params: dict, target: str = "view", force: bool
                 "Image unchanged since the last one sent for this tab and target: not attached again "
                 "(force=True to resend it)."
             )
-            return _compat(json.dumps({"status": "success", "data": data}, ensure_ascii=False, indent=2))
+            return _compat(json.dumps({"status": "success", "data": data}, ensure_ascii=False, separators=COMPACT))
         _remember(_SENT_PRINTS, print_key, (geometry, current))
         if factor and not clip:  # vue entière jointe : son échelle sert à region (pixels de cette image)
             _remember(_VIEW_SCALES, (_session_key(), tab), {"css_per_image_px": factor, "dpr": ratio or 1.0})
     except (OSError, RuntimeError, ValueError, KeyError, IndexError) as error:
         return _compat(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False))
-    text = json.dumps({"status": "success", "data": data}, ensure_ascii=False, indent=2)
+    text = json.dumps({"status": "success", "data": data}, ensure_ascii=False, separators=COMPACT)
     return _compat(text, Image(data=webp, format="webp").to_image_content())
 
 
@@ -1363,7 +1365,7 @@ def browser_wait_for(
             if (count == 0) == gone:
                 elapsed = round((time.monotonic() - start) * 1000)
                 data = {"count": count, "gone": gone, "elapsed_ms": elapsed}
-                return json.dumps({"status": "success", "data": data}, ensure_ascii=False, indent=2)
+                return json.dumps({"status": "success", "data": data}, ensure_ascii=False, separators=COMPACT)
             if time.monotonic() + WAIT_FOR_POLL_S > deadline:
                 state = "still present" if gone else "not found"
                 raise RuntimeError(f"Timeout after {timeout_ms} ms: {json.dumps(wanted, ensure_ascii=False)} {state}")
@@ -1395,7 +1397,7 @@ def browser_batch(steps: list[dict], tab_id: TabId | None = None) -> Any:
         # de sortie accepte toute réponse du lot. Une image jointe par une étape l'est aussi au lot : sinon son
         # empreinte, retenue comme envoyée, ferait répondre « inchangée » à la capture suivante sans que l'IA l'ait
         # jamais vue (relevés par Codex le 24/10).
-        return _compat(json.dumps(payload, ensure_ascii=False, indent=2), *images)
+        return _compat(json.dumps(payload, ensure_ascii=False, separators=COMPACT), *images)
 
     if not isinstance(steps, list) or not steps:
         return answer({"status": "error", "error": "steps must be a non-empty list"})
@@ -1500,7 +1502,7 @@ def browser_webmcp_tools(tab_id: TabId) -> str:
         payload = _webmcp_envelope(data)
         if warning := _page_text(tab_id)(data):
             payload["untrusted_note"] = warning
-        return json.dumps(payload, ensure_ascii=False, indent=2)
+        return json.dumps(payload, ensure_ascii=False, separators=COMPACT)
     except (OSError, RuntimeError, ValueError, KeyError, IndexError) as error:
         return json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False)
 
@@ -1550,7 +1552,7 @@ def browser_webmcp_call(
     payload = _webmcp_envelope(data)
     if warning := _page_text(tab_id)(data):
         payload["untrusted_note"] = warning
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    return json.dumps(payload, ensure_ascii=False, separators=COMPACT)
 
 
 def _webmcp_envelope(data: dict) -> dict[str, Any]:

@@ -27,17 +27,40 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) { throw 'uv is installed but not found: open a new terminal and run this command again.' }
 }
 
+# Latest release tag from the redirect of github.com/.../releases/latest (Location: .../releases/tag/vX.Y.Z): no API
+# call, so no "API rate limit exceeded" (60 requests an hour per IP without a token: shared IPs, CI, retries). The API
+# stays as a fallback only.
+function Get-LatestTag {
+    $latest = 'https://github.com/pironjulien/NexusBrowser/releases/latest'
+    $location = $null
+    try {
+        $request = [Net.HttpWebRequest]::Create($latest)
+        $request.AllowAutoRedirect = $false
+        $request.Method = 'HEAD'
+        $request.UserAgent = 'NexusBrowser-get'
+        $response = $request.GetResponse()
+        $location = $response.Headers['Location']
+        $response.Close()
+    } catch [Net.WebException] {
+        # .NET (pwsh 7) reports a 3xx without auto-redirect as an exception that still carries the response.
+        if ($_.Exception.Response) { $location = $_.Exception.Response.Headers['Location'] }
+    } catch { }
+    if ($location -match '/releases/tag/([^/?#]+)$') { return $Matches[1] }
+    Write-Warning 'Latest release not found through github.com; asking the GitHub API instead.'
+    (Invoke-RestMethod -UseBasicParsing 'https://api.github.com/repos/pironjulien/NexusBrowser/releases/latest').tag_name
+}
+
 if ($env:NEXUS_BROWSER_SOURCE) {
     $source = (Resolve-Path -LiteralPath $env:NEXUS_BROWSER_SOURCE).Path
     Write-Host "Installing NexusBrowser from $source..."
 } else {
-    $release = Invoke-RestMethod -UseBasicParsing 'https://api.github.com/repos/pironjulien/NexusBrowser/releases/latest'
-    Write-Host "Downloading NexusBrowser $($release.tag_name)..."
+    $tag = Get-LatestTag
+    Write-Host "Downloading NexusBrowser $tag..."
     $download = Join-Path $root 'download'
     if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Recurse -Force }
     New-Item -ItemType Directory -Force $download | Out-Null
     $zip = Join-Path $download 'NexusBrowser.zip'
-    Invoke-WebRequest -UseBasicParsing "https://github.com/pironjulien/NexusBrowser/archive/refs/tags/$($release.tag_name).zip" -OutFile $zip
+    Invoke-WebRequest -UseBasicParsing "https://github.com/pironjulien/NexusBrowser/archive/refs/tags/$tag.zip" -OutFile $zip
     Expand-Archive -LiteralPath $zip -DestinationPath $download
     $source = (Get-ChildItem -LiteralPath $download -Directory | Select-Object -First 1).FullName
 }

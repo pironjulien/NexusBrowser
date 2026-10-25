@@ -90,7 +90,7 @@ function agyExportKit() {
     const UNLIKELY = /(^|[\s_-])(ad|ads|adv|adbox|advert|advertisement|advertising|banner|breadcrumbs?|combx|comment|comments|community|consent|cookie|cookies|disqus|extra|footer|gdpr|legends|header|masthead|menu|modal|navbar|nav|navigation|newsletter|outbrain|overlay|pager|pagination|paywall|popup|promo|promoted|related|remark|replies|rss|share|sharing|shoutbox|sidebar|skyscraper|social|sponsor|sponsored|subscribe|subscription|supplemental|taboola|toolbar|widget)([\s_-]|$)|adsbygoogle|google_ads|doubleclick|gpt-ad|dfp-ad/i;
     const MAYBE = /article|body|column|content|entry|main|post|story|text|prose|markdown/i;
     const POSITIVE = /article|body|content|entry|hentry|h-entry|main|page|post|text|blog|story|prose|markdown/i;
-    const NEGATIVE = /(^|[\s_-])(ad|ads|banner|combx|comment|com-|contact|foot|footer|footnote|masthead|media|meta|outbrain|promo|related|scroll|share|shoutbox|sidebar|skyscraper|sponsor|shopping|tags|tool|widget|nav|menu|cookie|social|newsletter|popup|modal|breadcrumb)([\s_-]|$)/i;
+    const NEGATIVE = /(^|[\s_-])(ad|ads|banner|combx|comment|com-|contact|foot|footer|footnote|masthead|media|meta|outbrain|promo|related|scroll|share|shoutbox|sidebar|skyscraper|sponsor|shopping|tags|tool|widget|nav|menu|cookie|social|newsletter|popup|modal|breadcrumb|references|reflist|citations?|bibliography|endnotes?)([\s_-]|$)/i;
     const BLOCK_TAGS = new Set(["ADDRESS", "ARTICLE", "ASIDE", "BLOCKQUOTE", "DD", "DETAILS", "DIV", "DL", "DT",
         "FIELDSET", "FIGCAPTION", "FIGURE", "FOOTER", "FORM", "H1", "H2", "H3", "H4", "H5", "H6", "HEADER", "HGROUP",
         "HR", "LI", "MAIN", "NAV", "OL", "P", "PRE", "SECTION", "SUMMARY", "TABLE", "TBODY", "TD", "TFOOT", "TH",
@@ -225,7 +225,9 @@ function agyExportKit() {
         };
         for (const p of all) {
             const tag = tagOf(p);
-            if (!["P", "PRE", "TD", "BLOCKQUOTE", "LI", "H2", "H3", "SECTION", "DIV"].includes(tag)) continue;
+            // Comme Readability : pas de <li> notés seuls, sinon une longue liste de références ou de liens (40
+            // citations d'un article Wikipedia) pèse plus que le corps de l'article et devient la racine.
+            if (!["P", "PRE", "TD", "BLOCKQUOTE", "H2", "H3", "SECTION", "DIV"].includes(tag)) continue;
             if (tag === "DIV" || tag === "SECTION") {
                 // Un DIV sans bloc enfant compte comme un paragraphe (sites qui n'emploient pas <p>).
                 if (kids(p).some(k => k.nodeType === 1 && BLOCK_TAGS.has(tagOf(k)))) continue;

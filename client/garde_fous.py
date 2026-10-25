@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Politique unique des garde-fous de bureau : module Python de NexusWindows pour Claude et pour Antigravity (NexusWindows
-pour Codex lit directement `garde-fous.json`), recopié tel quel par NexusAndroid, NexusBrowser et NexusGmail.
+pour Codex lit directement `garde-fous.json`), recopié tel quel par NexusAndroid, NexusBrowser et NexusAGYmail.
 
 Les données vivent dans `garde-fous.json` (même dossier) ; ce module les lit et rend les décisions pures, sans aucun
 appel Windows (testable hors ligne). Accord Claude–Antigravity du 18/10/2026 : blocage dur seulement contre

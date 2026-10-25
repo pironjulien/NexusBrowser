@@ -5,6 +5,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.24.5] - 2026-10-25
+
+### Fixed
+- `get.ps1` reads the latest release from the redirect of `github.com/pironjulien/NexusBrowser/releases/latest`
+  instead of the GitHub API, which refuses unauthenticated callers past 60 requests an hour per IP ("API rate limit
+  exceeded" on shared IPs and CI runners). The API stays as a fallback only.
+- Claude Desktop from the Microsoft Store: the server is declared where it reads its configuration
+  (`%LOCALAPPDATA%\Claude-Data\<package>`) and in `Packages\AnthropicPBC.Claude_*` (the old pattern missed the
+  publisher prefix); a folder it left (`.user-data-left.*`) is skipped.
+- `browser_wait_load` no longer returns on the `about:blank` of a tab still loading its first page.
+- `browser_interactive_map` names fields by their label (`aria-label`, `aria-labelledby`, `<label>`) before their
+  placeholder, title or technical name.
+- Date, time, month, week, color and range inputs can be filled (`browser_fill`, `browser_fill_form`).
+- Page export no longer picks a references or bibliography block as the main content (Wikipedia articles).
+
+### Changed
+- Tool results are compact JSON (no indentation): fewer tokens for the same content.
+- Gemini CLI extension (`gemini-extension.json`) and one-click install badges for VS Code and VS Code Insiders.
+- The public English skill lives in `skills/nexus-browser/SKILL.md`.
+
 ## [2.24.4] - 2026-10-25
 
 ### Added
@@ -15,7 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 - Antigravity gets a `nexus-browser` plugin (`plugins/nexus-browser`: the stdio server and the English skill
-  `skills/public/SKILL.md`, enabled in its `config.json` while it is closed) instead of an entry in its global
+  `skills/nexus-browser/SKILL.md`, enabled in its `config.json` while it is closed) instead of an entry in its global
   `mcp_config.json`; a global entry left by 2.24.0-2.24.3 is removed. A plugin of the user's own is left alone.
 
 ## [2.24.3] - 2026-10-25
@@ -901,7 +921,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.4...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.5...HEAD
+[2.24.5]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.5
 [2.24.4]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.4
 [2.24.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.3
 [2.24.2]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.2

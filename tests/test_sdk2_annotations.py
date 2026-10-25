@@ -18,7 +18,7 @@ from mcp.server.mcpserver import MCPServer  # noqa: E402
 
 from client import mcp_server  # noqa: E402
 
-SKILLS = ("skills/nexus-browser/SKILL.md",)
+PERSONAL_SKILL = REPO_ROOT / "perso" / "nexus-browser" / "SKILL.md"  # dépôt privé seulement
 
 
 def _tools() -> dict:
@@ -135,14 +135,16 @@ def test_eval_is_documented_as_full_page_access():
     assert "FULL ACCESS" in cdp_doc and "scriptToEvaluateOnLoad is refused" in cdp_doc
     instructions = mcp_server.browser_mcp.instructions or ""
     assert "full access to the page" in instructions and "Password" in instructions
-    for skill in SKILLS:
-        text = (REPO_ROOT / skill).read_text(encoding="utf-8")
-        assert "accès complet à la page" in text, skill
-        assert "[masked value]" in text, skill
+    if PERSONAL_SKILL.exists():
+        text = PERSONAL_SKILL.read_text(encoding="utf-8")
+        assert "accès complet à la page" in text and "[masked value]" in text
+    public = (REPO_ROOT / "skills" / "nexus-browser" / "SKILL.md").read_text(encoding="utf-8")
+    assert "full page access with no masking" in public
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "full access to the page" in readme and "[masked value]" in readme
     install = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
-    assert r"skills\nexus-browser\SKILL.md" in install  # copiée dans le plugin d'Antigravity, source unique
+    # Copiée dans le plugin d'Antigravity : la personnelle si elle existe, sinon la publique.
+    assert r"perso\nexus-browser\SKILL.md" in install and r"skills\nexus-browser\SKILL.md" in install
 
 
 def test_masked_values_are_announced_to_the_agent(monkeypatch):

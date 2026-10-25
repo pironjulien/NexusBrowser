@@ -4454,3 +4454,33 @@ test('list_tabs / active_tab : URL et titre complets pour ses onglets, domaine s
     assert.ok(!JSON.stringify(seenByB).includes('SECRET1') && !JSON.stringify(seenByB).includes('Page de A'));
     assert.equal(seenByB.find(t => t.id === 201).url, 'https://b.invalid/private/SECRET2');
 });
+
+test('wait_load : un onglet neuf encore sur about:blank (pendingUrl) n\'est pas pris pour la page chargée', async () => {
+    let gets = 0;
+    const h = harness({document: {readyState: 'complete', querySelectorAll: () => []}}, {tabs: {
+        get: async (id) => (++gets <= 3
+            ? {id, url: 'about:blank', pendingUrl: 'https://example.invalid/', status: 'loading', windowId: 10}
+            : {id, url: 'https://example.invalid/', status: 'complete', windowId: 10})
+    }});
+    const res = await h.run('wait_load', {tabId: 1, timeoutMs: 5000});
+    assert.equal(res.data.readyState, 'complete');
+    assert.ok(gets > 3, 'attendu la fin de la navigation avant de lire readyState');
+});
+
+test('export : une liste de références très citée (Wikipedia) ne passe pas devant le corps de l\'article', async () => {
+    const cite = (n) => h => h('li', {id: `cite_note-${n}`}, `Auteur ${n}, Prénom (2 septembre 2008). "Titre ${n}", Éditeur, Ville, pages 1, 2, 3. Consulté le 28 avril 2021, archive, lien, DOI, ISBN.`);
+    const build = (h) => [
+        h('main', {id: 'content'},
+            h('h1', {}, 'Chromium (web browser)'),
+            h('div', {id: 'mw-content-text', class: 'mw-body-content'},
+                h('div', {class: 'mw-parser-output'},
+                    h('p', {}, 'Chromium is a free and open-source web browser project, primarily developed and maintained by Google.'),
+                    h('p', {}, 'It is a widely used codebase, providing the vast majority of code for Google Chrome and many other browsers.'),
+                    h('p', {}, 'The project began in 2008, when Google released the source code of its browser, together with a new engine.'),
+                    h('h2', {}, 'References'),
+                    h('div', {class: 'reflist'}, h('ol', {class: 'references'}, ...Array.from({length: 40}, (_, i) => cite(i + 1)(h))))))),
+    ];
+    const {h} = exportHarness(build, {url: 'https://en.wikipedia.org/wiki/Chromium_(web_browser)'});
+    const res = await h.run('export_content', {tabId: 1});
+    assert.match(res.data.content, /free and open-source web browser project/);
+});

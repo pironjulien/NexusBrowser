@@ -55,7 +55,8 @@ bridge shared by several agents.
 | `extension/` | Chrome MV3 extension "NexusBrowser": CDP actions, locators, network, dialogs, cross-origin iframes, exports, tab ownership |
 | `native-host/` | Local bridge (`bridge_server.py`: WebSocket 9224 for the extension, HTTP 9225 for the agents) and native host `com.nexus.browser_auth` |
 | `client/` | MCP server `nexus-browser` (`mcp_server.py`), authenticated transport (`bridge_client.py`), CLI (`browser_cli.py`), shared emergency stop |
-| `skills/`, `plugins/` | Skill (single source) and Antigravity plugin; `install.ps1` copies the skill into that plugin only |
+| `skills/`, `plugins/` | Skill and Antigravity plugin; `install.ps1` copies the skill into that plugin only |
+| `gemini-extension.json` | Gemini CLI extension: `gemini extensions install https://github.com/pironjulien/NexusBrowser` (server from PyPI and the skill) |
 
 ## Tools
 
@@ -138,6 +139,12 @@ Once the bridge and the extension are installed (above), any MCP client can also
 ```bash
 claude mcp add nexus-browser --scope user -e NEXUS_BROWSER_AGENT=Claude -- uvx nexus-browser
 ```
+
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_nexus--browser-0098FF?logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=nexus-browser&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22--python%22%2C%223.14%22%2C%22nexus-browser%22%5D%2C%22env%22%3A%7B%22NEXUS_BROWSER_AGENT%22%3A%22Copilot%22%7D%7D)
+[![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install_nexus--browser-24bfa5?logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=nexus-browser&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22--python%22%2C%223.14%22%2C%22nexus-browser%22%5D%2C%22env%22%3A%7B%22NEXUS_BROWSER_AGENT%22%3A%22Copilot%22%7D%7D&quality=insiders)
+
+Gemini CLI: `gemini extensions install https://github.com/pironjulien/NexusBrowser` (the server from PyPI and the
+skill, from `gemini-extension.json`).
 
 Without the bridge, the server still starts and lists its 49 tools, and every call answers with a clear error that
 points to the one-time install.

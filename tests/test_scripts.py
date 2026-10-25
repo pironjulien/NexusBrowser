@@ -3,6 +3,7 @@ nexus-browser chez Antigravity, ancienne extension dans un profil Chrome (lu seu
 résidus de l'ancien pont. Aucun vrai fichier de Julien n'est lu ni écrit."""
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -151,3 +152,38 @@ def test_install_scripts_read_by_windows_powershell_5(script):
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
     assert parsed.stdout.strip() == "0", parsed.stdout + parsed.stderr
+
+
+def test_get_reads_the_latest_tag_without_the_github_api():
+    """get.ps1 lit la dernière version par la redirection de github.com/.../releases/latest (en-tête Location) : l'API
+    GitHub sans jeton plafonne à 60 requêtes par heure et par IP (« API rate limit exceeded » sur une IP partagée ou en
+    CI). L'API ne reste qu'en secours. Éprouvé pour de vrai sous Windows PowerShell 5.1 et PowerShell 7."""
+    text = (REPO_ROOT / "get.ps1").read_text(encoding="ascii")
+    api_lines = [line for line in text.splitlines() if "api.github.com" in line]
+    assert len(api_lines) == 1 and "Invoke-RestMethod" in api_lines[0], api_lines  # le seul appel : le secours
+    assert "$tag = Get-LatestTag" in text and "release.tag_name" not in text
+    command = (
+        "$t = $null; $e = $null; $ast = [System.Management.Automation.Language.Parser]::ParseFile("
+        f"'{REPO_ROOT / 'get.ps1'}', [ref]$t, [ref]$e); "
+        "$f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] "
+        "-and $n.Name -eq 'Get-LatestTag' }, $true)[0]; . ([scriptblock]::Create($f.Extent.Text)); "
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor "
+        "[Net.SecurityProtocolType]::Tls12; Get-LatestTag 3>&1"
+    )
+    for shell in filter(None, (shutil.which("powershell"), PWSH)):
+        run = subprocess.run(
+            [shell, "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if run.returncode and "github.com" not in run.stdout + run.stderr:
+            pytest.skip("github.com injoignable")
+        lines = run.stdout.strip().splitlines()
+        assert run.returncode == 0 and len(lines) == 1, (
+            shell,
+            run.stdout,
+            run.stderr,
+        )  # aucun avertissement de secours
+        assert re.fullmatch(r"v\d+\.\d+\.\d+", lines[0]), (shell, lines)

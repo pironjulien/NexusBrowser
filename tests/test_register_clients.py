@@ -161,6 +161,21 @@ def test_claude_desktop_classic_and_store(home):
         assert json.loads((folder / "claude_desktop_config.json").read_text(encoding="utf-8"))["mcpServers"]
 
 
+def test_claude_desktop_store_claude_data_and_left_folder_skipped(home):
+    local = home / "AppData" / "Local"
+    store = local / "Packages" / "AnthropicPBC.Claude_abc" / "LocalCache" / "Roaming" / "Claude"
+    data = local / "Claude-Data" / "anthropicpbc.claude_abc"
+    left = local / "Claude-Data" / "anthropicpbc.claude_old"
+    for folder in (store, data, left):
+        folder.mkdir(parents=True)
+    (left / ".user-data-left.2026-10-25").write_text("", encoding="utf-8")
+    results = rc.claude_desktop(home, PY, SERVER, home / "b")
+    assert len(results) == 2 and all(r.startswith("declared") for r in results)
+    for folder in (store, data):
+        assert json.loads((folder / "claude_desktop_config.json").read_text(encoding="utf-8"))["mcpServers"]
+    assert not (left / "claude_desktop_config.json").exists()
+
+
 def test_unreadable_file_left_untouched(home):
     (home / ".codex").mkdir()
     (home / ".codex" / "config.toml").write_text("not = [valid", encoding="utf-8")

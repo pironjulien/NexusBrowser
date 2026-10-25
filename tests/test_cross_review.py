@@ -73,8 +73,12 @@ def test_tool_texts_no_longer_promise_a_current_tab():
         assert "onglet courant" not in (tool.__doc__ or "")
     instructions = mcp_server.browser_mcp.instructions or ""
     assert "browser_new_tab" in instructions and "browser_adopt_tab" in instructions
-    for skill in ("skills/nexus-browser/SKILL.md",):
-        text = (REPO_ROOT / skill).read_text(encoding="utf-8")
+    public = (REPO_ROOT / "skills" / "nexus-browser" / "SKILL.md").read_text(encoding="utf-8")
+    assert "lastAgentTabId" not in public and "One tab per agent session" in public and "browser_adopt_tab" in public
+    assert "Julien" not in public  # compétence publique (extension Gemini CLI, plugin Antigravity) : personne de nommé
+    personal = REPO_ROOT / "perso" / "nexus-browser" / "SKILL.md"  # dépôt privé seulement
+    if personal.exists():
+        text = personal.read_text(encoding="utf-8")
         assert "lastAgentTabId" not in text and "Un onglet par agent" in text and "browser_adopt_tab" in text
         assert "sidepanel" not in text
         # include_values (2.7.1) : seulement décrit avec sa limite aux origines locales de développement.
@@ -250,4 +254,4 @@ def test_chrome_found_in_user_install_and_app_paths(tmp_path, monkeypatch):
 
 def test_versions_bumped_for_changed_tools():
     manifest = json.loads((REPO_ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == bridge_security.VERSION == "2.24.4"
+    assert manifest["version"] == bridge_security.VERSION == "2.24.5"

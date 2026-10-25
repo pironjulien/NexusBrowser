@@ -1,6 +1,6 @@
 [project]
 name = "nexus-browser"
-version = "2.24.4"
+version = "2.24.5"
 description = "Your real Chrome, driven by Claude, Codex and Antigravity in background tabs: the nexus-browser MCP server (needs the NexusBrowser bridge and extension)"
 authors = [{ name = "Julien Piron" }]
 license = "MIT"
@@ -55,6 +55,7 @@ dev = [
     "pyright==1.1.414",
     "pytest>=8.0,<10",
     "ruff>=0.12,<1",
+    "tiktoken==0.12.0",
 ]
 
 [tool.uv]

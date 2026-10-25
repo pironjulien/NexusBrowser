@@ -101,6 +101,10 @@ def test_versions_are_aligned():
     plugin = json.loads((REPO_ROOT / "plugins" / "nexus-browser" / "plugin.json").read_text(encoding="utf-8"))
     version_file = (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
     assert project_version == extension["version"] == plugin["version"] == VERSION == version_file
+    # Extension Gemini CLI : même version, serveur épinglé sur cette version de PyPI.
+    gemini = json.loads((REPO_ROOT / "gemini-extension.json").read_text(encoding="utf-8"))
+    assert gemini["name"] == "nexus-browser" and gemini["version"] == VERSION
+    assert f"nexus-browser=={VERSION}" in gemini["mcpServers"]["nexus-browser"]["args"]
 
 
 def test_no_utf8_bom_in_sources():

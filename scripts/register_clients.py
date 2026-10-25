@@ -138,12 +138,17 @@ def claude_code(home: Path, python: str, server: str, backups: Path) -> str | No
 def claude_desktop(home: Path, python: str, server: str, backups: Path) -> list[str]:
     roaming = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
     local = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
-    # Classic install, then the Store (MSIX) one, whose AppData is redirected into its package.
-    folders = [roaming / "Claude", *sorted((local / "Packages").glob("Claude_*/LocalCache/Roaming/Claude"))]
+    # Classic install; the Store (MSIX) one, whose AppData is redirected into its package (AnthropicPBC.Claude_...);
+    # and the Store one that reads %LOCALAPPDATA%\Claude-Data\<package>. A folder it left (.user-data-left.*) is skipped.
+    folders = [
+        roaming / "Claude",
+        *sorted((local / "Packages").glob("*Claude_*/LocalCache/Roaming/Claude")),
+        *sorted(path for path in (local / "Claude-Data").glob("*") if path.is_dir()),
+    ]
     return [
         set_json_server(folder / "claude_desktop_config.json", entry(python, server, "Claude"), server, backups)
         for folder in folders
-        if folder.is_dir()
+        if folder.is_dir() and not any(folder.glob(".user-data-left.*"))
     ]
 
 
@@ -221,9 +226,7 @@ def antigravity(home: Path, python: str, server: str, backups: Path) -> str | No
         write_atomic(plugin / "plugin.json", json.dumps(manifest, indent=2) + "\n")
         servers = {"mcpServers": {NAME: entry(python, server, "Antigravity")}}
         write_atomic(plugin_config, json.dumps(servers, indent=2, ensure_ascii=False) + "\n")
-        write_atomic(
-            plugin / "skills" / NAME / "SKILL.md", (ROOT / "skills" / "public" / "SKILL.md").read_text("utf-8")
-        )
+        write_atomic(plugin / "skills" / NAME / "SKILL.md", (ROOT / "skills" / NAME / "SKILL.md").read_text("utf-8"))
         remove_json_server(folder / "mcp_config.json", server, backups)  # global entry of an earlier version
         app = folder / "config.json"
         if app.exists() and not antigravity_running():

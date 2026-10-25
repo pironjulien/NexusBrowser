@@ -171,10 +171,13 @@ if ($token -and (Test-Path $agyConfig)) {
         New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
         Copy-Item $file.FullName $target -Force
     }
-    # Competence : source unique skills\nexus-browser (lue aussi par les plugins de Claude et de Codex).
+    # Competence : la version personnelle du poste (perso\nexus-browser, depot prive, lue aussi par les plugins de
+    # Claude et de Codex) si elle existe, sinon la publique (skills\nexus-browser\SKILL.md).
     $pluginSkill = Join-Path $plugin 'skills\nexus-browser'
     New-Item -ItemType Directory -Force $pluginSkill | Out-Null
-    Copy-Item (Join-Path $PSScriptRoot 'skills\nexus-browser\SKILL.md') (Join-Path $pluginSkill 'SKILL.md') -Force
+    $skill = Join-Path $PSScriptRoot 'perso\nexus-browser\SKILL.md'
+    if (-not (Test-Path -LiteralPath $skill)) { $skill = Join-Path $PSScriptRoot 'skills\nexus-browser\SKILL.md' }
+    Copy-Item $skill (Join-Path $pluginSkill 'SKILL.md') -Force
     $pluginMcp = [PSCustomObject]@{ mcpServers = [PSCustomObject]@{ 'nexus-browser' = $entry } }
     [IO.File]::WriteAllText((Join-Path $plugin 'mcp_config.json'), ($pluginMcp | ConvertTo-Json -Depth 100), $utf8)
     # Competence : seulement dans le plugin. Une ancienne copie globale (skills\nexus-browser) la doublait dans

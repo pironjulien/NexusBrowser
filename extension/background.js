@@ -21,7 +21,8 @@ const AGY_FEATURES = [
     "sensitive-field-masking", "cdp-reload-no-script", "ax-value-masking", "capture-screencast",
     "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree",
     "history-navigation-cdp", "full-page-capture", "opener-tabs-webnav",
-    "installer-reload", "tab-list-redaction", "download-ownership", "gmail-counter"
+    "installer-reload", "tab-list-redaction", "download-ownership", "gmail-counter", "wait-load-navigation",
+    "map-field-labels"
 ];
 
 let attachedDebuggers = new Set();
@@ -1426,6 +1427,9 @@ function agyMouseKit(spec, textKit, locatorKit) {
     const INPUT_TYPES = new Set(["hidden", "text", "search", "tel", "url", "email", "password", "date", "month", "week",
         "time", "datetime-local", "number", "range", "color", "checkbox", "radio", "file", "submit", "image", "reset", "button"]);
     const TEXT_TYPES = new Set(["text", "search", "email", "url", "tel", "password", "number"]);
+    // Champs à sélecteur (date, heure, couleur, curseur) : pas de frappe caractère par caractère fiable ; valeur posée
+    // par le setter natif puis input/change, comme Playwright, et relue.
+    const PICKER_TYPES = new Set(["date", "time", "datetime-local", "month", "week", "color", "range"]);
     function inputTypeOf(n) {
         const raw = typeof n.getAttribute === "function" ? n.getAttribute("type") : n.type;
         const t = String(raw || "").trim().toLowerCase();
@@ -1720,7 +1724,8 @@ function agyMouseKit(spec, textKit, locatorKit) {
             return { error: "The mark points to a label or a container, not the field: target the mark of the field itself (browser_interactive_map)." };
         }
         const kind = tagUp(el) === "TEXTAREA" ? "textarea" : (isTextInput(el) ? "input" : (tagUp(el) === "SELECT" ? "select"
-            : (el.isContentEditable ? "contenteditable" : "other")));
+            : (el.isContentEditable ? "contenteditable"
+            : (tagUp(el) === "INPUT" && PICKER_TYPES.has(inputTypeOf(el)) ? "picker" : "other"))));
         const own = viewOf(el);
         const readValue = () => {
             if (kind === "contenteditable") {
@@ -4165,10 +4170,15 @@ async function typeWithDebugger(target, locate, opts) {
             await releaseMouseProbes(root, [prep.probeId]);
             return { error: `${state.disabled ? "Disabled" : "Read-only"} field: nothing typed.` };
         }
+        if (state.kind === "picker" && opts.mode === "trusted") {
+            await releaseMouseProbes(root, [prep.probeId]);
+            return { error: `<input type=${state.type}>: trusted typing is not available for a picker field (date, time, color, range): use the default mode.` };
+        }
         const before = state.value;
-        const expected = opts.replace ? opts.value : before + opts.value;
+        const replace = opts.replace || state.kind === "picker";  // une date ou une heure se remplace, jamais ne s'ajoute
+        const expected = replace ? opts.value : before + opts.value;
         const setter = async (reason) => {
-            const res = await edit("setValue", { value: opts.value, append: !opts.replace });
+            const res = await edit("setValue", { value: opts.value, append: !replace });
             const probe = await readMouseProbe(root, prep.probeId);
             return {
                 data: {
@@ -4181,6 +4191,7 @@ async function typeWithDebugger(target, locate, opts) {
             };
         };
         if (opts.mode === "setter") return await setter("setter mode requested");
+        if (state.kind === "picker") return await setter(`<input type=${state.type}>: picker field, value set as Playwright does`);
 
         // 1. Focus : vrai clic au point vérifié, sinon DOM focus.
         await ensureFocusEmulation(target);
@@ -5711,6 +5722,13 @@ async function waitForLoad(params = {}) {
 
     while (Date.now() - startTime < timeoutMs) {
         try {
+            // Un onglet tout juste ouvert (browser_new_tab) est encore sur about:blank, déjà "complete" : tant que
+            // Chrome navigue (pendingUrl, status "loading"), ce n'est pas le document attendu.
+            const tab = await chrome.tabs.get(tabId);
+            if (tab?.pendingUrl || tab?.status === "loading") {
+                await sleepMs(100);
+                continue;
+            }
             const stateRes = await evaluateIsolated({
                 tabId,
                 code: `document.readyState`
@@ -6071,8 +6089,15 @@ async function getInteractiveMap(params = {}) {
             // Éditeur riche (contenteditable, role=textbox) : son contenu est une saisie (peut-être sensible), jamais un libellé.
             const editorHost = !!el.isContentEditable || (role === "textbox" && tag !== "input" && tag !== "textarea");
             const ariaLabel = el.getAttribute ? el.getAttribute("aria-label") : "";
-            const textRaw = editorHost ? (ariaLabel || el.title || "")
-                : (el.innerText || fieldValue || el.placeholder || ariaLabel || el.title || el.name || "");
+            // Libellé visible d'un champ (<label for>, <label> englobant, aria-labelledby) : sans lui, trois boutons
+            // radio "size" ou quatre cases "topping" sont indiscernables pour l'agent. Jamais la valeur saisie.
+            const labelledBy = el.getAttribute ? String(el.getAttribute("aria-labelledby") || "").split(/\\s+/)
+                .map(id => (id && document.getElementById(id)?.textContent) || "").join(" ").trim() : "";
+            const fieldLabel = el.labels && el.labels.length
+                ? Array.from(el.labels).map(l => l.innerText || l.textContent || "").join(" ").trim() : "";
+            const textRaw = editorHost ? (ariaLabel || labelledBy || fieldLabel || el.title || "")
+                : (el.innerText || fieldValue || ariaLabel || labelledBy || fieldLabel || el.placeholder || el.title
+                    || el.name || "");
             const label = String(textRaw).trim().slice(0, 60);
 
             let selectorHint = tag;
