@@ -37,7 +37,9 @@ try {
     . (Join-Path $PSScriptRoot 'runtime.ps1')
     Write-Log "Update started from $app."
     if (Test-Path -LiteralPath $pythonExe) {
-        & $pythonExe -B (Join-Path $PSScriptRoot 'refresh_extension.py') --check-only | Out-Null
+        $ErrorActionPreference = 'Continue'
+        & $pythonExe -B (Join-Path $PSScriptRoot 'refresh_extension.py') --check-only 2>&1 | Out-Null
+        $ErrorActionPreference = 'Stop'
         if ($LASTEXITCODE -eq 3) {
             Set-Status 'failed' 'Update deferred: an agent is working in Chrome. Try again later; the current version is kept.'
             Write-Log 'Deferred: agent tabs in use.'
@@ -48,8 +50,13 @@ try {
     $get = Join-Path $env:TEMP "nexus-browser-get-$PID.ps1"
     Copy-Item -LiteralPath (Join-Path $app 'get.ps1') -Destination $get -Force
     $env:NEXUS_PACK = '1'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $get *>> $log
+    # Sorties de l'installeur (avertissements de uv sur stderr compris) gardees dans le journal en UTF-8 : sous
+    # Windows PowerShell 5.1, une redirection de stderr avec 'Stop' ferait de chaque avertissement une erreur fatale.
+    $ErrorActionPreference = 'Continue'
+    $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $get 2>&1 | ForEach-Object { "$_" }
     $code = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    [IO.File]::AppendAllText($log, (($output | Out-String).TrimEnd()) + [Environment]::NewLine, $utf8)
     Remove-Item -LiteralPath $get -Force -ErrorAction SilentlyContinue
     if ($code) {
         Set-Status 'failed' "Update failed (exit code $code), see $log."

@@ -153,7 +153,10 @@ def test_self_update_script_writes_its_state(tmp_path, status_dir, get_exit, exp
     (app / "scripts").mkdir(parents=True)
     for name in ("self-update.ps1", "runtime.ps1"):
         shutil.copy(REPO_ROOT / "scripts" / name, app / "scripts" / name)
-    (app / "get.ps1").write_text(f"exit {get_exit}\n", encoding="ascii")
+    # Avertissement sur stderr, comme uv pendant l'installation : jamais une erreur fatale de la mise à jour.
+    (app / "get.ps1").write_text(
+        f"[Console]::Error.WriteLine('warning: entry points')\nexit {get_exit}\n", encoding="ascii"
+    )
     (app / "VERSION").write_text("9.9.9\n", encoding="ascii")
     profile = tmp_path / "profile"
     profile.mkdir()
@@ -174,4 +177,5 @@ def test_self_update_script_writes_its_state(tmp_path, status_dir, get_exit, exp
         assert run.returncode == 0 and status["version"] == "9.9.9" and status["message"] == "Updated to 9.9.9."
     else:
         assert run.returncode == 1 and status["version"] == "1.0.0" and "exit code 7" in status["message"]
-    assert (profile / ".nexus" / "nexus-browser" / "update.log").exists()  # journal dans le profil jetable
+    log = (profile / ".nexus" / "nexus-browser" / "update.log").read_bytes()  # journal dans le profil jetable
+    assert b"warning: entry points" in log  # en UTF-8, pas en UTF-16
