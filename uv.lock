@@ -356,7 +356,7 @@ wheels = [
 
 [[package]]
 name = "nexus-browser"
-version = "2.24.0"
+version = "2.24.1"
 source = { virtual = "." }
 dependencies = [
     { name = "mcp" },

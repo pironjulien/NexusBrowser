@@ -67,8 +67,13 @@ def test_antigravity_config_folder_and_plugin(home):
     assert (
         servers["other"] == {"command": "x"} and servers["nexus-browser"]["env"]["NEXUS_BROWSER_AGENT"] == "Antigravity"
     )
+    # The plugin installed afterwards: our entry would start a second server, it is removed (the other one kept).
     (folder / "plugins" / "nexus-browser").mkdir(parents=True)
-    assert rc.antigravity(home, PY, SERVER, home / "b") == "provided by the nexus-browser plugin"
+    assert rc.antigravity(home, PY, SERVER, home / "b") == rc.REMOVED
+    assert json.loads((folder / "mcp_config.json").read_text(encoding="utf-8"))["mcpServers"] == {
+        "other": {"command": "x"}
+    }
+    assert rc.antigravity(home, PY, SERVER, home / "b") == rc.PLUGIN
 
 
 def test_antigravity_older_folder(home):
@@ -91,8 +96,24 @@ def test_claude_code_plugin_enabled_left_alone(home):
         '{"enabledPlugins": {"nexus-browser@nexus": true}}', encoding="utf-8"
     )
     (home / ".claude.json").write_text("{}", encoding="utf-8")
-    assert rc.claude_code(home, PY, SERVER, home / "b") == "provided by the nexus-browser plugin"
+    assert rc.claude_code(home, PY, SERVER, home / "b") == rc.PLUGIN
     assert (home / ".claude.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_claude_code_plugin_after_the_installer_removes_only_our_entry(home):
+    (home / ".claude.json").write_text("{}", encoding="utf-8")
+    assert rc.claude_code(home, PY, SERVER, home / "b").startswith("declared")
+    (home / ".claude").mkdir()
+    (home / ".claude" / "settings.json").write_text(
+        '{"enabledPlugins": {"nexus-browser@nexus": true}}', encoding="utf-8"
+    )
+    assert rc.claude_code(home, PY, SERVER, home / "b") == rc.REMOVED
+    assert json.loads((home / ".claude.json").read_text(encoding="utf-8"))["mcpServers"] == {}
+    # An entry the user wrote is never removed, even with the plugin.
+    user = {"mcpServers": {"nexus-browser": {"command": "uvx", "args": ["nexus-browser"]}}}
+    (home / ".claude.json").write_text(json.dumps(user), encoding="utf-8")
+    assert rc.claude_code(home, PY, SERVER, home / "b") == rc.PLUGIN
+    assert json.loads((home / ".claude.json").read_text(encoding="utf-8")) == user
 
 
 def test_claude_desktop_classic_and_store(home):

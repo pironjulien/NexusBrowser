@@ -11,6 +11,9 @@ ehthumbs.db
 Desktop.ini
 .DS_Store
 
+# Chrome Web Store package (scripts/store_package.py)
+dist/
+
 # Backups
 *.bak
 *.tmp

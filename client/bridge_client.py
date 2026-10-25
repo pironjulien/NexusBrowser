@@ -394,7 +394,8 @@ def call_bridge(action: str, params: dict[str, Any] | None = None, timeout: floa
         if not (retry and ensure_bridge_running()):
             raise ConnectionError(
                 f"Cannot reach the NexusBrowser bridge at {API_URL}: token missing and bridge startup failed. "
-                "Bridge and extension not installed on this PC yet? Once: install.ps1 "
+                "Bridge and extension not installed on this PC yet? Once, in PowerShell: "
+                "irm https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/get.ps1 | iex "
                 "(https://github.com/pironjulien/NexusBrowser#install)."
             ) from None
         headers = authentication_headers()

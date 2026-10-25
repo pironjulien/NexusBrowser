@@ -5,6 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.24.1] - 2026-10-25
+
+### Added
+- Chrome Web Store submission prepared (`store/`): listing text, single purpose, a justification for each
+  permission (`debugger` first), remote-code and data-usage answers, reviewer test steps, privacy policy
+  (`store/PRIVACY.md`), screenshots and promo tile. `scripts/store_package.py` builds the package (the extension
+  without the manifest's `key`); a test keeps the listing in line with the manifest's permissions, name and summary.
+
+### Fixed
+- One-line install then the Claude Code or Antigravity `nexus-browser` plugin: running the installer again now removes
+  its own earlier entry (the plugin provides the server; two entries meant every tool twice). An entry the user wrote
+  is still never touched.
+- The error shown by every tool before the one-time install now gives the one-line install command.
+
 ## [2.24.0] - 2026-10-25
 
 ### Added
@@ -855,7 +869,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.0...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.1...HEAD
+[2.24.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.1
 [2.24.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.0
 [2.23.5]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.5
 [2.23.4]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.4

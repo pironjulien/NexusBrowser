@@ -61,6 +61,24 @@ def set_json_server(path: Path, value: dict, server: str, backups: Path) -> str:
     return f"declared in {path}"
 
 
+def remove_json_server(path: Path, server: str, backups: Path) -> bool:
+    """A plugin now provides the server: our earlier entry would start a second one (tools twice). Only ours."""
+    if not path.exists() or not path.stat().st_size:
+        return False
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    current = data.get("mcpServers", {}).get(NAME)
+    if current is None or not ours(current, server):
+        return False
+    backup(path, backups)
+    del data["mcpServers"][NAME]
+    write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    return True
+
+
+PLUGIN = "provided by the nexus-browser plugin"
+REMOVED = PLUGIN + " (the installer's own entry removed)"
+
+
 def claude_plugin_enabled(home: Path) -> bool:
     settings = home / ".claude" / "settings.json"
     try:
@@ -71,10 +89,16 @@ def claude_plugin_enabled(home: Path) -> bool:
 
 
 def claude_code(home: Path, python: str, server: str, backups: Path) -> str | None:
-    if claude_plugin_enabled(home):
-        return "provided by the nexus-browser plugin"
     cli = shutil.which("claude")
     config = home / ".claude.json"
+    if claude_plugin_enabled(home):
+        if cli and config.exists():
+            current = json.loads(config.read_text(encoding="utf-8-sig")).get("mcpServers", {}).get(NAME)
+            if current is not None and ours(current, server):
+                subprocess.run([cli, "mcp", "remove", NAME, "--scope", "user"], capture_output=True, check=False)
+                return REMOVED
+            return PLUGIN
+        return REMOVED if remove_json_server(config, server, backups) else PLUGIN
     if cli:
         current = None
         if config.exists():
@@ -173,7 +197,7 @@ def antigravity(home: Path, python: str, server: str, backups: Path) -> str | No
     for folder in (home / ".gemini" / "config", home / ".gemini" / "antigravity"):
         if folder.is_dir():
             if (folder / "plugins" / NAME).is_dir():
-                return "provided by the nexus-browser plugin"
+                return REMOVED if remove_json_server(folder / "mcp_config.json", server, backups) else PLUGIN
             return set_json_server(folder / "mcp_config.json", entry(python, server, "Antigravity"), server, backups)
     return None
 
