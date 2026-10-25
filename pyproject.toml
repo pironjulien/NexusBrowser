@@ -1,11 +1,11 @@
 [project]
 name = "nexus-browser"
-version = "2.23.4"
+version = "2.23.5"
 description = "Your real Chrome, driven by Claude, Codex and Antigravity in background tabs: the nexus-browser MCP server (needs the NexusBrowser bridge and extension)"
 authors = [{ name = "Julien Piron" }]
 license = "MIT"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = ["mcp", "mcp-server", "chrome", "browser-use", "computer-use", "cdp", "ai-agents", "claude", "codex", "antigravity"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -16,7 +16,7 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=2.3.0,<3",
-    "pillow>=11,<14",
+    "pillow>=13,<14",
     "websockets>=13.0,<17",
 ]
 
@@ -65,7 +65,7 @@ link-mode = "copy"
 # Cache hors OneDrive, même quand ruff est lancé sans scripts\runtime.ps1 (éditeur, agent).
 cache-dir = "~/.nexus/nexus-browser/cache/ruff"
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
@@ -78,6 +78,6 @@ addopts = "-p no:cacheprovider"
 
 [tool.pyright]
 include = ["client", "native-host", "tests"]
-pythonVersion = "3.10"
+pythonVersion = "3.11"
 # Modules chargés par chemin (sys.path) : le client et l'hôte natif.
 extraPaths = ["client", "native-host", "."]

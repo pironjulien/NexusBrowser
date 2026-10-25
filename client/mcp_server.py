@@ -21,7 +21,7 @@ import time
 import uuid
 from collections.abc import Callable
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -1851,7 +1851,7 @@ def _journal_line(name: str, arguments: dict, result: Any, failed: bool, started
         journal.ecrire(
             _agent_name(),
             {
-                "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                "ts": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
                 "outil": VERSION,
                 "appel": appel,
                 "app": _TAB_DOMAINS.get((session, tab)),

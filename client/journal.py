@@ -13,7 +13,7 @@ import queue
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -217,7 +217,7 @@ _writer: threading.Thread | None = None
 
 def _write(nom: str, ligne: dict[str, Any]) -> None:
     try:
-        chemin = _racine() / nom / f"{datetime.now(timezone.utc):%Y-%m}.jsonl"
+        chemin = _racine() / nom / f"{datetime.now(UTC):%Y-%m}.jsonl"
         chemin.parent.mkdir(parents=True, exist_ok=True)
         with chemin.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"v": 1, "agent": nom, **ligne}) + "\n")  # échappé : aucune erreur d'encodage

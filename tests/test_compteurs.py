@@ -3,7 +3,7 @@ l'entrée d'un profil décoché (fichier effacé quand il n'en reste aucune), et
 
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "native-host"))
@@ -43,7 +43,7 @@ def test_plusieurs_profils(tmp_path, monkeypatch):
 def test_source_invalide_et_entree_perimee(tmp_path, monkeypatch):
     fichier = tmp_path / "compteurs.json"
     monkeypatch.setattr(bridge_server, "fichier_compteurs", lambda: fichier)
-    vieux = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    vieux = (datetime.now(UTC) - timedelta(days=2)).isoformat()
     fichier.write_text(json.dumps({"sources": {B: {"gmail": 9, "raison": None, "at": vieux}}}), encoding="utf-8")
     bridge_server.ecrire_compteurs({"source": "../../hors liste", "actif": True, "gmail": 1})
     assert set(_lire(tmp_path)) == {"defaut"}  # identifiant refusé, profil supprimé depuis 2 jours retiré

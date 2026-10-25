@@ -28,7 +28,7 @@ import re
 import socket
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -225,7 +225,7 @@ async def ws_handler(websocket):
     # L'en-tête Origin se falsifie : seule la preuve du jeton fait d'une connexion un client actif.
     try:
         client = await authenticate(websocket)
-    except (AuthError, asyncio.TimeoutError) as error:
+    except (TimeoutError, AuthError) as error:
         reason = str(error) if isinstance(error, AuthError) else "poignée de main trop lente"
         LOGGER.warning("WebSocket authentication rejected: %s", reason)
         await websocket.close(code=1008, reason="Authentication failed")
@@ -294,7 +294,7 @@ def ecrire_compteurs(data: dict) -> None:
     source = data.get("source")
     if not (isinstance(source, str) and re.fullmatch(r"[0-9a-f-]{36}", source)):
         source = "defaut"
-    maintenant = datetime.now(timezone.utc)
+    maintenant = datetime.now(UTC)
     try:
         sources = {}
         try:
@@ -447,7 +447,7 @@ async def send_command_to_chrome(action, params=None, timeout=15.0, client=None,
         if not response.get("success", False):
             raise RuntimeError(response.get("error", "Unknown error from Chrome extension"))
         return response.get("data")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise TimeoutError(f"Command '{action}' timed out after {timeout}s.") from None
     finally:
         pending_requests.pop(req_id, None)
@@ -608,7 +608,7 @@ async def handle_http(reader, writer):
             return
 
         await send_json_response(writer, 404, {"success": False, "error": "Not found"})
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await send_json_response(writer, 408, {"success": False, "error": "HTTP request timed out"})
     except asyncio.IncompleteReadError:
         await send_json_response(writer, 400, {"success": False, "error": "Incomplete HTTP body"})

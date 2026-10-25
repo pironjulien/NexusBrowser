@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.23.5] - 2026-10-25
+
+### Security
+- Pillow 13.0.0 at least (`pillow>=13,<14`): the lock still resolved Pillow 12.3.0 for Python 3.10, affected by the
+  advisories fixed in 13.0.0 (heap overflows in JPEG, FlashPix and TIFF decoding, among others).
+
+### Changed
+- Python 3.11 or later (`requires-python = ">=3.11"`): Pillow 13 no longer supports 3.10, which reaches its end of
+  life this month. Ruff and Pyright target 3.11 (`datetime.UTC`, `TimeoutError`).
+
 ## [2.23.4] - 2026-10-25
 
 ### Fixed
@@ -824,7 +834,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.23.4...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.23.5...HEAD
+[2.23.5]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.5
 [2.23.4]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.4
 [2.23.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.3
 [2.23.2]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.2
