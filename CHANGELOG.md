@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.24.3] - 2026-10-25
+
+### Changed
+- Extension icon (16, 32, 48, 128): the NexusBrowser icon of the project page (a violet browser window), readable at
+  16 px, replaces the π medallion. Source: `docs/assets/nexusbrowser-icon.svg`. Chrome Web Store screenshots and promo
+  tile redrawn in the same art direction (Claude, Codex and Antigravity; dark full-frame demo).
+
 ## [2.24.2] - 2026-10-25
 
 ### Added
@@ -881,7 +888,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.2...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.3...HEAD
+[2.24.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.3
 [2.24.2]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.2
 [2.24.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.1
 [2.24.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.0
