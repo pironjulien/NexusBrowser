@@ -1,5 +1,5 @@
 """Scripts d'installation et de contrôle (revue C9 et A1) éprouvés sur des configurations FACTICES : doublon
-nexus-browser chez Antigravity, ancienne extension dans un profil Chrome (lu seulement), empreinte d'installation,
+nexus-browser chez Antigravity, ancienne extension dans un profil Chrome (lu seulement),
 résidus de l'ancien pont. Aucun vrai fichier de Julien n'est lu ni écrit."""
 
 import json

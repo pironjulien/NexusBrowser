@@ -83,3 +83,23 @@ def test_disconnected_bridge_is_unverified(refresh, monkeypatch):
     monkeypatch.setattr(module.bridge_client, "call_bridge", bridge)
     monkeypatch.setattr(sys, "argv", ["refresh_extension", "--check-only"])
     assert module.main() == 2
+
+
+def test_installer_identity_is_the_only_one_the_extension_lets_reload(refresh, monkeypatch):
+    """reload_extension est réservé par l'extension à l'agent « Installer » : le nom pris par ce script doit être
+    exactement celui-là, et accepté par le pont (sinon install.ps1 ne pourrait plus actualiser l'extension)."""
+    module, expected = refresh
+    names = []
+    monkeypatch.setattr(module.bridge_client, "set_identity", names.append)
+    monkeypatch.setattr(
+        module.bridge_client, "call_bridge", lambda action, *a, **k: expected if action == "ping" else []
+    )
+    monkeypatch.setattr(sys, "argv", ["refresh_extension", "--check-only"])
+    assert module.main() == 0
+    source = (ROOT / "extension/background.js").read_text(encoding="utf-8")
+    reserved = re.search(r'const INSTALLER_AGENT = "([^"]+)";', source)
+    assert reserved and names == [reserved.group(1)]
+    sys.path.insert(0, str(ROOT / "native-host"))
+    from bridge_security import check_identity
+
+    assert check_identity(names[0], "installer-0123456789ab") is not None

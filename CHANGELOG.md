@@ -3,6 +3,69 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [2.23.0] - 2026-10-25
+
+### Added
+- Gmail unread counter for the MX Keypad AI Agents pad (off by default, a box in the toolbar popup): when ticked, the
+  extension reads Gmail's official unread feed once a minute in the user's session and the bridge writes only the
+  number to `~/.nexus/nexus-browser/compteurs.json` (deleted when unticked). Tests: `tests/test_compteurs.py`, popup
+  test.
+
+### Changed
+- Workspace reorganisation: the shared guardrail policy, the log and the comparison benchmark moved to their new
+  locations; paths updated accordingly.
+- Outward accord: submitting a form now counts as outward when its button says Submit, Soumettre, Transmettre,
+  Postuler or Valider ma demande (...) and the form carries typed text, an email address, a number or a file, or
+  could not be read (caution). Still free: sign-in (password field, typed by the user alone), search, filter, empty
+  form, a wizard's "Next" / "OK". Rule specific to the browser (`client/outward_gate.py`, the only tool that reads
+  the trigger's form): the shared policy `garde-fous.json` is unchanged. A Typeform support form's "Submit" (email,
+  identifier, free text) went out without an accord.
+- CI: a newer push cancels the running test (Windows minutes count double on private repositories).
+- `install.ps1`: the shared MCP daemon and the Antigravity registration are optional. When the daemon token is
+  missing (another machine, secrets vault not synced yet), it warns and skips them instead of stopping; the bridge,
+  native host and task are still installed. The token is still never created by the installer.
+- README: states what `install.ps1` really registers (Antigravity through its plugin, when the daemon token is
+  present; Claude Code and Codex are configured separately).
+- Skill: version number removed from its title; the emergency stop section describes the current extension (shared
+  shortcut, read-only toolbar popup, working indicator) instead of the removed side panel, STOP button and status
+  pill.
+- Extension and Antigravity plugin descriptions in English.
+- README, Privacy: documents the per-call journal (`%LOCALAPPDATA%\NexusJournal\browser\`) and how to delete it.
+- Skill: `inline`, `region` and `force` of `browser_screenshot` and `browser_vision_inspect`.
+- The installer's extension refresh introduces itself to the bridge as `Installer` instead of borrowing `Codex`.
+- Changelog: subtitles removed from the 2.6.0 to 2.9.0 headings; links to the tagged releases.
+
+### Fixed
+- `browser_fill` refused an `<input>` with an unknown type ("<input> is not an input field"): Typeform writes
+  `type="short_text"`, which the browser treats as a text field (HTML: missing, empty or unknown type = text). The
+  type is now normalised as HTML does in the extension (typing, focus target) and in the accord's read script
+  (`client/trigger_probe.js`), which did not see that field either (Enter in that field escaped the check).
+- Bridge error message: the install link points to the README's `#install` anchor (was `#installation`).
+- README and skill: `readOnlyHint` exempts a WebMCP tool from nothing (true since 2.18); the installation fingerprint
+  removed in 2.19 is no longer mentioned.
+- `install.ps1`: the shared MCP daemon is reloaded once, at the end and after the driven-tabs check, never with
+  `-SkipLaunch` (a warning says the new code waits for its next restart). It used to stop every `mcp_server.py --http`
+  process early, even with `-SkipLaunch`.
+- The warning "emergency stop not guaranteed" (no running agent holds Ctrl+Alt+Shift+Esc) now reaches the AI in tool
+  results (`warning`); it was written but never shown.
+- Live validation types a reserved address (`user@example.invalid`) instead of one on a real domain.
+
+### Security
+- `reload_extension` is reserved to the installer (`Installer` identity of `scripts/refresh_extension.py`) and refused
+  while any agent works in Chrome (running command, or tab held by a live session). Any client holding the token
+  could reload the extension and cut every agent's running commands.
+- `download_erase` only erases a download attributed to one of the caller's tabs by `browser_wait_download`
+  (attribution kept in `chrome.storage.session`). Any client could erase the user's or another agent's downloads.
+- `browser_list_tabs` and `browser_active_tab` give the full title and URL only of the caller's own tabs (opened or
+  adopted). The user's and other agents' tabs show their origin only (`title` null, `redacted: true`), so tokens or
+  identifiers in their URLs no longer leak; a user tab can still be designated by id and domain for
+  `browser_adopt_tab`.
+- `browser_webmcp_call`: a WebMCP tool that presents itself as a submission (Submit, Soumettre, Transmettre,
+  Postuler, Valider ma demande...) and receives entered data needs the user's accord, as a form submitted by a click
+  or a key now does (see Changed). Empty calls, choices and searches stay free.
+
 ## [2.22.0] - 2026-10-24
 
 Rest of the common image rule of the Nexus tools (points 3 to 5; point 2, text first, was already the default here:
@@ -339,40 +402,7 @@ is removed; public tools are unchanged.
 
 ## [2.10.0] - 2026-10-19
 
-### Changed (neutral texts for any client, 2026-10-19)
-- Server instructions sent to every MCP client are now in English and neutral ("the user"), no personal name.
-  Tool descriptions, parameter descriptions and messages returned to the model (server, bridge, extension) say
-  « l'utilisateur » too; they stay in French. Same rules and flow. A test checks that `initialize` and
-  `tools/list` name nobody.
-- `browser_adopt_tab(tab_id, user_asked=True)`: neutral name for the consent flag. `julien_asked`, its former name,
-  still works as an alias; the bridge sends `userAsked` (read by the extension from this version) and `julienAsked`
-  (read by older extensions). CLI: `adopt-tab --user-asked` (`--julien-asked` kept).
-- Side panel greeting is « Bonjour »; a tab nobody drives is labelled « Utilisateur » in the control panel.
-
-### Changed (Codex plugin, 2026-10-19)
-- `install.ps1` no longer writes `[mcp_servers.nexus-browser]` to Codex's `config.toml` nor copies the skill to
-  `~\.codex\skills`: Codex gets both from a personal Codex plugin.
-
-### Fixed (2026-10-19)
-- Native messaging host registered in the real `HKCU` registry (`scripts\registre-reel.ps1`: `reg.exe` run by a
-  one-shot hidden scheduled task). Run from a packaged (MSIX) app such as the Claude desktop app, the write went to the
-  app's private registry and Chrome reported « native messaging host not found »: the extension never connected.
-- `is_chrome_running`: `tasklist` output read as bytes; with `PYTHONUTF8=1` its OEM code page (French « Numéro »)
-  crashed every tool call made while the extension was offline. `icacls` output decoded with the OEM code page too.
-- Antigravity showed the nexus-browser skill twice (global copy + plugin): `install.ps1` keeps it in the plugin only
-  and moves the old global copy to a local backup.
-
-### Changed (Claude Code plugin, 2026-10-19)
-- `install.ps1` no longer registers the server with Claude Code nor copies the skill to `~\.claude\skills`, and never
-  calls a Claude CLI: Claude Code gets both from a Claude Code plugin. Codex and Antigravity are unchanged.
-
-### Changed (YouTube transcript visible in Antigravity, 2026-10-19)
-- `browser_export_youtube_transcript` is renamed `browser_youtube_transcript`: Antigravity publishes each tool as
-  `mcp_nexus-browser_nexus-browser_<tool>` and silently drops any name over 64 characters, so it never saw this one
-  (65). No client used the old name; the bridge action `export_youtube_transcript` is unchanged. A test now checks
-  that every tool name fits once prefixed.
-
-### Added (faster Antigravity panel, 2026-10-18)
+### Added
 - `browser_fill_form(tab_id, fields)`: fills a whole form in ONE call, field by field with the same gestures as the
   single-field tools (`browser_fill`, `browser_select_option`, `browser_check`): every
   field is validated before the first gesture, the emergency stop is checked before each field, it stops at the
@@ -391,12 +421,6 @@ is removed; public tools are unchanged.
   reported as their current state; unknown when a dialog blocks the page).
 - `browser_interactive_map` also numbers rich editors (`contenteditable`, `plaintext-only` included, `role=textbox`), labelled by their
   `aria-label` or title only: their content is input, possibly sensitive, never a label.
-
-### Fixed (Codex cross-review, 2026-10-18)
-- A sensitive field's state masks every representation of its value, not only `value`: `text`, `selectedValue` and
-  `selectedText` too (a card-expiry `<select>` or a password `contenteditable` leaked them through `select_option`).
-
-### Added (shared daemon, 2026-10-19)
 - Shared daemon mode: `client/mcp_server.py --http [port]` serves MCP Streamable HTTP on 127.0.0.1 (port 16182), one
   process for every Claude, Codex and Antigravity session instead of one per session. Bearer token required
   (`NEXUS_MCP_TOKEN` or `NEXUS_MCP_TOKEN_FILE`); the agent comes from the URL (`?agent=codex`, refused otherwise);
@@ -405,18 +429,6 @@ is removed; public tools are unchanged.
   registers the three clients by URL. A session idle for 161.8 s (no request, no open stream) is closed, so a client
   that left without a DELETE frees its tabs in ~3 min instead of 30; a new session beats (and reclaims) within a
   second (review by Antigravity).
-
-### Changed
-- `browser_new_tab(group)` and `browser_group_tabs(title)` default to the current session's agent name
-  (`group=""`: no group).
-
-### Fixed
-- Side panel shortcut is now Alt+Shift+Y: Chrome took Alt+Shift+N for split view ("Select a tab") and silently
-  dropped the extension's key. The shortcut handler also opens the panel at once with the tab Chrome gives it:
-  waiting for a tab query first lost the keyboard gesture `sidePanel.open` requires, so the panel never opened.
-  An existing install keeps its old setting: set the key in chrome://extensions/shortcuts.
-
-### Added
 - Antigravity side panel: Julien types a request in Chrome's side panel and Antigravity does the real work on the
   tab (read, click, fill forms) with its nexus-browser tools, then its answer shows up in the panel. Path agreed by
   Claude and Antigravity (blind debate "panneau-agy-chrome", 2026-10-18): panel -> service worker -> signed bridge
@@ -428,8 +440,49 @@ is removed; public tools are unchanged.
 - Panel look inspired by Google's assistants (greeting, suggestion chips, pill composer, light/dark), own palette and
   no brand. The control station stays (tab "Contrôle": piloted tabs, release a tab, bridge state) and STOP is always
   visible in the header.
+- PyPI package `nexus-browser` (the MCP server, command `nexus-browser`): the wheel mirrors `client/` and
+  `native-host/` unchanged under `nexus_browser/` (hatchling force-include); `install.ps1` and the three agents keep
+  running from the repository (`[tool.uv] package = false`). Published by Trusted Publishing
+  (`.github/workflows/publish.yml`), checked from the built wheel (initialize, 47 tools).
+- README: animated demo recorded from the real tool; install from PyPI.
+- `SECURITY.md`: private vulnerability reporting.
 
-### Fixed (Codex cross-review of the Antigravity panel, 2026-10-18: three passes, each "Accord : non", then fixed)
+### Changed
+- Server instructions sent to every MCP client are now in English and neutral ("the user"), no personal name.
+  Tool descriptions, parameter descriptions and messages returned to the model (server, bridge, extension) say
+  « l'utilisateur » too; they stay in French. Same rules and flow. A test checks that `initialize` and
+  `tools/list` name nobody.
+- `browser_adopt_tab(tab_id, user_asked=True)`: neutral name for the consent flag. `julien_asked`, its former name,
+  still works as an alias; the bridge sends `userAsked` (read by the extension from this version) and `julienAsked`
+  (read by older extensions). CLI: `adopt-tab --user-asked` (`--julien-asked` kept).
+- Side panel greeting is « Bonjour »; a tab nobody drives is labelled « Utilisateur » in the control panel.
+- `install.ps1` no longer writes `[mcp_servers.nexus-browser]` to Codex's `config.toml` nor copies the skill to
+  `~\.codex\skills`: Codex gets both from a personal Codex plugin.
+- `install.ps1` no longer registers the server with Claude Code nor copies the skill to `~\.claude\skills`, and never
+  calls a Claude CLI: Claude Code gets both from a Claude Code plugin. Codex and Antigravity are unchanged.
+- `browser_export_youtube_transcript` is renamed `browser_youtube_transcript`: Antigravity publishes each tool as
+  `mcp_nexus-browser_nexus-browser_<tool>` and silently drops any name over 64 characters, so it never saw this one
+  (65). No client used the old name; the bridge action `export_youtube_transcript` is unchanged. A test now checks
+  that every tool name fits once prefixed.
+- `browser_new_tab(group)` and `browser_group_tabs(title)` default to the current session's agent name
+  (`group=""`: no group).
+- Bridge not reachable and no token: the error now points to the one-time install (install.ps1).
+- Repository renamed to `pironjulien/NexusBrowser`; GitHub redirects the old address.
+
+### Fixed
+- Native messaging host registered in the real `HKCU` registry (`scripts\registre-reel.ps1`: `reg.exe` run by a
+  one-shot hidden scheduled task). Run from a packaged (MSIX) app such as the Claude desktop app, the write went to the
+  app's private registry and Chrome reported « native messaging host not found »: the extension never connected.
+- `is_chrome_running`: `tasklist` output read as bytes; with `PYTHONUTF8=1` its OEM code page (French « Numéro »)
+  crashed every tool call made while the extension was offline. `icacls` output decoded with the OEM code page too.
+- Antigravity showed the nexus-browser skill twice (global copy + plugin): `install.ps1` keeps it in the plugin only
+  and moves the old global copy to a local backup.
+- A sensitive field's state masks every representation of its value, not only `value`: `text`, `selectedValue` and
+  `selectedText` too (a card-expiry `<select>` or a password `contenteditable` leaked them through `select_option`).
+- Side panel shortcut is now Alt+Shift+Y: Chrome took Alt+Shift+N for split view ("Select a tab") and silently
+  dropped the extension's key. The shortcut handler also opens the panel at once with the tab Chrome gives it:
+  waiting for a tab query first lost the keyboard gesture `sidePanel.open` requires, so the panel never opened.
+  An existing install keeps its old setting: set the key in chrome://extensions/shortcuts.
 - One request identity end to end: the panel's `localId` is written INSIDE the Nexus Relay message and comes back
   with the reply. The relay files a request once per id, even if it died between filing and indexing (it finds the
   message again by that id), so the extension resends an unconfirmed request every 15 s for as long as needed,
@@ -462,8 +515,6 @@ is removed; public tools are unchanged.
 - Trust model, stated: "julien" names the panel's mailbox, not a proof of human origin; local processes of Julien's
   Windows account are trusted (they can read the bridge token too). "Nothing sent without your yes" is Antigravity's
   instruction, not a technical lock.
-
-### Fixed (Codex cross-review, fourth pass: "Accord : non", 3 + 1 findings, all reproduced and fixed)
 - The page frozen while typing is now a snapshot: a tab update no longer rewrites the expected address behind
   Julien's back (it did, so the worker accepted page B for a request typed on page A). The panel shows "(figé, page
   changée depuis)"; only a click on the tab chip retargets. Tested with the real panel script driving the real worker.
@@ -476,8 +527,6 @@ is removed; public tools are unchanged.
 - Two Chrome profiles linked: the request is now "retenue" (held), never "non transmise": a resend may follow a
   filing made before the second profile appeared. The panel keeps the reservation and resends the same id, which the
   relay resolves to the earlier filing once only one profile is left.
-
-### Fixed (Codex cross-review, fifth pass: "Accord : non", 1 + 1 findings, reproduced and fixed)
 - A navigation by Julien DURING a panel adoption is no longer lost: each tab keeps a navigation generation, bumped
   before any wait even when no marked owner exists yet; the adoption reads it at the end and hands the tab back. A
   panel adoption writes ownership once, already marked (no second write that could undo a hand-back), and a late
@@ -485,36 +534,14 @@ is removed; public tools are unchanged.
   the final consent read; event during the reclaim save) are tests now.
 - Nexus Relay missing or impossible to launch is "retenue" too, never "non transmise": it says nothing about an
   earlier filing of the same request, so the panel keeps the reservation and resends the same id.
-
-### Fixed (Codex cross-review, sixth pass: "Accord : non", 1 finding, reproduced and fixed)
 - A panel adoption compares against the ownership object IT wrote (returned by `rememberTabOwner` before any wait),
   never the one found in the map after the save: if Julien handed the tab back and another agent adopted it in the
   meantime, the old adoption now refuses without restoring, releasing or overwriting the newer owner.
-
-### Fixed (Codex cross-review, seventh pass: "Accord : non", 1 finding, reproduced and fixed)
 - Handing a tab back checks ownership again AFTER detaching the debugger, right before removing it: a late hand-back
   (two hand-backs of the same navigation, another agent adopting the tab in between) leaves the newer ownership
   intact. The control station's "Rendre l'onglet" still hands back whoever owns the tab when it is clicked.
 
-### Added
-- PyPI package `nexus-browser` (the MCP server, command `nexus-browser`): the wheel mirrors `client/` and
-  `native-host/` unchanged under `nexus_browser/` (hatchling force-include); `install.ps1` and the three agents keep
-  running from the repository (`[tool.uv] package = false`). Published by Trusted Publishing
-  (`.github/workflows/publish.yml`), checked from the built wheel (initialize, 47 tools).
-- README: animated demo recorded from the real tool; install from PyPI.
-
-### Changed
-- Bridge not reachable and no token: the error now points to the one-time install (install.ps1).
-
-### Added
-
-- `SECURITY.md`: private vulnerability reporting.
-
-### Changed
-
-- Repository renamed to `pironjulien/NexusBrowser`; GitHub redirects the old address.
-
-## [2.9.0] - 2026-10-18 — Secrets masked in images and console logs
+## [2.9.0] - 2026-10-18
 
 Re-run `install.ps1`, then RELOAD the extension (capabilities `capture-field-masking` and `console-masking`
 advertised by ping).
@@ -556,7 +583,7 @@ advertised by ping).
   `antigravity-chrome-sidepanel`, then `antigravity-browser-use`; GitHub redirects the old URLs). README rewritten in
   English for public use.
 
-## [2.8.1] - 2026-10-18 — Screenshots of background tabs no longer freeze
+## [2.8.1] - 2026-10-18
 
 Re-run `install.ps1`, then RELOAD the extension (capability `capture-screencast` advertised by ping).
 
@@ -581,11 +608,15 @@ Re-run `install.ps1`, then RELOAD the extension (capability `capture-screencast`
 - Live validation: the 3 retries of `browser_vision_inspect` (`gels_de_capture`) are gone, a single capture is
   expected to succeed.
 
-## [2.8.0] - 2026-10-18 — October 18 audit: masked passwords, corrected cookie promise, MCP SDK 2
+## [2.8.0] - 2026-10-18
 
 Re-run `install.ps1` (with Antigravity closed), then RELOAD the extension in `chrome://extensions` (capabilities
 `sensitive-field-masking`, `cdp-reload-no-script` and `ax-value-masking` advertised by ping), then open a new
 conversation in each agent.
+
+Known issue: `Page.captureScreenshot` sometimes hangs for 12 to 20 s in a background tab (both `browser_screenshot`
+and `browser_vision_inspect`, measured on October 18, unrelated to this version): the real-world validation retries
+the visual map up to 3 times and counts the hangs. Root cause to be addressed separately (fixed in 2.8.1).
 
 ### Security
 - Plaintext passwords (severe): `browser_content` (default interactive mode), `browser_vision_inspect`,
@@ -624,24 +655,19 @@ conversation in each agent.
   modifies nothing but is still blocked by the emergency stop.
 - Tools are typed exactly (the decorator no longer turned them into `Any`): mistyped test calls fixed.
 
-### Tests
-- Node: content, visual map, search, HTML and accessibility tree contain no sensitive value; typing into a password
+### Added
+- Tests (Node): content, visual map, search, HTML and accessibility tree contain no sensitive value; typing into a password
   field, into a card field rewritten by the page, and through the JavaScript fallback returns no value;
   `Page.reload` with a script refused before reaching Chrome. Mutation checked: without masking, the three masking
   tests fail.
-- Python: SDK 2, complete annotations consistent with the bridge read list, accurate wording about `browser_eval`
+- Tests (Python): SDK 2, complete annotations consistent with the bridge read list, accurate wording about `browser_eval`
   (tool, instructions, both copies of the skill, README).
 - Real-world validation (`--full-live`): password and card never read (content, HTML, visual map, search, Chrome
   accessibility tree), password entry verified and masked, `Page.reload` with a script refused.
 
-### Known issues
-- `Page.captureScreenshot` sometimes hangs for 12 to 20 s in a background tab (both `browser_screenshot` and
-  `browser_vision_inspect`, measured on October 18, unrelated to this version): the real-world validation retries the
-  visual map up to 3 times and counts the hangs. Root cause to be addressed separately.
+## [2.7.1] - 2026-10-17
 
-## [Unpublished] - 2026-10-17 — Antigravity review: regressions fixed
-
-Version 2.7.1. Re-run `install.ps1` (with Antigravity closed), then RELOAD the extension in `chrome://extensions`
+Re-run `install.ps1` (with Antigravity closed), then RELOAD the extension in `chrome://extensions`
 (capabilities `orphan-tabs`, `cdp-page-world`, `local-cookie-values`, `body-masking-allowlist` advertised by ping),
 then open a new conversation in each agent.
 
@@ -665,15 +691,11 @@ then open a new conversation in each agent.
   left alone when the value is a number (OpenAI, Anthropic, Gemini), ambiguous keys masked only when the value looks
   like a secret (known formats: `ya29.`, `ghp_`, `sk-`, JWT... or a long opaque string). Unambiguous secret keys
   (`access_token`, `refresh_token`, `id_token`, `token`, `password`, `client_secret`...) always masked.
-
-## [Unpublished] - 2026-10-17 — Default CLI identity
-
-### Fixed
 - Default CLI identifier `cli` (3 characters) was refused by the bridge (4 minimum): now `cli-local`. Test added.
 
-## [Unpublished] - 2026-10-17 — Claude review: isolation and secrets in the extension
+## [2.7.0] - 2026-10-17
 
-Version 2.7.0. Re-run `install.ps1` (with Antigravity closed), then RELOAD the extension in `chrome://extensions`
+Re-run `install.ps1` (with Antigravity closed), then RELOAD the extension in `chrome://extensions`
 (the real-world validation and `verify.ps1 -Browser` refuse an outdated extension: version and features advertised by
 ping), then open a new conversation in each agent. Tools that check the installation must read the fingerprint
 through `scripts\empreinte.ps1`.
@@ -722,22 +744,24 @@ through `scripts\empreinte.ps1`.
   `verify.ps1` reports a duplicate.
 - Skill also copied for Claude Code (`~\.claude\skills`) and Codex (`~\.codex\skills`).
 - `browser_cli.py`: version read from the code, French help, `--tab-id` required, new commands.
-
-### Removed
-- Panel chat (text box, bridge queue, `browser_sidepanel_requests` / `browser_sidepanel_reply`) and its four
-  buttons; dead `popup.html/js`; SoM display from the content script that was never triggered.
-
-### Migration
-- `install.ps1` removes (log `~\.nexus\nexus-browser\install.log`) the old token `~\.nexusagy\bridge-token` and the
-  files of the old native host; `verify.ps1` checks they are gone and reports the old "Antigravity Browser Bridge"
-  extension if a Chrome profile loads it (preferences read, never modified).
 - No caches in the source tree: ruff `cache-dir` and pytest `-p no:cacheprovider` in `pyproject.toml`,
   `sys.dont_write_bytecode` in the client and bridge modules; `.ruff_cache`, `client\__pycache__` and
   `native-host\__pycache__` deleted.
 
-## [2.6.0] - 2026-10-16 — Neutral repository, shared by the three agents
+### Removed
+- Panel chat (text box, bridge queue, `browser_sidepanel_requests` / `browser_sidepanel_reply`) and its four
+  buttons; dead `popup.html/js`; SoM display from the content script that was never triggered.
+- Migration: `install.ps1` removes (log `~\.nexus\nexus-browser\install.log`) the old token `~\.nexusagy\bridge-token` and the
+  files of the old native host; `verify.ps1` checks they are gone and reports the old "Antigravity Browser Bridge"
+  extension if a Chrome profile loads it (preferences read, never modified).
+
+## [2.6.0] - 2026-10-16
 
 Reload the extension (new folder, new identifier) and re-run `install.ps1` on each machine.
+
+Verified: real-world validation in the user's Chrome: `--mouse` 11/11, `--full-live` 29/29 (`test.ps1 -Full` green four
+times in a row). First three runs right after loading the extension: 27/29, empty network log for the `/api/data`
+request (cause not found, not reproduced since); the failure now prints the log and the click response.
 
 ### Added
 - Standalone repository, extracted from the former Antigravity package: extension, local bridge, native host,
@@ -761,13 +785,26 @@ Reload the extension (new folder, new identifier) and re-run `install.ps1` on ea
   no dependency on the desktop client.
 - Uploads also refused under `~\.nexus` (bridge token, emergency stop).
 
-### Verified
-- Real-world validation in the user's Chrome: `--mouse` 11/11, `--full-live` 29/29 (`test.ps1 -Full` green four
-  times in a row). First three runs right after loading the extension: 27/29, empty network log for the `/api/data`
-  request (cause not found, not reproduced since); the failure now prints the log and the click response.
-
-### Migration
-- `install.ps1` stops and removes the "NexusAGY Browser Bridge" task (same ports 9224/9225) and the native host
+### Removed
+- Migration: `install.ps1` stops and removes the "NexusAGY Browser Bridge" task (same ports 9224/9225) and the native host
   `com.nexusagy.bridge_auth`. The old "Antigravity Browser Bridge" extension must be removed from Chrome.
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
+
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.23.0...HEAD
+[2.23.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.0
+[2.22.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.22.0
+[2.21.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.21.0
+[2.20.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.20.0
+[2.19.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.19.0
+[2.18.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.18.0
+[2.17.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.17.0
+[2.16.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.16.0
+[2.15.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.15.0
+[2.13.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.13.0
+[2.12.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.12.1
+[2.11.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.11.0
+[2.10.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.10.1
+[2.10.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.10.0
+[2.9.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.9.0
+[2.8.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.8.1

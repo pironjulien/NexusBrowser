@@ -120,21 +120,28 @@ if ((Test-Path -LiteralPath $oldHostDirectory -PathType Container) -and -not (Ge
 $server = Join-Path $repositoryRoot 'client\mcp_server.py'
 $args_ = @('-B', $server)
 $port = 16182
-$tokenFile = Join-Path $env:OneDrive 'Documents\NexusSecure\agents\nexus-mcp-token.txt'
 # Jeton commun aux deux PC : créé une seule fois par Sync-NexusPoste (étape « Démons MCP partagés »), jamais ici. Un
 # installeur lancé sur un PC neuf avant que OneDrive ait descendu le coffre en créait un autre, qui cassait l'autre PC.
-if (-not (Test-Path $tokenFile)) { throw "Jeton absent ($tokenFile) : attendre la synchro OneDrive du coffre, puis lancer Sync-NexusPoste.ps1 -Apply." }
-$token = (Get-Content $tokenFile -Raw).Trim()
+# Sans ce jeton (autre poste, coffre pas encore synchronisé) : démon partagé et inscription d'Antigravity sautés avec
+# un avertissement ; le pont, l'hôte natif et la tâche restent installés. ($tokenFile, de runtime.ps1, est le jeton du
+# pont : nom distinct.)
+$mcpTokenFile = if ($env:OneDrive) { Join-Path $env:OneDrive 'Documents\NexusSecure\agents\nexus-mcp-token.txt' }
+$token = $null
+if ($mcpTokenFile -and (Test-Path -LiteralPath $mcpTokenFile)) { $token = (Get-Content -LiteralPath $mcpTokenFile -Raw).Trim() }
 function Get-Url([string]$Agent) { "http://127.0.0.1:$port/mcp?agent=$($Agent.ToLower())" }
-$spec = [ordered]@{ port = $port; python = $pythonExe; args = $args_; env = [ordered]@{ PYTHONUTF8 = '1'; PYTHONDONTWRITEBYTECODE = '1' } }
-$specs = Join-Path $HOME '.nexus\daemons\specs'
-New-Item -ItemType Directory -Force $specs | Out-Null
-[IO.File]::WriteAllText((Join-Path $specs 'nexus-browser.json'), ($spec | ConvertTo-Json -Depth 5), $utf8)
-# Nouveau code : arrêter le démon en place, le superviseur le relance (les clients se reconnectent seuls).
-Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Where-Object { $_.CommandLine -match 'mcp_server\.py"? --http' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-if (-not (Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue)) {
-    Write-Warning 'Superviseur des démons absent : lancer NexusInfra\ops\workstation\Sync-NexusPoste.ps1 -Apply.'
+if ($token) {
+    $spec = [ordered]@{ port = $port; python = $pythonExe; args = $args_; env = [ordered]@{ PYTHONUTF8 = '1'; PYTHONDONTWRITEBYTECODE = '1' } }
+    $specs = Join-Path $HOME '.nexus\daemons\specs'
+    New-Item -ItemType Directory -Force $specs | Out-Null
+    [IO.File]::WriteAllText((Join-Path $specs 'nexus-browser.json'), ($spec | ConvertTo-Json -Depth 5), $utf8)
+    # Nouveau code : le démon en place est rechargé une seule fois, en fin d'installation (sans -SkipLaunch), après le
+    # contrôle des onglets pilotés ; son superviseur le relance et les clients se reconnectent seuls.
+    if (-not (Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue)) {
+        Write-Warning 'Superviseur des démons absent : lancer NexusInfra\ops\workstation\Sync-NexusPoste.ps1 -Apply.'
+    }
+} else {
+    $where = if ($mcpTokenFile) { $mcpTokenFile } else { 'OneDrive non configuré' }
+    Write-Warning "Jeton MCP partagé absent ($where) : démon partagé et inscription d'Antigravity sautés. Poste Nexus : attendre la synchro OneDrive du coffre, lancer Sync-NexusPoste.ps1 -Apply, puis relancer install.ps1."
 }
 
 # Claude Code : serveur MCP et compétence par le plugin nexus-browser du catalogue « nexus » (NexusClaude\plugins,
@@ -148,7 +155,7 @@ if (-not (Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyC
 # NexusAGY fusionne sans retirer ce serveur ni ce plugin.
 $agyRoot = Join-Path $HOME '.gemini\config'
 $agyConfig = Join-Path $agyRoot 'mcp_config.json'
-if (Test-Path $agyConfig) {
+if ($token -and (Test-Path $agyConfig)) {
     $entry = [PSCustomObject]@{ serverUrl = (Get-Url 'Antigravity'); headers = [PSCustomObject]@{ Authorization = "Bearer $token" } }
     $plugin = Join-Path $agyRoot 'plugins\nexus-browser'
     foreach ($file in Get-ChildItem (Join-Path $PSScriptRoot 'plugins\nexus-browser') -File -Recurse) {
@@ -194,7 +201,8 @@ if (Test-Path $agyConfig) {
         Write-Warning 'Antigravity ouvert et plugin nexus-browser pas encore activé : entrée globale gardée (relancer install.ps1 Antigravity fermé).'
     }
     Write-Host 'Antigravity : nexus-browser inscrit (plugin seulement).'
-} else { Write-Warning 'Antigravity absent de ce PC : non inscrit.' }
+} elseif (-not $token) { Write-Warning 'Antigravity : non inscrit (jeton MCP partagé absent).' }
+else { Write-Warning 'Antigravity absent de ce PC : non inscrit.' }
 
 
 if (-not $SkipTests) {
@@ -228,5 +236,7 @@ if (-not $SkipLaunch) {
         if ($replacement.CommandLine -notlike "*$entryPoint --http 16182*") { throw 'Le nouveau listener ne correspond pas au démon Browser attendu.' }
         Write-Host 'Démon MCP Browser rechargé ; Android et Relay conservés.'
     }
+} elseif (Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue) {
+    Write-Warning "-SkipLaunch : démon MCP Browser laissé en place ; le nouveau code sera pris à sa prochaine relance."
 }
 Write-Host 'NexusBrowser installé. Extension vérifiée si Chrome est connecté ; sources prises en compte au prochain lancement sinon.'

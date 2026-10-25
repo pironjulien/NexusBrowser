@@ -1,6 +1,7 @@
 /**
- * Fenêtre de l'icône NexusBrowser : lecture seule. État du pont (relu au service worker) et nombre d'onglets de
- * chaque agent (ses groupes d'onglets). Aucune action sur les pages ni sur les agents n'en part.
+ * Fenêtre de l'icône NexusBrowser : état du pont (relu au service worker) et nombre d'onglets de chaque agent (ses
+ * groupes d'onglets). Aucune action sur les pages ni sur les agents n'en part. Seul réglage : la case du compteur de
+ * mails non lus de Gmail pour le pad MX Keypad AI Agents (facultatif, décoché par défaut).
  */
 const AGENTS = ["Claude", "Codex", "Antigravity"];
 
@@ -47,6 +48,15 @@ async function showAgents() {
     }));
 }
 
+async function showCompteur() {
+    const caseGmail = document.getElementById("compteur-gmail");
+    try {
+        caseGmail.checked = !!(await chrome.storage.local.get("compteurGmail")).compteurGmail;
+    } catch (_) {}
+    caseGmail.addEventListener("change", () => chrome.storage.local.set({ compteurGmail: caseGmail.checked }));
+}
+
 text("version", `v${chrome.runtime.getManifest().version}`);
+showCompteur();
 showBridge();
 showAgents();

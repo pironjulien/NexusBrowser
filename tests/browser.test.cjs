@@ -1531,7 +1531,13 @@ function richDom(build, {frameOrigin = null} = {}) {
         set textContent(v) { this.childNodes = [{nodeType: 3, data: String(v), parentNode: this}]; }
         get innerText() { return this.hiddenStyle ? '' : this.childNodes.map(n => n.nodeType === 3 ? n.data : n.innerText).join(' ').replace(/\s+/g, ' ').trim(); }
         get id() { return this.attrs.id || ''; }
-        get type() { return String(this.attrs.type || (this.tagName === 'INPUT' ? 'text' : '')).toLowerCase(); }
+        // Comme Chrome : le type d'un <input> absent ou inconnu (type="short_text" de Typeform) vaut « text ».
+        get type() {
+            const t = String(this.attrs.type || '').trim().toLowerCase();
+            if (this.tagName !== 'INPUT') return t;
+            return ['hidden', 'text', 'search', 'tel', 'url', 'email', 'password', 'date', 'month', 'week', 'time', 'datetime-local',
+                'number', 'range', 'color', 'checkbox', 'radio', 'file', 'submit', 'image', 'reset', 'button'].includes(t) ? t : 'text';
+        }
         get value() {
             if (this.tagName === 'SELECT') { const o = this.options.find(x => x.selected) || this.options[0]; return o ? o.value : ''; }
             if (this.tagName === 'OPTION') return this.attrs.value !== undefined ? this.attrs.value : this.textContent;
@@ -1937,6 +1943,33 @@ test('fill par libellé puis par placeholder : frappe de confiance', async () =>
     assert.equal(dom.byId('search').value, 'souris');
 });
 
+test("type d'input inconnu (Typeform : type=\"short_text\") : champ texte, saisi par cible ou au focus", async () => {
+    // Défaut du 24/10 : « <input> is not an input field » sur le champ texte d'un formulaire Typeform, alors que le
+    // champ e-mail de la question précédente passait. HTML : un type inconnu ou en majuscules garde l'état texte.
+    const {h, dom} = richHarness((h) => [
+        h('input', {id: 'org', type: 'short_text', 'aria-label': 'Organization ID', placeholder: 'Type your answer here...'}),
+        h('input', {id: 'up', type: ' EMAIL ', 'aria-label': 'Courriel'}),
+        h('input', {id: 'box', type: 'checkbox', 'aria-label': 'Case'})
+    ]);
+    const byLocator = await h.run('fill', {tabId: 1, locator: {placeholder: 'Type your answer here...'}, value: 'org-123'});
+    assert.equal(byLocator.error, undefined);
+    assert.equal(byLocator.data.kind, 'input');
+    assert.equal(byLocator.data.method, 'cdp');
+    assert.equal(byLocator.data.verified, true);
+    assert.equal(dom.byId('org').value, 'org-123');
+    const bySelector = await h.run('fill', {tabId: 1, selector: '#org', value: 'org-456'});
+    assert.equal(bySelector.data.verified, true);
+    // browser_click sur le champ, puis browser_fill sans cible : l'élément actif.
+    await h.run('click', {tabId: 1, selector: '#org'});
+    assert.equal(dom.doc.activeElement, dom.byId('org'));
+    const atFocus = await h.run('fill', {tabId: 1, value: 'org-789'});
+    assert.equal(atFocus.error, undefined);
+    assert.equal(atFocus.data.verified, true);
+    assert.equal(dom.byId('org').value, 'org-789');
+    assert.equal((await h.run('fill', {tabId: 1, selector: '#up', value: 'a@b.c'})).data.verified, true);
+    assert.match((await h.run('fill', {tabId: 1, selector: '#box', value: 'x'})).error, /is not an input field/);
+});
+
 test('check par vrai clic seulement si l\'état diffère, puis relu ; select_option par libellé', async () => {
     const {h, dom} = richHarness(formPage);
     const res = await h.run('check', {tabId: 1, locator: {role: 'checkbox', name: "J'accepte"}});
@@ -2044,6 +2077,18 @@ test("trigger_probe.js (accord des gestes sortants) : lecture sans geste du déc
     wide.byId('a').focus();
     const loose = probeIn(wide)({});
     assert.deepEqual([loose.form, loose.submits, loose.fields], [false, [], []]);
+    // Bloc de type Typeform sans <form> : champ type="short_text" (texte selon HTML) et bouton « Submit » ; le champ
+    // compte comme un champ (Entrée vise « Submit ») et sa valeur part dans le résumé.
+    const typeform = richDom((h) => [h('div', {id: 'block'},
+        h('input', {id: 'org', type: 'short_text', 'aria-label': 'Organization ID'}),
+        h('button', {id: 'submit'}, 'Submit'))]);
+    typeform.byId('org').value = 'org-123';
+    const tf = probeIn(typeform);
+    const submit = tf({selector: '#submit'});
+    assert.deepEqual([submit.label, submit.form, submit.fields], ['Submit', true, [{label: 'Organization ID', type: 'text', value: 'org-123'}]]);
+    typeform.byId('org').focus();
+    const typed = tf({});
+    assert.deepEqual([typed.field, typed.submits], [true, ['Submit']]);
 });
 test("field_state : liste multiple = l'option voulue SEULE sélectionnée ; champ retiré de la page = erreur", async () => {
     const {h, dom} = richHarness((h) => [
@@ -4250,7 +4295,7 @@ test('aucun panneau latéral : ni permission sidePanel, ni page, ni raccourci ; 
     }
 });
 
-test("fenêtre de l'icône : lecture seule (état du pont, groupes des agents), aucun script inline", async () => {
+test("fenêtre de l'icône : lecture seule (état du pont, groupes des agents) sauf la case du compteur Gmail, aucun script inline", async () => {
     const dir = path.join(__dirname, '../extension');
     const html = fs.readFileSync(path.join(dir, 'popup.html'), 'utf8');
     const js = fs.readFileSync(path.join(dir, 'popup.js'), 'utf8');
@@ -4258,18 +4303,26 @@ test("fenêtre de l'icône : lecture seule (état du pont, groupes des agents), 
     assert.ok(!/executeAction|panelStop|innerHTML|fetch\(|WebSocket|debugger|scripting|tabs\.(update|remove|create)/.test(js));
     const sent = [];
     const elements = {};
-    const element = (id) => (elements[id] ||= {id, hidden: false, textContent: '', className: '', children: [],
+    const saved = [];
+    const element = (id) => (elements[id] ||= {id, hidden: false, textContent: '', className: '', children: [], checked: false,
+        listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; },
         replaceChildren(...c) { this.children = c; }, append(...c) { this.children.push(...c); }});
     const ctx = vm.createContext({
         document: {getElementById: element, createElement: () => element(`n${Object.keys(elements).length}`)},
         chrome: {
             runtime: {getManifest: () => ({version: '9.9.9'}), sendMessage: async (m) => { sent.push(m); return {connected: true}; }},
             tabGroups: {query: async () => [{id: 5, title: 'Claude'}, {id: 6, title: 'Perso'}]},
-            tabs: {query: async () => [{groupId: 5}, {groupId: 5}, {groupId: 6}, {groupId: -1}]}
+            tabs: {query: async () => [{groupId: 5}, {groupId: 5}, {groupId: 6}, {groupId: -1}]},
+            storage: {local: {get: async () => ({compteurGmail: true}), set: async (v) => { saved.push(v); }}}
         }
     });
     vm.runInContext(js, ctx);
     await settle();
+    // Seul réglage : la case du compteur Gmail, relue puis enregistrée.
+    assert.equal(elements['compteur-gmail'].checked, true);
+    elements['compteur-gmail'].checked = false;
+    elements['compteur-gmail'].listeners.change();
+    assert.deepEqual(plain(saved), [{compteurGmail: false}]);
     assert.deepEqual(plain(sent), [{target: 'background', getStatus: true}]);
     assert.equal(elements.version.textContent, 'v9.9.9');
     assert.equal(elements.bridge.textContent, 'Pont connecté');
@@ -4298,4 +4351,106 @@ test("logo de travail : dessiné dans l'onglet regardé pendant une commande d'a
     h.evalInContext('clearTimeout(busyHideTimer); busyHideTimer = null; refreshBusyIndicator();');
     await settle();
     assert.equal(drawn().at(-1).args[0], false);
+});
+
+// =============================================================================
+// Correctifs de sécurité du 25/10 : rechargement réservé à l'installeur, téléchargements et liste d'onglets par client
+// =============================================================================
+const INSTALLER = {agent: 'Installer', id: 'installer-0123456789ab'};
+
+test('reload_extension : réservé à l\'installeur, et refusé tant qu\'un agent travaille', async () => {
+    let reloads = 0;
+    const h = harness({}, {autoOwn: false, runtime: {reload() { reloads++; }}});
+    const wait = () => new Promise(resolve => setTimeout(resolve, 150));
+    // Aucun agent, même seul dans Chrome, ne recharge l'extension (il couperait les autres).
+    for (const client of [AGENT_A, AGENT_B, TEST_CLIENT]) {
+        assert.match((await h.run('reload_extension', {}, client)).error, /reserved to the installer/, client.agent);
+    }
+    assert.match((await h.run('reload_extension', {}, null)).error, /without client identity/);
+    // L'installeur, tant qu'un onglet est tenu par une session vivante : refusé, l'agent est nommé.
+    await h.run('heartbeat', {}, AGENT_A);
+    await h.own(5, AGENT_A);
+    assert.match((await h.run('reload_extension', {}, INSTALLER)).error, /Claude is still working/);
+    h.evalInContext('tabOwners.delete(5)');
+    // Commande d'agent en cours (nouvel onglet en train de s'ouvrir) : refusé aussi.
+    h.evalInContext('busyAgents.set("Codex", 1)');
+    assert.match((await h.run('reload_extension', {}, INSTALLER)).error, /Codex is still working/);
+    h.evalInContext('busyAgents.delete("Codex")');
+    await wait();
+    assert.equal(reloads, 0);
+    // Personne au travail : l'installeur recharge.
+    const ok = await h.run('reload_extension', {}, INSTALLER);
+    assert.equal(ok.data.reloading, true);
+    await wait();
+    assert.equal(reloads, 1);
+});
+
+test('reload_extension : un onglet orphelin (session morte) ne bloque pas l\'installeur', async () => {
+    let reloads = 0;
+    const h = harness({}, {autoOwn: false, virtualTime: true, runtime: {reload() { reloads++; }}});
+    await h.own(7, AGENT_B);
+    h.advanceTime(10 * 60000);  // session de B silencieuse depuis 10 min : morte
+    assert.equal((await h.run('reload_extension', {}, INSTALLER)).data.reloading, true);
+});
+
+test('download_erase : seulement un téléchargement attribué à un onglet du client, jamais celui de Julien ni d\'un autre agent', async () => {
+    const now = new Date().toISOString();
+    const item = {id: 7, url: 'http://127.0.0.1:5/download/f.txt', referrer: 'http://127.0.0.1:5/full', filename: 'C:\\Users\\x\\Downloads\\f.txt', startTime: now, state: 'complete', danger: 'safe', totalBytes: 12, bytesReceived: 12};
+    const dl = downloadsMock([[item]]);
+    const h = harness({}, {autoOwn: false, virtualTime: true, downloads: dl.api, tabs: {get: async (id) => ({id, url: 'http://127.0.0.1:5/full', windowId: 10})}});
+    await h.own(1, AGENT_A);
+    // Avant toute attribution : même l'agent dont l'onglet a lancé le téléchargement ne l'efface pas à l'aveugle.
+    assert.match((await h.run('download_erase', {id: 7}, AGENT_A)).error, /not started from one of your tabs/);
+    assert.equal((await h.run('wait_download', {tabId: 1, timeoutMs: 1000}, AGENT_A)).data.path, item.filename);
+    // Autre agent, autre session du même agent, téléchargement de Julien (9) : refusés, rien n'est effacé.
+    assert.match((await h.run('download_erase', {id: 7}, AGENT_B)).error, /not started from one of your tabs/);
+    assert.match((await h.run('download_erase', {id: 7}, {agent: 'Claude', id: 'claude-autre-session'})).error, /not started from one of your tabs/);
+    assert.match((await h.run('download_erase', {id: 9}, AGENT_A)).error, /not started from one of your tabs/);
+    assert.deepEqual(dl.erased, []);
+    // Attribution gardée dans chrome.storage.session (redémarrage du service worker).
+    assert.deepEqual(plain(h.sessionData.nexusBrowserDownloadOwners), {7: {agent: 'Claude', client: 'claude-aaaa1111'}});
+    const restarted = harness({}, {autoOwn: false, downloads: dl.api, sessionStorage: plain(h.sessionData)});
+    assert.equal((await restarted.run('download_erase', {id: 7}, AGENT_A)).data.success, true);
+    assert.deepEqual(dl.erased, [7]);
+    assert.deepEqual(plain(restarted.sessionData.nexusBrowserDownloadOwners), {});
+});
+
+test('list_tabs / active_tab : URL et titre complets pour ses onglets, domaine seul pour Julien et les autres agents', async () => {
+    let next = 200;
+    const tabs = [
+        {id: 1, index: 0, windowId: 10, active: true, title: 'Banque de Julien', url: 'https://banque.invalid/compte?token=SECRET1#frag', favIconUrl: 'https://banque.invalid/f.ico'},
+        {id: 200, index: 1, windowId: 10, active: false, title: 'Page de A', url: 'https://a.invalid/doc/42?key=ok'},
+        {id: 201, index: 2, windowId: 10, active: false, title: 'Page de B', url: 'https://b.invalid/private/SECRET2'},
+        {id: 3, index: 3, windowId: 10, active: false, title: 'Fichier', url: 'file:///C:/Users/user/secret.pdf'}
+    ];
+    const h = harness({}, {autoOwn: false, tabs: {
+        create: async (p) => ({id: next++, url: p.url, active: false, windowId: 10}),
+        query: async (q = {}) => q.active ? tabs.filter(t => t.active) : tabs,
+        get: async (id) => tabs.find(t => t.id === id)
+    }});
+    await h.run('create_tab', {url: 'https://a.invalid', group: false}, AGENT_A);
+    await h.run('create_tab', {url: 'https://b.invalid', group: false}, AGENT_B);
+    const list = (await h.run('list_tabs', {}, AGENT_A)).data;
+    const text = JSON.stringify(list);
+    for (const secret of ['SECRET1', 'SECRET2', 'Banque de Julien', 'Page de B', 'secret.pdf', 'f.ico']) assert.ok(!text.includes(secret), secret);
+    assert.deepEqual(plain(list.map(t => [t.id, t.url, t.title, t.state, !!t.redacted])), [
+        [1, 'https://banque.invalid', null, 'user', true],
+        [200, 'https://a.invalid/doc/42?key=ok', 'Page de A', 'mine', false],
+        [201, 'https://b.invalid', null, 'other', true],
+        [3, 'file:', null, 'user', true]
+    ]);
+    // Le propriétaire reste visible (l'installeur s'en sert pour ne rien recharger pendant le travail d'un agent).
+    assert.deepEqual(plain(list.map(t => t.owner)), [null, 'Claude', 'Codex', null]);
+    // Onglet actif de Julien : domaine seul, jamais l'objet onglet complet.
+    const active = (await h.run('active_tab', {}, AGENT_A)).data;
+    assert.deepEqual(plain([active.id, active.url, active.title, active.redacted]), [1, 'https://banque.invalid', null, true]);
+    assert.equal(active.favIconUrl, undefined);
+    // À la demande de Julien, l'onglet désigné par son tab_id et son domaine reste adoptable ; il devient alors visible
+    // en entier pour l'agent qui l'a adopté, et pour lui seul.
+    assert.equal((await h.run('adopt_tab', {tabId: 1, userAsked: true}, AGENT_A)).data.adopted, true);
+    const adopted = (await h.run('list_tabs', {}, AGENT_A)).data.find(t => t.id === 1);
+    assert.deepEqual(plain([adopted.url, adopted.title, adopted.mine, adopted.adopted]), [tabs[0].url, 'Banque de Julien', true, true]);
+    const seenByB = (await h.run('list_tabs', {}, AGENT_B)).data;
+    assert.ok(!JSON.stringify(seenByB).includes('SECRET1') && !JSON.stringify(seenByB).includes('Page de A'));
+    assert.equal(seenByB.find(t => t.id === 201).url, 'https://b.invalid/private/SECRET2');
 });

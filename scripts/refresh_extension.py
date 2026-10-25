@@ -22,7 +22,7 @@ def main() -> int:
     args = parser.parse_args()
     if not 0 <= args.wait_ready <= 30:
         parser.error("--wait-ready must be between 0 and 30 seconds")
-    bridge_client.set_identity("Codex")
+    bridge_client.set_identity("Installer")  # son propre nom, jamais celui d un agent
     source = (ROOT / "extension/background.js").read_text(encoding="utf-8")
     declared = re.search(r"const AGY_FEATURES = \[(.*?)\];", source, re.S)
     assert declared, "Missing source feature declaration"

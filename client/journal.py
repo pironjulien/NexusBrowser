@@ -1,4 +1,4 @@
-"""Journal commun des outils Nexus (NexusHarness/shared/journal/FORMAT.md), produit « browser » : une ligne par appel
+"""Journal commun des outils Nexus (NexusHarness/NexusShared/journal/FORMAT.md), produit « browser » : une ligne par appel
 d'outil dans %LOCALAPPDATA%\\NexusJournal\\browser\\<agent>\\<AAAA-MM>.jsonl, en plus des journaux du pont. Jamais de
 contenu de page : ni adresse complète (seulement le domaine enregistrable), ni texte lu ou tapé, ni valeur, ni titre,
 ni image. Jamais d'exception vers l'outil : un journal ne bloque pas une action."""

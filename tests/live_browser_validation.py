@@ -467,11 +467,11 @@ def run_live_validation():
         # 11. browser_fill par libellé et par placeholder
         print("\n--- [11/31] Test: browser_fill (libellé, placeholder) ---")
         sfill_res = parse_response(
-            mcp.browser_fill(locator={"label": "Adresse Email"}, value="julien@exemple.fr", tab_id=test_tab_id)
+            mcp.browser_fill(locator={"label": "Adresse Email"}, value="user@example.invalid", tab_id=test_tab_id)
         )
         assert sfill_res.get("status") == "success", f"Fill by label failed: {sfill_res}"
         email_val = mcp.browser_eval("document.getElementById('email').value", tab_id=test_tab_id)
-        assert get_eval_val(email_val) == "julien@exemple.fr"
+        assert get_eval_val(email_val) == "user@example.invalid"
 
         sfill_text = parse_response(
             mcp.browser_fill(

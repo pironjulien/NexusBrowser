@@ -20,7 +20,8 @@ const AGY_FEATURES = [
     "orphan-tabs", "cdp-page-world", "local-cookie-values", "body-masking-allowlist",
     "sensitive-field-masking", "cdp-reload-no-script", "ax-value-masking", "capture-screencast",
     "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree",
-    "history-navigation-cdp", "full-page-capture", "opener-tabs-webnav"
+    "history-navigation-cdp", "full-page-capture", "opener-tabs-webnav",
+    "installer-reload", "tab-list-redaction", "download-ownership"
 ];
 
 let attachedDebuggers = new Set();
@@ -55,12 +56,19 @@ const NETWORK_RECORD_MAX_S = 600;
 const OWNERS_KEY = "nexusBrowserTabOwners";
 const STOP_KEY = "nexusBrowserStopUntil";
 const SEEN_KEY = "nexusBrowserClientSeen";
+const DOWNLOADS_KEY = "nexusBrowserDownloadOwners";
+// Seul client admis à recharger l'extension : l'installeur (scripts/refresh_extension.py, lancé par install.ps1).
+const INSTALLER_AGENT = "Installer";
+const DOWNLOAD_OWNERS_MAX = 200;  // téléchargements attribués gardés en mémoire (les plus anciens oubliés)
 // Silence au-delà duquel une session est morte : 1,618 x 60 s (battement des serveurs MCP : 60 / 1,618 s).
 const SESSION_DEAD_MS = Math.round(1.618 * 60000);
 const SEEN_SAVE_MS = 15000;  // date de vie écrite au plus toutes les 15 s par session (pas une écriture par commande)
 const tabOwners = new Map();  // tabId -> { agent, client, adopted, since }
 const clientSeen = new Map();  // clientKey -> dernier signe de vie (ms) ; 0 : session morte (processus disparu)
 const seenSaved = new Map();  // clientKey -> date de vie déjà écrite dans chrome.storage.session
+// downloadId -> { agent, client } : téléchargement attribué par wait_download à un onglet de ce client. Seul ce client
+// peut en retirer l'entrée (download_erase) ; jamais un téléchargement de Julien ni d'un autre agent.
+const downloadOwners = new Map();
 let stoppedUntil = 0;  // échéance (ms) de l'arrêt d'urgence vu par l'extension
 let stateChain = Promise.resolve();
 
@@ -108,7 +116,7 @@ async function noteClientAlive(client, gone) {
 
 async function loadExtensionState() {
     try {
-        const stored = await chrome.storage.session.get([OWNERS_KEY, STOP_KEY, SEEN_KEY]);
+        const stored = await chrome.storage.session.get([OWNERS_KEY, STOP_KEY, SEEN_KEY, DOWNLOADS_KEY]);
         const owners = stored?.[OWNERS_KEY];
         if (owners && typeof owners === "object") {
             for (const [id, owner] of Object.entries(owners)) {
@@ -123,6 +131,16 @@ async function loadExtensionState() {
         if (seen && typeof seen === "object") {
             for (const [key, at] of Object.entries(seen)) {
                 if (Number.isFinite(at) && !clientSeen.has(key)) { clientSeen.set(key, at); seenSaved.set(key, at); }
+            }
+        }
+        const downloads = stored?.[DOWNLOADS_KEY];
+        if (downloads && typeof downloads === "object") {
+            for (const [id, owner] of Object.entries(downloads)) {
+                const downloadId = Number(id);
+                if (Number.isInteger(downloadId) && owner && typeof owner.agent === "string" && typeof owner.client === "string"
+                    && !downloadOwners.has(downloadId)) {
+                    downloadOwners.set(downloadId, { agent: owner.agent, client: owner.client });
+                }
             }
         }
         // Onglets fermés pendant que le service worker dormait : propriété oubliée.
@@ -150,7 +168,8 @@ function saveExtensionState() {
     const run = stateChain.then(() => chrome.storage.session.set({
         [OWNERS_KEY]: Object.fromEntries([...tabOwners.entries()].map(([id, owner]) => [String(id), owner])),
         [STOP_KEY]: stoppedUntil,
-        [SEEN_KEY]: Object.fromEntries(clientSeen.entries())
+        [SEEN_KEY]: Object.fromEntries(clientSeen.entries()),
+        [DOWNLOADS_KEY]: Object.fromEntries([...downloadOwners.entries()].map(([id, owner]) => [String(id), owner]))
     }));
     stateChain = run.catch(() => {});
     return run;
@@ -173,12 +192,21 @@ async function forgetTabOwner(tabId) {
     return true;
 }
 
+/** Téléchargement attribué au client (wait_download sur un de ses onglets) : lui seul pourra en retirer l'entrée. */
+async function rememberDownloadOwner(downloadId, client) {
+    // Déjà attribué (à ce client ou à un autre) : jamais réattribué.
+    if (!Number.isInteger(downloadId) || !validClient(client) || downloadOwners.has(downloadId)) return;
+    downloadOwners.set(downloadId, { agent: client.agent, client: client.id });
+    while (downloadOwners.size > DOWNLOAD_OWNERS_MAX) downloadOwners.delete(downloadOwners.keys().next().value);
+    await saveExtensionState();
+}
+
 function ownerLabel(owner) {
     return owner ? `${owner.agent}${owner.adopted ? " (adopted)" : ""}` : "User";
 }
 
 // -----------------------------------------------------------------------------
-// Arrêt d'urgence vu par l'extension (posé par le pont ou par le bouton STOP du poste de contrôle) : toute action est
+// Arrêt d'urgence vu par l'extension (posé par le pont : Ctrl+Alt+Maj+Échap ou fichier ~/.nexus/stop) : toute action est
 // refusée jusqu'à l'échéance, et les boucles en cours (frappe touche par touche, glisser, attentes) s'interrompent au
 // prochain pas. Les lectures restent permises, comme au pont.
 // -----------------------------------------------------------------------------
@@ -297,6 +325,31 @@ function bridgeReady() {
     return !!(bridgeLink && bridgeLink.ready) || offscreenReady();
 }
 
+// Compteur pour le pad MX Keypad AI Agents (facultatif, coché dans la fenêtre de l'icône) : le nombre de mails non lus
+// de Gmail, lu une fois par minute dans le flux officiel de Gmail avec la session de ce Chrome, comme une extension
+// « Gmail Checker ». Seul ce nombre part au pont, en local : ni expéditeur, ni objet, ni contenu. Session fermée (Google
+// redirige vers sa connexion) : nombre inconnu (null). Décoché : le pont efface le fichier du compteur.
+const COMPTEUR_GMAIL = "compteurGmail";
+const FLUX_GMAIL = "https://mail.google.com/mail/u/0/feed/atom";
+
+async function envoyerCompteurs() {
+    if (!bridgeLink || !bridgeLink.ready) return;
+    let actif = false;
+    try {
+        actif = !!(await chrome.storage.local.get(COMPTEUR_GMAIL))[COMPTEUR_GMAIL];
+    } catch (_) {}
+    let gmail = null;
+    if (actif) {
+        try {
+            const reponse = await fetch(FLUX_GMAIL, { credentials: "include", cache: "no-store", redirect: "error" });
+            const nombre = reponse.ok ? (await reponse.text()).match(/<fullcount>(\d+)<\/fullcount>/i) : null;
+            if (nombre) gmail = Number(nombre[1]);
+        } catch (_) {}
+    }
+    if (bridgeLink && bridgeLink.ready) bridgeLink.send({ event: "compteurs", actif, gmail, timestamp: Date.now() });
+}
+
+
 function connectBridgeWS() {
     if (typeof WebSocket === "undefined" || typeof globalThis.AgyBridgeLink !== "function") return;
     if (bridgeLink && bridgeLink.alive) return;
@@ -318,9 +371,12 @@ function connectBridgeWS() {
                 reconnectAttempts = 0;
                 console.log("[NexusBrowser] Service worker authentifié auprès du pont " + BRIDGE_WS_URL);
                 link.send({ event: "bridge_connected", timestamp: Date.now() });
+                envoyerCompteurs();
                 if (keepaliveInterval) clearInterval(keepaliveInterval);
+                let tours = 0;
                 keepaliveInterval = setInterval(() => {
                     if (bridgeLink && bridgeLink.ready) bridgeLink.send({ event: "keepalive", timestamp: Date.now() });
+                    if (++tours % 3 === 0) envoyerCompteurs(); // une fois par minute
                 }, 20000);
             },
             onClose: (link) => {
@@ -380,7 +436,7 @@ async function ensureOffscreenDocument() {
     } catch (_) {}
 }
 
-/** Message venu d'une page de l'extension (panneau, offscreen), jamais d'un script de contenu ni d'une page web. */
+/** Message venu d'une page de l'extension (fenêtre de la barre d'outils, offscreen), jamais d'un script de contenu ni d'une page web. */
 function fromExtensionPage(sender) {
     if (!sender || sender.id !== chrome.runtime?.id || sender.tab) return false;
     return !sender.url || String(sender.url).startsWith(`chrome-extension://${chrome.runtime.id}/`);
@@ -397,6 +453,10 @@ if (typeof chrome !== "undefined") {
     if (chrome.runtime?.onInstalled) chrome.runtime.onInstalled.addListener(() => {
         ensureOffscreenDocument();
         setTimeout(connectBridgeWS, 300);
+    });
+    // Coché ou décoché dans la fenêtre de l'icône : le pont l'apprend tout de suite.
+    chrome.storage?.onChanged?.addListener?.((changes, zone) => {
+        if (zone === "local" && changes[COMPTEUR_GMAIL]) envoyerCompteurs();
     });
     if (chrome.alarms?.create) {
         chrome.alarms.create("bridge_keepalive_alarm", { periodInMinutes: 1 });
@@ -642,11 +702,33 @@ function foreignTabMessage(tabId, owner, client) {
         "Each agent acts only in the tabs it opened (browser_new_tab).";
 }
 
+/**
+ * Rechargement de l'extension : il coupe les commandes en cours de TOUS les agents et leur fait perdre leurs onglets.
+ * Réservé à l'installeur (identité « Installer », scripts/refresh_extension.py), et seulement quand aucun agent ne
+ * travaille : aucune commande en cours, aucun onglet tenu par une session vivante. Même un client qui prendrait le nom
+ * de l'installeur ne peut donc rien interrompre.
+ */
+function reloadRefusal(client) {
+    if (client.agent !== INSTALLER_AGENT) {
+        return "reload_extension is reserved to the installer (install.ps1): refused. Reloading the extension would cut " +
+            "every agent's running commands and tabs.";
+    }
+    const working = new Set([...busyAgents.keys()]);
+    for (const owner of tabOwners.values()) if (sessionAlive(owner)) working.add(owner.agent);
+    if (working.size || tabCommandsInFlight.size) {
+        const who = [...working].sort().join(", ") || "an agent";
+        return `reload_extension refused: ${who} is still working in Chrome (driven tabs or running commands). ` +
+            "Run install.ps1 again once the agents have closed their tabs.";
+    }
+    return null;
+}
+
 /** Refus (message) d'une commande, ou null : identité, arrêt d'urgence, propriété de l'onglet visé. */
 function authorizeCommand(action, params, client) {
     if (BRIDGE_ACTIONS.has(action)) return null;
     if (!client) return "Command without client identity (agent and session set by the bridge): refused. Run install.ps1 again (up-to-date bridge).";
     if (stopActive() && !STOP_ALLOWED_ACTIONS.has(action)) return stopMessage();
+    if (action === "reload_extension") return reloadRefusal(client);
     if (TAB_FREE_ACTIONS.has(action)) return null;
     // Toute commande qui vise plusieurs onglets (tabIds), quel que soit son nom : chacun doit être au client. Le contrôle
     // ne dépend plus du nom d'action (l'alias tabs_group le contournait, relevé par Codex le 24/10).
@@ -933,10 +1015,10 @@ async function routeCommand(req, client = null) {
                 return await getNetworkResponse(params);
 
             case "wait_download":
-                return await waitForDownload(params);
+                return await waitForDownload(params, client);
 
             case "download_erase":
-                return await eraseDownload(params);
+                return await eraseDownload(params, client);
 
             case "type_keys":
                 return await typeKeys(params);
@@ -1303,11 +1385,18 @@ function agyMouseKit(spec, textKit, locatorKit) {
     }
     // Champ réellement éditable visé : contrôle d'un <label>, ou unique champ éditable contenu dans l'élément.
     function tagUp(n) { return String((n && n.tagName) || "").toUpperCase(); }
-    const TEXT_TYPES = new Set(["", "text", "search", "email", "url", "tel", "password", "number"]);
+    // État du type d'un <input> selon HTML : valeur absente, vide ou inconnue (type="short_text" de Typeform) = texte.
+    // Lu sur l'attribut puis normalisé (jamais une propriété que la page pourrait masquer).
+    const INPUT_TYPES = new Set(["hidden", "text", "search", "tel", "url", "email", "password", "date", "month", "week",
+        "time", "datetime-local", "number", "range", "color", "checkbox", "radio", "file", "submit", "image", "reset", "button"]);
+    const TEXT_TYPES = new Set(["text", "search", "email", "url", "tel", "password", "number"]);
+    function inputTypeOf(n) {
+        const raw = typeof n.getAttribute === "function" ? n.getAttribute("type") : n.type;
+        const t = String(raw || "").trim().toLowerCase();
+        return INPUT_TYPES.has(t) ? t : "text";
+    }
     function isTextInput(n) {
-        if (tagUp(n) !== "INPUT") return false;
-        const t = typeof n.getAttribute === "function" ? (n.getAttribute("type") || "") : (n.type || "");
-        return TEXT_TYPES.has(String(t).toLowerCase());
+        return tagUp(n) === "INPUT" && TEXT_TYPES.has(inputTypeOf(n));
     }
     function editableOf(n) { return isTextInput(n) || tagUp(n) === "TEXTAREA" || tagUp(n) === "SELECT" || !!(n && n.isContentEditable); }
     function editTargetOf(el) {
@@ -2955,29 +3044,50 @@ function publicOwner(tabId, client) {
     return { owner: ownerLabel(owner), mine, adopted: !!owner.adopted, state };
 }
 
+/**
+ * Domaine seul d'une adresse (https://mail.google.com), jamais son chemin ni ses paramètres : jetons, identifiants de
+ * document ou de session restent dans l'onglet. Adresse sans origine (file:, data:, about:) : son schéma seul.
+ */
+function tabOrigin(url) {
+    if (typeof url !== "string" || !url) return null;
+    try {
+        const parsed = new URL(url);
+        if (parsed.origin && parsed.origin !== "null") return parsed.origin;
+        return parsed.host ? `${parsed.protocol}//${parsed.host}` : parsed.protocol;
+    } catch (_) {
+        return null;
+    }
+}
+
+/**
+ * Onglet tel que le client qui demande a le droit de le voir. Ses onglets (ouverts ou adoptés par lui) : titre et URL
+ * complets. Ceux de Julien et des autres agents (sessions orphelines comprises) : domaine seul, titre masqué
+ * (redacted) ; leur tab_id et leur domaine suffisent pour les désigner (browser_adopt_tab à la demande de Julien).
+ */
+function publicTab(t, client) {
+    const who = publicOwner(t.id, client);
+    const base = {
+        id: t.id,
+        index: t.index,
+        windowId: t.windowId,
+        active: t.active,
+        pinned: t.pinned,
+        groupId: t.groupId !== undefined ? t.groupId : -1
+    };
+    if (who.mine) return { ...base, title: t.title, url: t.url || t.pendingUrl, favIconUrl: t.favIconUrl, ...who };
+    return { ...base, title: null, url: tabOrigin(t.url || t.pendingUrl), redacted: true, ...who };
+}
+
 async function listTabs(params = {}, client = null) {
     const tabs = await chrome.tabs.query({});
-    return {
-        data: tabs.map(t => ({
-            id: t.id,
-            index: t.index,
-            windowId: t.windowId,
-            title: t.title,
-            url: t.url,
-            active: t.active,
-            pinned: t.pinned,
-            groupId: t.groupId !== undefined ? t.groupId : -1,
-            favIconUrl: t.favIconUrl,
-            ...publicOwner(t.id, client)
-        }))
-    };
+    return { data: tabs.map(t => publicTab(t, client)) };
 }
 
 async function getActiveTab(client = null) {
-    // Lecture seule : l'onglet actif de Julien ne devient jamais l'onglet de l'agent par ce biais.
+    // Lecture seule : l'onglet actif de Julien ne devient jamais l'onglet de l'agent par ce biais (domaine seul).
     let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (!tab) [tab] = await chrome.tabs.query({ active: true });
-    return { data: tab ? { ...tab, ...publicOwner(tab.id, client) } : null };
+    return { data: tab ? publicTab(tab, client) : null };
 }
 
 /**
@@ -3336,7 +3446,7 @@ async function ownOrClose(tabId, client) {
 
 /**
  * Onglet de l'utilisateur confié à l'agent qui le demande : refusé par défaut, seulement avec userAsked=true (il l'a
- * demandé explicitement), jamais l'onglet d'un autre agent. Visible dans le poste de contrôle (« adopté »).
+ * demandé explicitement), jamais l'onglet d'un autre agent. Marqué « (adopted) » dans l'état des onglets.
  */
 async function adoptTab(params = {}, client = null) {
     const tabId = await resolveTargetTab(params);
@@ -5340,7 +5450,7 @@ function publicDownload(d) {
  * téléchargements commencés depuis la dernière action de l'agent sur l'onglet (ou since_ms), d'abord ceux dont le
  * référent ou l'URL a l'origine de l'onglet. Jamais d'acceptation d'un fichier jugé dangereux.
  */
-async function waitForDownload(params = {}) {
+async function waitForDownload(params = {}, client = null) {
     if (!chrome.downloads?.search) throw new Error("chrome.downloads API unavailable");
     // L'onglet de l'agent est obligatoire : sans lui, le téléchargement d'un autre agent pourrait être pris.
     const tabId = await resolveTargetTab(params);
@@ -5359,6 +5469,8 @@ async function waitForDownload(params = {}) {
         const items = await chrome.downloads.search({ startedAfter: new Date(since).toISOString(), orderBy: ["-startTime"] });
         const candidates = (items || []).filter(d => !since || Date.parse(d.startTime) >= since);
         chosen = candidates.find(fromTab) || null;
+        // Attribué à l'onglet du client : lui seul pourra en retirer l'entrée (download_erase).
+        if (chosen) await rememberDownloadOwner(chosen.id, client);
         if (chosen && chosen.state === "complete") {
             return { data: { success: true, ...publicDownload(chosen), waited_ms: Date.now() - start } };
         }
@@ -5377,12 +5489,20 @@ async function waitForDownload(params = {}) {
 }
 
 /**
- * Retire une entrée de l'historique des téléchargements (le fichier sur disque n'est pas touché).
+ * Retire une entrée de l'historique des téléchargements (le fichier sur disque n'est pas touché). Seulement un
+ * téléchargement lancé depuis un onglet du client (attribué par wait_download) : jamais ceux de Julien ni d'un autre
+ * agent.
  */
-async function eraseDownload(params = {}) {
+async function eraseDownload(params = {}, client = null) {
     const id = parseInt(params.id !== undefined ? params.id : params.downloadId, 10);
     if (!Number.isInteger(id)) throw new Error("Missing download id");
+    if (!ownedBy(downloadOwners.get(id), client)) {
+        return { error: `Download ${id} was not started from one of your tabs (browser_wait_download): refused. ` +
+            "The user's and other agents' downloads are never erased." };
+    }
     const erased = await chrome.downloads.erase({ id });
+    downloadOwners.delete(id);
+    await saveExtensionState();
     return { data: { success: true, erased: erased || [] } };
 }
 

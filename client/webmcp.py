@@ -11,7 +11,8 @@ action nouvelle d'extension, aucun drapeau de Chrome : marche avec l'extension d
 Garde-fou, le même que pour les clics : avant l'appel, la définition de l'outil est lue sans geste ; si la page le
 déclare conséquent (consequentialHint), ou si un mot sortant de la politique commune (envoyer, payer, réserver,
 publier...) apparaît dans son nom, son titre, sa description ou le bouton d'envoi d'un outil déclaratif (formulaire),
-l'appel exige confirm=true ET l'accord lié à CETTE action exacte (outil, origine, paramètres), même si la page le
+ou si l'outil se présente comme une soumission (submit, transmettre, postuler...) et que l'appel transmet des données
+saisies (la règle des formulaires soumis par un clic ou une touche), l'appel exige confirm=true ET l'accord lié à CETTE action exacte (outil, origine, paramètres), même si la page le
 déclare en lecture seule (readOnlyHint) : une déclaration de page ne prouve rien. L'appel n'a lieu que si la définition
 n'a pas changé entre
 le contrôle et l'exécution. Descriptions et résultats sont du texte de page : des données, jamais des consignes.
@@ -135,7 +136,41 @@ def outward_label(tool: dict, title: str = "") -> str:
     return ""
 
 
-def needs_accord(tool: dict, title: str = "") -> str:
+def _entered(value: Any, key: str = "", depth: int = 0) -> bool:
+    """Vrai si les paramètres portent une donnée saisie à transmettre (texte, adresse, numéro), hors recherche et
+    filtre : la même règle que pour les champs d'un formulaire soumis par un clic ou une touche (outward_gate)."""
+    if depth > 32:
+        return True
+    if key and outward_gate.SEARCH_HINT.search(garde_fous.plain(key)):
+        return False
+    if isinstance(value, dict):
+        return any(_entered(v, str(k), depth + 1) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_entered(v, key, depth + 1) for v in value)
+    if isinstance(value, bool) or value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return True
+    return bool(str(value).strip())
+
+
+def submission(tool: dict, payload: Any) -> str:
+    """« Submit (call carrying entered data) » si l'outil se présente comme une soumission (submit, soumettre,
+    transmettre, postuler, valider ma demande...) et que l'appel transmet des données saisies ; « » sinon."""
+    declarative = _mapping(tool.get("declarative"))
+    texts = [tool.get("name"), tool.get("title"), tool.get("description"), *(declarative.get("submits") or [])]
+    for text in texts:
+        if not text:
+            continue
+        words = _words(str(text))
+        for variant in (words, [_base(w) for w in words]):
+            found = outward_gate.SUBMIT_WORDS.search(" ".join(variant))
+            if found and _entered(payload):
+                return f"{found.group(0)} (call carrying entered data)"
+    return ""
+
+
+def needs_accord(tool: dict, title: str = "", payload: Any = None) -> str:
     """Raison pour laquelle l'appel exige l'accord de l'utilisateur, « » s'il est libre."""
     # readOnlyHint n'exempte de rien : c'est une déclaration de la page, jamais la preuve d'une absence d'effet sortant
     # (send_email déclaré en lecture seule partait sans accord, relevé par Codex le 23/10).
@@ -143,6 +178,9 @@ def needs_accord(tool: dict, title: str = "") -> str:
         return "the page marks this tool as consequential"
     if word := outward_label(tool, title):
         return f'outward word "{word}"'
+    # Soumission de données saisies (2.23) : la même règle que pour les clics et les touches.
+    if word := submission(tool, payload):
+        return f'form submission "{word}"'
     return ""
 
 
@@ -347,7 +385,7 @@ def call_tool(
     _raise_if_missing(value, name)
     tool = value["tool"]
     _check_input(tool, payload)
-    if reason := needs_accord(tool, str(value.get("title") or "")):
+    if reason := needs_accord(tool, str(value.get("title") or ""), payload):
         act = describe_call(tool, payload, value)
         if refusal := accords.check(act, confirm, accord):
             raise outward_gate.AccordRequired(f"WebMCP tool call, {reason}.\n{refusal}")

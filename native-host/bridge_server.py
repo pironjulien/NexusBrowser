@@ -27,6 +27,7 @@ import os
 import socket
 import sys
 import uuid
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -259,6 +260,8 @@ async def ws_handler(websocket):
                 pending_requests.pop(req_id)
                 if not pending[1].done():
                     pending[1].set_result(data)
+            elif data.get("event") == "compteurs":
+                ecrire_compteurs(data)
             elif "event" in data:
                 LOGGER.info("Event received: %s", data.get("event"))
     except Exception as exc:
@@ -273,6 +276,32 @@ async def ws_handler(websocket):
                 pending_requests.pop(req_id, None)
                 if not future.done():
                     future.set_exception(ConnectionResetError("Chrome Extension disconnected while processing request"))
+
+
+def fichier_compteurs() -> Path:
+    return Path.home() / ".nexus" / "nexus-browser" / "compteurs.json"
+
+
+def ecrire_compteurs(data: dict) -> None:
+    """Compteurs pour le pad MX Keypad (case cochée dans la fenêtre de l'extension) : seul le nombre de mails non lus de
+    Gmail, écrit en local dans ~/.nexus/nexus-browser/compteurs.json ; décoché, le fichier est effacé. Un nombre hors
+    bornes ou d'un autre type est ignoré (null)."""
+    fichier = fichier_compteurs()
+    try:
+        if data.get("actif") is not True:
+            fichier.unlink(missing_ok=True)
+            return
+        gmail = data.get("gmail")
+        if not (type(gmail) is int and 0 <= gmail <= 1_000_000):
+            gmail = None
+        fichier.parent.mkdir(parents=True, exist_ok=True)
+        temporaire = fichier.with_suffix(".tmp")
+        temporaire.write_text(
+            json.dumps({"gmail": gmail, "at": datetime.now(timezone.utc).isoformat()}), encoding="utf-8"
+        )
+        os.replace(temporaire, fichier)
+    except OSError as error:
+        LOGGER.warning("Compteurs non écrits : %s", error)
 
 
 def background(coroutine) -> None:

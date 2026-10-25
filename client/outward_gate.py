@@ -13,13 +13,14 @@ exige confirm=true ET accord=<jeton> lié à CETTE action exacte (garde_fous.Acc
 
 Échec fermé seulement quand la lecture échoue vraiment (réponse inattendue, script en erreur, focus dans un cadre d'une
 autre origine, formulaire d'un champ visé par Entrée illisible). Textes rendus au modèle en anglais. Copie embarquée de
-la politique : garde_fous.py et garde-fous.json à côté de ce module, identiques à NexusHarness/shared
+la politique : garde_fous.py et garde-fous.json à côté de ce module, identiques à NexusHarness/NexusWindows/commun
 (test_outward_accord.py le vérifie quand ce dossier existe).
 """
 
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
@@ -142,6 +143,45 @@ def describe_action(data: dict, gesture: str, label: str, typed: str = "") -> di
     )
 
 
+# Soumission d'un formulaire (règle propre au navigateur : seul lui lit les champs du formulaire du déclencheur).
+# « Submit », « Soumettre », « Transmettre », « Postuler », « Valider ma demande » ne sont pas des mots sortants de la
+# politique commune (une fenêtre de bureau « Submit » ne dit pas ce qui part) : ils le deviennent ici quand le
+# formulaire transmet du texte saisi, une adresse, un numéro ou un fichier, ou quand ce formulaire n'a pas pu être lu.
+SUBMIT_WORDS = re.compile(
+    r"\b(submit|soumettre|soumettez|transmettre|transmettez|postuler|postulez|"
+    r"valid(er|ez) (la |ma |votre |les |mes |vos )?(demande|candidature|inscription|formulaire|reponses?|dossier)s?)\b"
+)
+# Champs qui ne portent pas de donnée saisie à transmettre (choix, réglages, recherche).
+NO_DATA_TYPES = {
+    "search", "checkbox", "radio", "select-one", "select-multiple", "range", "color", "hidden", "submit", "button",
+    "reset", "image", "date", "month", "week", "time", "datetime-local",
+}  # fmt: skip
+SEARCH_HINT = re.compile(r"\b(search|recherche|rechercher|query|filtre|filter)\b")
+
+
+def form_submission(label: Any, data: dict) -> str:
+    """« Submit (form with entered data) » si ce déclencheur soumet un formulaire qui transmet des données saisies
+    (texte libre, adresse, numéro, fichier) ou dont le contenu n'a pas pu être lu ; « » sinon. Une connexion (champ
+    mot de passe : saisi par l'utilisateur seul), une recherche, un filtre ou un formulaire vide restent libres."""
+    found = SUBMIT_WORDS.search(garde_fous.plain(label))
+    if not found:
+        return ""
+    fields = [f for f in data.get("fields") or [] if isinstance(f, dict)]
+    if any(str(f.get("type") or "").lower() == "password" for f in fields):
+        return ""
+    if data.get("formUnknown") or not data.get("form"):
+        return f"{found.group(0)} (form whose contents could not be read)"
+    entered = bool(data.get("recipients")) or bool(data.get("attachments"))
+    for f in fields:
+        kind = str(f.get("type") or "").lower()
+        hint = garde_fous.plain(f"{f.get('label') or ''} {kind}")
+        if kind in NO_DATA_TYPES or SEARCH_HINT.search(hint):
+            continue
+        if f.get("masked") or str(f.get("value") or "").strip():
+            entered = True
+    return f"{found.group(0)} (form with entered data)" if entered else ""
+
+
 class AccordRequired(Exception):
     """Geste sortant sans l'accord lié à cette action exacte : rien n'a été fait (message pour l'agent, en anglais)."""
 
@@ -239,7 +279,10 @@ def _found(call: Reader, tab_id: Any, target: dict, timeout: float) -> list[dict
                 return [form]
             if form.get("success"):
                 data.update(
-                    {k: form[k] for k in ("submits", "fields", "recipients", "attachments", "tabUrl", "tabTitle")}
+                    {
+                        k: form.get(k)
+                        for k in ("form", "submits", "fields", "recipients", "attachments", "tabUrl", "tabTitle")
+                    }
                 )
                 data["formUnknown"] = False
         if data["formUnknown"]:
@@ -307,7 +350,9 @@ def check(
             if any(g in ("click", "drag") for g in gestures):
                 labels += [str(x) for x in data.get("alsoLabels") or [] if x]
             title = str(data.get("tabTitle") or "")
-            label = next((lab for lab in labels if garde_fous.outward_word(lab, title)), "")
+            label = next(
+                (lab for lab in labels if garde_fous.outward_word(lab, title) or form_submission(lab, data)), ""
+            )
             if label:
                 found = (data, label)
                 break

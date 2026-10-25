@@ -429,6 +429,32 @@ def test_declarative_form_shows_its_target(page: WebMCPPage) -> None:
     assert "POST https://shop.example/book" in refused["error"]
 
 
+def test_submission_with_entered_data_needs_accord(page: WebMCPPage) -> None:
+    # 2.23 : un formulaire soumis par clic ou touche exige l'accord s'il transmet des données saisies ; un outil
+    # WebMCP de soumission (bouton « Submit application ») passait sans accord par browser_webmcp_call.
+    page.tools.append(
+        _tool(
+            "apply_job",
+            "Job application form.",
+            declarative={"submits": ["Submit application"], "action": "https://shop.example/apply", "method": "post"},
+        )
+    )
+    page.tools.append(_tool("contact_form", "Submits your request to the team."))
+    for name in ("apply_job", "contact_form"):
+        refused = _run(tool=name, input={"name": "Ana", "message": "Hello"})
+        assert refused["status"] == "error" and refused["accord_required"] is True, refused
+        assert "submit" in refused["error"] and "entered data" in refused["error"]
+        assert_english(refused["error"])
+    assert page.calls == []
+    # Sans donnée saisie (vide, choix, recherche) : libre, comme un formulaire de recherche ou de filtre.
+    assert _run(tool="apply_job", input={})["status"] == "success"
+    assert _run(tool="apply_job", input={"remote": True, "search": "python"})["status"] == "success"
+    assert len(page.calls) == 2
+    assert webmcp.submission({"name": "submit_feedback"}, {"note": "  "}) == ""
+    assert webmcp.submission({"name": "submit_feedback"}, {"rating": 4}) == "submit (call carrying entered data)"
+    assert webmcp.needs_accord({"name": "submit_feedback"}, payload={"note": "ok"}).startswith("form submission")
+
+
 def test_token_read_in_page_is_unknown(page: WebMCPPage) -> None:
     refused = _run(tool="sendMessage", input={"text": "hi"}, confirm=True, accord="deadbeef")
     assert refused["accord_required"] and page.calls == []

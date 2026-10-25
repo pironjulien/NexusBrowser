@@ -3,7 +3,7 @@
 CLI du pont NexusBrowser : les onglets Chrome de l'utilisateur par l'extension Nexus Browser Bridge (même pont, mêmes
 garde-fous que le serveur MCP nexus-browser).
 
-Identité : agent « CLI », session « cli » (stable d'un appel à l'autre, NEXUS_BROWSER_CLIENT pour en changer) :
+Identité : agent « CLI », session « cli-local » (stable d'un appel à l'autre, NEXUS_BROWSER_CLIENT pour en changer) :
 les onglets ouverts par `new-tab` restent pilotables par les appels suivants ; ceux de l'utilisateur et des agents, jamais.
 Chaque commande de page exige --tab-id (l'id renvoyé par new-tab).
 """

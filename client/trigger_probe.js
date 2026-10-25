@@ -13,11 +13,21 @@
     const parentOf = (n) => n.parentElement || (n.parentNode && n.parentNode.host) || null;
     const docOf = (n) => (n && n.ownerDocument) || doc;
     const roleOf = (n) => String(attr(n, "role") || "").toLowerCase();
-    const typeOf = (n) => String(attr(n, "type") || (n && n.type) || "").toLowerCase();
-    const TEXT_TYPES = new Set(["", "text", "search", "email", "url", "tel", "password", "number"]);
+    // Type d'un <input> selon HTML : absent, vide ou inconnu (type="short_text" de Typeform) = texte ; autres balises :
+    // leur type (« textarea », « select-one »...).
+    const INPUT_TYPES = new Set(["hidden", "text", "search", "tel", "url", "email", "password", "date", "month", "week",
+        "time", "datetime-local", "number", "range", "color", "checkbox", "radio", "file", "submit", "image", "reset", "button"]);
+    const typeOf = (n) => {
+        if (tag(n) === "INPUT") {
+            const t = String(attr(n, "type") || "").trim().toLowerCase();
+            return INPUT_TYPES.has(t) ? t : "text";
+        }
+        return String(attr(n, "type") || (n && n.type) || "").toLowerCase();
+    };
+    const TEXT_TYPES = new Set(["text", "search", "email", "url", "tel", "password", "number"]);
     const ACTIVE_ROLES = new Set(["button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option", "switch", "checkbox", "radio", "treeitem"]);
     const BUTTON_TYPES = new Set(["submit", "button", "image", "reset", "checkbox", "radio"]);
-    const isTextInput = (n) => tag(n) === "INPUT" && TEXT_TYPES.has(String(attr(n, "type") || "").toLowerCase());
+    const isTextInput = (n) => tag(n) === "INPUT" && TEXT_TYPES.has(typeOf(n));
     const activating = (n) => {
         const t = tag(n);
         if (t === "BUTTON" || t === "SUMMARY" || (t === "A" && attr(n, "href") !== null)) return true;

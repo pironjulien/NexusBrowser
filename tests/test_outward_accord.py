@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SHARED = REPO_ROOT.parent / "shared"
+SHARED = REPO_ROOT.parent / "NexusWindows" / "commun"
 sys.path.insert(0, str(REPO_ROOT / "client"))
 
 import browser_cli  # noqa: E402
@@ -316,13 +316,114 @@ def test_cli_refuses_outward_gestures_and_says_why(monkeypatch):
 
 
 # -----------------------------------------------------------------------------
-# Politique embarquée : copie identique à NexusHarness/shared, livrée dans le paquet
+# Soumission d'un formulaire qui transmet des données saisies (défaut du 24/10 : « Submit » d'un formulaire
+# d'assistance Typeform, avec e-mail, identifiant d'organisation et texte libre, passé sans accord)
 # -----------------------------------------------------------------------------
-@pytest.mark.skipif(not (SHARED / "garde_fous.py").exists(), reason="NexusHarness/shared absent (CI publique)")
+def form_reader(label: str, fields: list[dict], *, form: bool = True, recipients=(), attachments=()):
+    """Faux pont : le script en lecture seule décrit un bouton et son formulaire ; tout autre appel est un geste."""
+    gestures: list[str] = []
+
+    def call(action: str, params: dict, timeout: float = 20.0) -> dict:
+        if action == "cdp-send" and params.get("method") == "Runtime.evaluate":
+            value = {
+                "success": True, "label": label, "clickable": True, "field": False, "form": form,
+                "submits": [label], "fields": fields, "recipients": list(recipients),
+                "attachments": list(attachments), "tabUrl": "https://form.example.com/to/abc", "tabTitle": "Help form",
+            }  # fmt: skip
+            return {"result": {"type": "object", "value": value}}
+        gestures.append(action)
+        return {"success": True}
+
+    return call, gestures
+
+
+def gate(call, accord: str = "", confirm: bool = False) -> None:
+    outward_gate.check(garde_fous.Accords(), call, [{"tab_id": 1, "selector": "#b"}], ["click"],
+                       confirm=confirm, accord=accord)  # fmt: skip
+
+
+TYPEFORM = [
+    {"label": "Organization ID", "type": "text", "value": "org-123"},
+    {"label": "Describe your issue", "type": "textarea", "value": "My verification failed"},
+]
+
+
+def test_submit_of_a_form_carrying_entered_data_needs_the_accord():
+    call, _ = form_reader("Submit", TYPEFORM, recipients=["julien@example.com"])
+    with pytest.raises(outward_gate.AccordRequired) as refused:
+        gate(call)
+    text = str(refused.value)
+    assert 'target "Submit"' in text and "My verification failed" in text and "julien@example.com" in text
+    assert_english(text)
+    # Mêmes règles pour le texte libre seul, une adresse seule, un fichier seul, et en français.
+    for label, fields, recipients, attachments in (
+        ("Submit", TYPEFORM[1:], [], []),
+        ("Soumettre", [], ["a@b.c"], []),
+        ("Transmettre le dossier", [], [], ["passport.pdf"]),
+        ("Valider ma demande", TYPEFORM[:1], [], []),
+        ("Postuler", [{"label": "Card", "type": "text", "masked": True}], [], []),
+    ):
+        call, _ = form_reader(label, fields, recipients=recipients, attachments=attachments)
+        with pytest.raises(outward_gate.AccordRequired):
+            gate(call)
+
+
+def test_submit_of_an_unreadable_form_fails_closed():
+    # Bouton « Submit » hors de tout formulaire reconnu (page à questions multiples sans <form>) : prudence.
+    call, _ = form_reader("Submit", [], form=False)
+    with pytest.raises(outward_gate.AccordRequired) as refused:
+        gate(call)
+    assert 'target "Submit"' in str(refused.value)
+
+
+def test_harmless_submits_stay_free():
+    for label, fields in (
+        ("Submit", []),  # formulaire vide
+        ("Submit", [{"label": "Search", "type": "text", "value": "chrome bridge"}]),  # recherche
+        ("Submit", [{"label": "q", "type": "search", "value": "x"}, {"label": "Tri", "type": "select-one", "value": "A"}]),
+        ("Submit", [{"label": "Email", "type": "text", "value": "me"}, {"label": "Password", "type": "password",
+                                                                         "masked": True}]),  # connexion : Julien
+        ("Next", TYPEFORM),  # « Suivant » d'un assistant : rien ne part encore
+        ("OK", TYPEFORM),
+        ("Suivant", TYPEFORM),
+        ("Apply filters", TYPEFORM),
+    ):  # fmt: skip
+        call, gestures = form_reader(label, fields)
+        gate(call)
+        assert gestures == [], label
+
+
+def test_accord_lets_the_submit_through_once():
+    call, _ = form_reader("Submit", TYPEFORM)
+    accords = garde_fous.Accords()
+    target = [{"tab_id": 1, "selector": "#b"}]
+    with pytest.raises(outward_gate.AccordRequired) as refused:
+        outward_gate.check(accords, call, target, ["click"], confirm=True)
+    token = str(refused.value).rsplit('accord="', 1)[1].split('"', 1)[0]
+    outward_gate.check(accords, call, target, ["click"], confirm=True, accord=token)
+    with pytest.raises(outward_gate.AccordRequired):
+        outward_gate.check(accords, call, target, ["click"], confirm=True, accord=token)  # usage unique
+
+
+def test_mcp_click_on_submit_of_a_filled_form_is_refused(monkeypatch):
+    call, gestures = form_reader("Submit", TYPEFORM, recipients=["julien@example.com"])
+    monkeypatch.setattr(mcp_server, "call_bridge", call)
+    monkeypatch.setattr(mcp_server, "ACCORDS", garde_fous.Accords())
+    out = reply(mcp_server.browser_click(selector="#submit", tab_id=1))
+    assert out["status"] == "error" and out["accord_required"] is True
+    assert gestures == []
+
+
+# -----------------------------------------------------------------------------
+# Politique embarquée : copie identique à NexusHarness/NexusWindows/commun, livrée dans le paquet
+# -----------------------------------------------------------------------------
+@pytest.mark.skipif(
+    not (SHARED / "garde_fous.py").exists(), reason="NexusHarness/NexusWindows/commun absent (CI publique)"
+)
 @pytest.mark.parametrize("name", ["garde_fous.py", "garde-fous.json"])
 def test_embedded_policy_is_identical_to_shared(name):
     assert (REPO_ROOT / "client" / name).read_bytes() == (SHARED / name).read_bytes(), (
-        f"client/{name} differs from NexusHarness/shared/{name}: copy it again as is"
+        f"client/{name} differs from NexusHarness/NexusWindows/commun/{name}: copy it again as is"
     )
 
 

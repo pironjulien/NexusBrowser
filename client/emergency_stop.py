@@ -1,6 +1,6 @@
 """Arrêt d'urgence commun aux agents de l'utilisateur (protocole emergency-stop.md commun aux agents de bureau).
 
-Ctrl+Alt+Maj+Échap fige toute action de NexusAGY, NexusClaude, NexusCodex et NexusBrowser (Chrome) pendant 120 s.
+Ctrl+Alt+Maj+Échap fige toute action des agents (Antigravity, Claude, Codex), sur le bureau et dans Chrome (NexusBrowser), pendant 120 s.
 
 - Un seul processus du poste obtient le raccourci (RegisterHotKey, MOD_NOREPEAT) ; les autres réessaient toutes les
   3 s et prennent le relais quand le détenteur s'arrête. Le détenteur bat dans ~/.nexus/stop.owner toutes les 3 s.

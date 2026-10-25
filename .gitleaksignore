@@ -1,9 +1,0 @@
-# Synthetic network-response fixtures in one historical unit test; no remote requests.
-# Pagination metadata (Google nextSyncToken and a JSON exclusiveStartKey cursor),
-# plus deliberately fake short/marked authentication values used to test redaction.
-# Exact commit/file/rule/line fingerprints only; no rule or path-wide exemption.
-10b1c704de2d2a3d19782a80d5fcde72f27c3cef:tests/browser.test.cjs:generic-api-key:3525
-10b1c704de2d2a3d19782a80d5fcde72f27c3cef:tests/browser.test.cjs:generic-api-key:3526
-10b1c704de2d2a3d19782a80d5fcde72f27c3cef:tests/browser.test.cjs:generic-api-key:3532
-10b1c704de2d2a3d19782a80d5fcde72f27c3cef:tests/browser.test.cjs:generic-api-key:3533
-10b1c704de2d2a3d19782a80d5fcde72f27c3cef:tests/browser.test.cjs:generic-api-key:3534

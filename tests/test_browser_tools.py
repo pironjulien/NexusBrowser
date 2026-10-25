@@ -121,6 +121,16 @@ def test_reads_stay_allowed_and_actions_blocked_during_emergency_stop(sent):
     assert [action for action, _, _ in sent] == ["find", "network-requests", "network-response", "wait-download"]
 
 
+def test_hotkey_note_surfaces_in_results(sent, monkeypatch):
+    # Raccourci d'arrêt d'urgence tenu par personne : l'IA en est avertie dans chaque réponse, pour le dire à Julien.
+    monkeypatch.setattr(mcp_server.emergency_stop, "hotkey_note", lambda: "Emergency stop NOT GUARANTEED.")
+    assert (
+        json.loads(mcp_server.browser_find({"role": "button"}, tab_id=1))["warning"] == "Emergency stop NOT GUARANTEED."
+    )
+    monkeypatch.setattr(mcp_server.emergency_stop, "hotkey_note", lambda: "")
+    assert "warning" not in json.loads(mcp_server.browser_find({"role": "button"}, tab_id=1))
+
+
 def test_new_reads_are_read_only_for_safe_retries():
     for action in ("find", "network-requests", "network_response", "wait-download"):
         assert bridge_client.is_read_only_action(action)

@@ -55,7 +55,7 @@ bridge shared by several agents.
 | `extension/` | Chrome MV3 extension "Nexus Browser Bridge": CDP actions, locators, network, dialogs, cross-origin iframes, exports, tab ownership |
 | `native-host/` | Local bridge (`bridge_server.py`: WebSocket 9224 for the extension, HTTP 9225 for the agents) and native host `com.nexus.browser_auth` |
 | `client/` | MCP server `nexus-browser` (`mcp_server.py`), authenticated transport (`bridge_client.py`), CLI (`browser_cli.py`), shared emergency stop |
-| `skills/`, `plugins/` | Skill (copied for Antigravity, Claude Code and Codex) and Antigravity plugin, by `install.ps1` |
+| `skills/`, `plugins/` | Skill (single source) and Antigravity plugin; `install.ps1` copies the skill into that plugin only |
 
 ## Tools
 
@@ -82,13 +82,18 @@ cd NexusBrowser
 pwsh -NoProfile -File install.ps1
 ```
 
-- Python environment, token, logs, screenshots and exports live in `~\.nexus\nexus-browser` (outside the clone).
+- Python environment, token, logs, screenshots and exports live in `~\.nexus\nexus-browser` (outside the clone);
+  the per-call journal lives in `%LOCALAPPDATA%\NexusJournal\browser\` (see [Privacy](#privacy)).
 - Scheduled task `Nexus Browser Bridge` with **no trigger**: the bridge starts on demand (first agent call,
   `schtasks /Run`).
 - Native host `com.nexus.browser_auth` declared to Chrome (HKCU): it computes the extension's proofs, the token never
   reaches Chrome.
-- MCP server `nexus-browser` registered for Claude Code, Codex and Antigravity when they are installed, each with
-  `NEXUS_BROWSER_AGENT` set to its name (default tab group).
+- Antigravity only, through its plugin (server and skill), and only when the shared MCP daemon token is present:
+  the plugin points to the shared HTTP daemon (`client/mcp_server.py --http`, port 16182) with `?agent=antigravity`.
+  Without that token, `install.ps1` warns and skips the daemon and this registration; the bridge, native host and
+  task are still installed. Claude Code and Codex are not registered by `install.ps1`: add the server yourself (see
+  below), with `NEXUS_BROWSER_AGENT` set to the client's name (default tab group), and copy
+  `skills/nexus-browser/SKILL.md` into the client's skills if you want it.
 - When the bridge has to relaunch Chrome, it uses the `Default` profile; extra Chrome flags (language...)
   can be added with the `NEXUS_CHROME_EXTRA_ARGS` environment variable (allowlist: `--lang`, `--accept-lang`,
   `--variations-override-country`, `--disable-features=Glic…`, `--force-dark-mode`; anything else is ignored).
@@ -124,6 +129,14 @@ points to the one-time install.
   every page tool. A session whose MCP process is gone (or silent for 1.618 x 60 s; servers beat every 37 s) leaves
   **orphan** tabs: the same agent can reclaim (`browser_adopt_tab`, also automatically at startup), close or release
   them; never another agent.
+- **Tab listing per client**: `browser_list_tabs` and `browser_active_tab` give the full title and URL only of the
+  caller's own tabs (opened or adopted). The user's and other agents' tabs show their domain only (`url` = origin,
+  `title` null, `redacted: true`): enough to designate one by `id` and domain for `browser_adopt_tab`, never a token
+  or document id from its URL.
+- **Reserved maintenance commands**: only the installer (`install.ps1`, identity `Installer`) may reload the
+  extension, and only while no agent works in Chrome (no running command, no tab held by a live session). A
+  download's history entry can be erased only by the client whose tab started it (attributed by
+  `browser_wait_download`).
 - **CDP allowlist** for `browser_cdp_send`; every extension script runs in an **isolated world** (only
   `browser_eval`, the YouTube transcript and `browser_cdp_send(..., world="page")` touch the page's world).
 - **Secrets**: secret headers, URL parameters and JSON/form body fields masked (pagination tokens and LLM token
@@ -150,7 +163,11 @@ points to the one-time install.
   sensitive values, attachments, page origin and path) and a one-time token valid 10 minutes. The agent shows the
   summary to the user and, only after their yes, sends the same call again with `confirm=true` and
   `accord="<token>"`. Any change between the accord and the gesture voids it; `confirm=true` alone is never enough;
-  a token read in a page is unknown. Neutral links and buttons stay free. The check fails closed only when the read
+  a token read in a page is unknown. Submitting a form is outward too when its button says Submit, Soumettre,
+  Transmettre, Postuler or Valider ma demande and the form carries entered data (free text, an e-mail address, a
+  phone number, a file) or could not be read; a login form (password field), a search, a filter, an empty form or a
+  wizard's Next stay free (rule of this browser only: it is the one tool that reads the trigger's form). Neutral
+  links and buttons stay free. The check fails closed only when the read
   really fails (script error, focus in a cross-origin frame, form of a field aimed at by Enter unreadable). Page text
   outputs (`browser_content`, `browser_axtree`, `browser_export`, Google and YouTube exports, network bodies) carry
   `untrusted_note` when the text looks like instructions aimed at an AI (a signal only). The CLI runs the same check
@@ -160,10 +177,11 @@ points to the one-time install.
   149+ for sites in the origin trial): `browser_webmcp_tools` lists them and `browser_webmcp_call` runs one through
   Chrome's own `getTools()` / `executeTool()`, evaluated by `cdp-send` in the extension's isolated world (the page
   cannot replace them; no new extension action, no Chrome flag). The call goes through the same accord: a tool the
-  page marks `consequentialHint`, or whose name, title, description or form submit button carries an outward word, is
-  refused with the exact call (tool, origin, input with sensitive values masked but bound to the token, page) and a
-  one-time token. A tool marked `readOnlyHint` runs freely. The tool runs only if its definition did not change
-  since the check. Descriptions and outputs are page text (`untrusted_note`).
+  page marks `consequentialHint`, or whose name, title, description or form submit button carries an outward word,
+  or that presents itself as a submission (Submit, Transmettre, Postuler...) and receives entered data, is refused
+  with the exact call (tool, origin, input with sensitive values masked but bound to the token, page) and a one-time
+  token. `readOnlyHint` exempts nothing: it is the page's own claim. The tool runs only if its definition did not
+  change since the check. Descriptions and outputs are page text (`untrusted_note`).
 - **Paths that do not go through the accord**: `browser_eval` and `browser_cdp_send` (`Runtime.evaluate`,
   `Input.dispatch*`) keep full page access by design and can click or submit without this check; the tool
   descriptions and the server instructions tell the model never to use them for an outward action. Bare coordinates
@@ -186,7 +204,7 @@ pwsh -NoProfile -File verify.ps1 -Browser  # task, native host, bridge reached, 
 `test.ps1` uses the environment created by `install.ps1`.
 
 Updating an existing installation also checks the extension's loaded version/features and reloads it when needed,
-then reloads the supervised Browser MCP worker. The installation fingerprint covers client and extension sources.
+then reloads the supervised Browser MCP worker.
 An update defers while an agent owns browser tabs; user tabs are never driven or activated by the refresh.
 If Chrome is closed, it loads the updated extension files on its next launch; that state is not a live validation.
 
@@ -209,9 +227,19 @@ to the author or to any third party.
   (connection and emergency-stop events, rotated at 1 MB, three backups), `install.log`, screenshots (at most 50,
   each kept under 24 hours) and the exports you ask for. The extension keeps tab ownership in Chrome's session
   storage, cleared when Chrome closes.
+- **Gmail unread counter (off by default)**: a box in the toolbar popup, for the
+  [MX Keypad AI Agents](https://github.com/pironjulien/mx-keypad-ai-agents) pad. When ticked, the extension reads
+  Gmail's official unread feed once a minute in your own session (like a "Gmail checker" extension) and the bridge
+  writes only the number to `~/.nexus/nexus-browser/compteurs.json`: no sender, subject or content. Unticked, the file
+  is deleted.
+- **Journal**, under `%LOCALAPPDATA%\NexusJournal\browser\<agent>\<YYYY-MM>.jsonl` (or `NEXUS_JOURNAL_HOME`), shared
+  format of the Nexus tools: one line per tool call with the calling AI, the action, the outcome, the duration, the
+  technique, the registrable domain of the tab (`google.com`, never the address) and an error category from a fixed
+  list. Never page text, typed value, title or image. Nothing is sent anywhere; months are kept until you delete
+  them: delete the `browser` folder (or single month files) at any time.
 - **Removing it**: remove the extension from Chrome, delete the scheduled task `Nexus Browser Bridge` and the
   registry key `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth`, then delete
-  `~/.nexus/nexus-browser/`.
+  `~/.nexus/nexus-browser/` and `%LOCALAPPDATA%\NexusJournal\browser\`.
 
 Questions or concerns: open an issue on this repository.
 
@@ -226,8 +254,8 @@ Questions or concerns: open an issue on this repository.
   recipients shown as custom chips are read only when they carry an `email` attribute. The token proves that this
   exact action was described before running unchanged, not who said yes: the agent stays the only channel between
   the user and the tool.
-- WebMCP: the page's own `readOnlyHint` and `consequentialHint` are trusted as declared, and tools of a
-  cross-origin iframe are listed only when that frame exposes them to the top page (`exposedTo`), as the spec
+- WebMCP: `readOnlyHint` exempts nothing (a page's claim proves no absence of outward effect), `consequentialHint`
+  only adds the accord, and tools of a cross-origin iframe are listed only when that frame exposes them to the top page (`exposedTo`), as the spec
   requires. Chrome's CDP `WebMCP` domain (used by Chrome DevTools MCP) is not used: it needs Chrome started with
   `--enable-features=DevToolsWebMCPSupport`.
 - Code comments are in French.

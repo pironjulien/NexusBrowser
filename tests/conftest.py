@@ -37,6 +37,18 @@ def isolated_emergency_stop(tmp_path_factory, monkeypatch):
     yield directory
 
 
+@pytest.fixture(autouse=True)
+def isolated_journal(tmp_path_factory, monkeypatch):
+    """Aucun test n'écrit dans le vrai journal commun (%LOCALAPPDATA%\\NexusJournal) : lancée par un agent
+    (NEXUS_BROWSER_AGENT=Codex...), la suite y laissait des lignes de faux appels. La file, écrite par un fil de fond,
+    est vidée avant que le vrai dossier soit remis."""
+    monkeypatch.setenv("NEXUS_JOURNAL_HOME", str(tmp_path_factory.mktemp("journal")))
+    yield
+    for name in ("journal", "client.journal"):
+        if (module := sys.modules.get(name)) is not None:
+            module.flush()
+
+
 def neutral_trigger_read(action: str, params: dict):
     """Lecture du déclencheur (accord des gestes sortants) dans un faux pont : rien de sortant. None : autre commande.
     find du contrôle = limit 100 (les tests de browser_find en passent une autre)."""

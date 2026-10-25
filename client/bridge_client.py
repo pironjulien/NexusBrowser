@@ -395,7 +395,7 @@ def call_bridge(action: str, params: dict[str, Any] | None = None, timeout: floa
             raise ConnectionError(
                 f"Cannot reach the NexusBrowser bridge at {API_URL}: token missing and bridge startup failed. "
                 "Bridge and extension not installed on this PC yet? Once: install.ps1 "
-                "(https://github.com/pironjulien/NexusBrowser#installation)."
+                "(https://github.com/pironjulien/NexusBrowser#install)."
             ) from None
         headers = authentication_headers()
     request = urllib.request.Request(

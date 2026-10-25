@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A newer push makes the running check pointless: cancel it (Windows minutes count double on private repositories).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: windows-latest

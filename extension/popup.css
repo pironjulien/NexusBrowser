@@ -122,3 +122,17 @@ kbd {
     background: var(--surface);
     color: var(--text);
 }
+
+.option {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin-top: 12px;
+    font-size: 12px;
+    line-height: 1.35;
+    cursor: pointer;
+}
+
+.option small {
+    opacity: 0.65;
+}
