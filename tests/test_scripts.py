@@ -154,7 +154,7 @@ def test_install_scripts_read_by_windows_powershell_5(script):
     assert parsed.stdout.strip() == "0", parsed.stdout + parsed.stderr
 
 
-def test_get_reads_the_latest_tag_without_the_github_api():
+def test_get_reads_the_latest_tag_without_the_github_api(tmp_path):
     """get.ps1 lit la dernière version par la redirection de github.com/.../releases/latest (en-tête Location) : l'API
     GitHub sans jeton plafonne à 60 requêtes par heure et par IP (« API rate limit exceeded » sur une IP partagée ou en
     CI). L'API ne reste qu'en secours. Éprouvé pour de vrai sous Windows PowerShell 5.1 et PowerShell 7."""
@@ -162,17 +162,23 @@ def test_get_reads_the_latest_tag_without_the_github_api():
     api_lines = [line for line in text.splitlines() if "api.github.com" in line]
     assert len(api_lines) == 1 and "Invoke-RestMethod" in api_lines[0], api_lines  # le seul appel : le secours
     assert "$tag = Get-LatestTag" in text and "release.tag_name" not in text
-    command = (
+    # Lancé par -File depuis un fichier : jamais de téléchargement passé en ligne de commande (-Command), que
+    # l'antivirus peut prendre pour un chargeur.
+    probe = tmp_path / "latest.ps1"
+    probe.write_text(
         "$t = $null; $e = $null; $ast = [System.Management.Automation.Language.Parser]::ParseFile("
-        f"'{REPO_ROOT / 'get.ps1'}', [ref]$t, [ref]$e); "
+        f"'{REPO_ROOT / 'get.ps1'}', [ref]$t, [ref]$e)\n"
         "$f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] "
-        "-and $n.Name -eq 'Get-LatestTag' }, $true)[0]; . ([scriptblock]::Create($f.Extent.Text)); "
+        "-and $n.Name -eq 'Get-LatestTag' }, $true)[0]\n"
+        ". ([scriptblock]::Create($f.Extent.Text))\n"
         "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor "
-        "[Net.SecurityProtocolType]::Tls12; Get-LatestTag 3>&1"
+        "[Net.SecurityProtocolType]::Tls12\n"
+        "Get-LatestTag 3>&1\n",
+        encoding="ascii",
     )
     for shell in filter(None, (shutil.which("powershell"), PWSH)):
         run = subprocess.run(
-            [shell, "-NoProfile", "-Command", command],
+            [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(probe)],
             capture_output=True,
             text=True,
             timeout=60,

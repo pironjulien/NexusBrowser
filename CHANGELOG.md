@@ -9,6 +9,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the π icon is sent and the
   listing's 128 px icon is replaced by the π one.
 
+## [2.24.6] - 2026-10-25
+
+### Added
+- Claude Desktop extension `nexus-browser.mcpb` (MCPB, server type "uv": this exact version of the server from PyPI),
+  attached to every release under a fixed name
+  (`https://github.com/pironjulien/NexusBrowser/releases/latest/download/nexus-browser.mcpb`). Install it by dropping
+  it on Claude Desktop's window or from Settings > Extensions.
+
+### Changed
+- The test of `get.ps1` runs its latest-release probe from a file (`-File`), never a download passed in `-Command`.
+
 ## [2.24.5] - 2026-10-25
 
 ### Fixed
@@ -927,7 +938,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.5...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.6...HEAD
+[2.24.6]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.6
 [2.24.5]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.5
 [2.24.4]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.4
 [2.24.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.3

@@ -3,6 +3,7 @@ import json
 import re
 import socket
 import sys
+import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -105,6 +106,12 @@ def test_versions_are_aligned():
     gemini = json.loads((REPO_ROOT / "gemini-extension.json").read_text(encoding="utf-8"))
     assert gemini["name"] == "nexus-browser" and gemini["version"] == VERSION
     assert f"nexus-browser=={VERSION}" in gemini["mcpServers"]["nexus-browser"]["args"]
+    # Extension Claude Desktop (.mcpb, serveur « uv ») : même version, serveur épinglé sur cette version de PyPI.
+    mcpb = json.loads((REPO_ROOT / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
+    mcpb_project = tomllib.loads((REPO_ROOT / "mcpb" / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert mcpb["name"] == "nexus-browser" and mcpb["version"] == mcpb_project["version"] == VERSION
+    assert mcpb_project["dependencies"] == [f"nexus-browser=={VERSION}"]
+    assert mcpb["server"]["mcp_config"]["env"] == {"NEXUS_BROWSER_AGENT": "Claude"}
 
 
 def test_no_utf8_bom_in_sources():

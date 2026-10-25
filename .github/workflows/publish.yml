@@ -109,3 +109,34 @@ jobs:
           tar xzf mcp-publisher.tar.gz mcp-publisher
       - run: ./mcp-publisher login github-oidc
       - run: ./mcp-publisher publish server.json
+
+  mcpb:
+    # Claude Desktop extension (MCPB, server type "uv": the host installs this exact version from PyPI), attached to
+    # the release under a fixed name so that releases/latest/download/nexus-browser.mcpb always points to it.
+    needs: publish
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Extension version matches the package
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, tomllib
+          version = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          manifest = json.load(open("mcpb/manifest.json"))["version"]
+          extension = tomllib.load(open("mcpb/pyproject.toml", "rb"))["project"]
+          assert manifest == version == extension["version"], (manifest, version, extension["version"])
+          assert extension["dependencies"] == [f"nexus-browser=={version}"], extension["dependencies"]
+          PY
+      - name: Pack (validates the manifest)
+        run: npx --yes @anthropic-ai/mcpb@2.1.2 pack mcpb nexus-browser.mcpb
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" nexus-browser.mcpb --clobber --repo "$GITHUB_REPOSITORY"
