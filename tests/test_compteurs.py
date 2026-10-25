@@ -65,3 +65,10 @@ def test_raison_liste_fixe(tmp_path, monkeypatch):
     assert lire() is None
     bridge_server.ecrire_compteurs({"source": A, "actif": True, "gmail": 2, "raison": "reseau"})
     assert lire() is None
+
+
+def test_ancienne_extension_pas_comptee_deux_fois(tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge_server, "fichier_compteurs", lambda: tmp_path / "compteurs.json")
+    bridge_server.ecrire_compteurs({"actif": True, "gmail": 7})  # extension 2.23.1 : sans identifiant
+    bridge_server.ecrire_compteurs({"source": A, "actif": True, "gmail": 7})  # le même profil, passé en 2.23.2
+    assert {k: v["gmail"] for k, v in _lire(tmp_path).items()} == {A: 7}

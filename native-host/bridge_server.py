@@ -288,7 +288,8 @@ def ecrire_compteurs(data: dict) -> None:
     Gmail, écrit en local dans ~/.nexus/nexus-browser/compteurs.json, une entrée par profil Chrome (« sources », clé =
     identifiant aléatoire du profil) ; décoché, l'entrée du profil est retirée, et le fichier effacé quand il n'en reste
     aucune. Entrées de plus d'un jour retirées (profil supprimé). Un nombre hors bornes ou d'un autre type est ignoré
-    (null) ; un message sans identifiant valide (extension d'avant la 2.23.2) compte pour la source « defaut »."""
+    (null) ; un message sans identifiant valide (extension d'avant la 2.23.2) compte pour la source « defaut », retirée dès
+    qu'un profil envoie son identifiant."""
     fichier = fichier_compteurs()
     source = data.get("source")
     if not (isinstance(source, str) and re.fullmatch(r"[0-9a-f-]{36}", source)):
@@ -310,6 +311,10 @@ def ecrire_compteurs(data: dict) -> None:
             except (KeyError, TypeError, ValueError):
                 pass
         sources = garde
+        if source != "defaut":
+            # Profil passé de l'extension 2.23.1 (sans identifiant, « defaut ») à la 2.23.2 : l'ancienne entrée du même
+            # profil n'est pas comptée deux fois.
+            sources.pop("defaut", None)
         if data.get("actif") is True:
             gmail = data.get("gmail")
             if not (type(gmail) is int and 0 <= gmail <= 1_000_000):

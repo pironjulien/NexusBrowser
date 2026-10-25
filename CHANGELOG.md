@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.23.3] - 2026-10-25
+
+### Fixed
+- Gmail unread counter: a profile moving from 2.23.1 (no identifier, stored as `defaut`) to 2.23.2 was counted twice
+  for up to 3 minutes; the `defaut` entry is now dropped as soon as a profile sends its identifier.
+
 ## [2.23.2] - 2026-10-25
 
 ### Fixed
