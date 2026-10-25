@@ -1,0 +1,63 @@
+name: Install
+
+# The public install on a clean Windows (a fresh GitHub runner): the one-line installer under Windows PowerShell 5.1,
+# then every AI client found has its entry, and a real MCP round trip goes through the bridge and the extension.
+# Branded Chrome no longer loads an extension from the command line (Chrome 137+), so the run uses Chrome for Testing
+# with --load-extension, the one step a user does by hand in chrome://extensions.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clean-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 22
+      - name: AI clients a user may have (Claude Code and Codex CLIs, Antigravity and Claude Desktop folders)
+        shell: pwsh
+        run: |
+          npm install --global --no-fund --no-audit @anthropic-ai/claude-code@2.1.310 @openai/codex@0.164.0
+          New-Item -ItemType Directory -Force "$HOME\.gemini\antigravity", "$env:APPDATA\Claude", "$HOME\.codex" | Out-Null
+      - name: Chrome for Testing with the extension (the user's "Load unpacked")
+        shell: pwsh
+        run: |
+          $out = npx --yes @puppeteer/browsers@3.2.6 install chrome@stable --path "$env:RUNNER_TEMP\cft" --format "{{path}}"
+          $chrome = ($out | Select-Object -Last 1).Trim()
+          # Chrome for Testing reads its native hosts under its own key: the manifest install.ps1 writes is declared there.
+          $manifest = Join-Path $HOME '.nexus\nexus-browser\native-host\com.nexus.browser_auth.json'
+          reg add "HKCU\Software\Google\Chrome for Testing\NativeMessagingHosts\com.nexus.browser_auth" /ve /t REG_SZ /d $manifest /f
+          reg add "HKCU\Software\Chromium\NativeMessagingHosts\com.nexus.browser_auth" /ve /t REG_SZ /d $manifest /f
+          Start-Process $chrome -ArgumentList "--user-data-dir=$env:RUNNER_TEMP\profile", '--no-first-run', '--no-default-browser-check',
+            "--load-extension=$env:GITHUB_WORKSPACE\extension", 'about:blank'
+      - name: One-line installer (Windows PowerShell 5.1, as typed by a user)
+        shell: powershell
+        env:
+          NEXUS_BROWSER_SOURCE: ${{ github.workspace }}
+        run: Get-Content -Raw .\get.ps1 | Invoke-Expression
+      - name: Entries and a real round trip (MCP stdio, bridge, extension, page)
+        shell: pwsh
+        run: |
+          $python = Join-Path $HOME '.nexus\nexus-browser\venv\Scripts\python.exe'
+          & $python -B tests\install_smoke.py (Join-Path $env:LOCALAPPDATA 'NexusBrowser\app')
+          if ($LASTEXITCODE) { Get-Content (Join-Path $HOME '.nexus\nexus-browser\bridge.log') -Tail 40 -ErrorAction SilentlyContinue; exit 1 }
+      - name: Running the installer again changes nothing (update path)
+        shell: powershell
+        env:
+          NEXUS_BROWSER_SOURCE: ${{ github.workspace }}
+        run: Get-Content -Raw .\get.ps1 | Invoke-Expression

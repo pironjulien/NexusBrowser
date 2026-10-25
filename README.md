@@ -74,7 +74,31 @@ bridge shared by several agents.
 
 ## Install
 
-Requirements: Windows 10 or 11, Chrome, [uv](https://docs.astral.sh/uv/), Python 3.14.
+Windows 10 or 11 and Google Chrome. No admin rights, nothing else to install first.
+
+1. Open **PowerShell** (Start menu, type `PowerShell`) and paste:
+
+   ```powershell
+   irm https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/get.ps1 | iex
+   ```
+
+   It installs [uv](https://docs.astral.sh/uv/) if needed, downloads the latest release into
+   `%LOCALAPPDATA%\NexusBrowser\app`, sets up the local bridge and the native host, and declares the `nexus-browser`
+   server to every AI client it finds: **Claude Code**, **Claude Desktop**, **Codex** and **Antigravity**.
+2. Chrome opens `chrome://extensions` and the extension folder is copied to the clipboard: turn on
+   **Developer mode** (top right), click **Load unpacked**, paste the folder (`Ctrl+V`) and click **Select Folder**.
+   This is the only manual step: outside the Chrome Web Store, Chrome installs an extension this way only. The
+   installer waits and says when the extension is connected.
+3. Restart your AI app and ask it, for example: *"Open https://example.com in a background tab and give me the page
+   as Markdown."*
+
+Run the same command again to update: the folder stays the same, so Chrome keeps the extension and reloads it.
+Installed an AI client later? Run it again too. An entry you wrote yourself, or a `nexus-browser` plugin that already
+provides the server, is never changed.
+
+### From a clone (developers)
+
+Requirements: [uv](https://docs.astral.sh/uv/), PowerShell 7, Node.js for the tests.
 
 ```powershell
 git clone https://github.com/pironjulien/NexusBrowser.git
@@ -91,9 +115,9 @@ pwsh -NoProfile -File install.ps1
 - Antigravity only, through its plugin (server and skill), and only when the shared MCP daemon token is present:
   the plugin points to the shared HTTP daemon (`client/mcp_server.py --http`, port 16182) with `?agent=antigravity`.
   Without that token, `install.ps1` warns and skips the daemon and this registration; the bridge, native host and
-  task are still installed. Claude Code and Codex are not registered by `install.ps1`: add the server yourself (see
-  below), with `NEXUS_BROWSER_AGENT` set to the client's name (default tab group), and copy
-  `skills/nexus-browser/SKILL.md` into the client's skills if you want it.
+  task are still installed. `install.ps1 -Register` (what the one-line installer runs) declares the server over
+  stdio to Claude Code, Claude Desktop, Codex and Antigravity when found (`scripts/register_clients.py`), with
+  `NEXUS_BROWSER_AGENT` set to the client's name (its tab group); without it, add the server yourself (see below).
 - When the bridge has to relaunch Chrome, it uses the `Default` profile; extra Chrome flags (language...)
   can be added with the `NEXUS_CHROME_EXTRA_ARGS` environment variable (allowlist: `--lang`, `--accept-lang`,
   `--variations-override-country`, `--disable-features=Glic…`, `--force-dark-mode`; anything else is ignored).
@@ -240,7 +264,10 @@ to the author or to any third party.
   them: delete the `browser` folder (or single month files) at any time.
 - **Removing it**: remove the extension from Chrome, delete the scheduled task `Nexus Browser Bridge` and the
   registry key `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth`, then delete
-  `~/.nexus/nexus-browser/` and `%LOCALAPPDATA%\NexusJournal\browser\`.
+  `~/.nexus/nexus-browser/` and `%LOCALAPPDATA%\NexusJournal\browser\` (and `%LOCALAPPDATA%\NexusBrowser\` after
+  the one-line install). The `nexus-browser` entries the installer declared: `claude mcp remove nexus-browser -s user`,
+  `[mcp_servers.nexus-browser]` in `~/.codex/config.toml`, and `nexus-browser` under `mcpServers` in Antigravity's
+  `mcp_config.json` and Claude Desktop's `claude_desktop_config.json`.
 
 Questions or concerns: open an issue on this repository.
 

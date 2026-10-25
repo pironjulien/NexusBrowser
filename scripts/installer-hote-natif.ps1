@@ -5,7 +5,7 @@ param([switch]$CheckOnly, [string]$RegistryKey = "HKCU\Software\Google\Chrome\Na
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "runtime.ps1")
 # Cle ecrite et relue dans le registre reel (registre-reel.ps1) : depuis l'application Claude (MSIX), une ecriture
-# directe partait dans son registre prive et Chrome ne trouvait pas l'hote natif (« native messaging host not found »).
+# directe partait dans son registre prive et Chrome ne trouvait pas l'hote natif ("native messaging host not found").
 . (Join-Path $PSScriptRoot "registre-reel.ps1")
 $hostName = "com.nexus.browser_auth"
 $python = $pythonExe
