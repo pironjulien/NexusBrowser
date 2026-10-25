@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.23.4] - 2026-10-25
+
+### Fixed
+- `verify.ps1` reported the native host as "not aligned" when `install.ps1` had run under the other PowerShell
+  edition (Windows PowerShell 5.1 and pwsh 7 format `ConvertTo-Json` differently): the host manifest is now compared
+  by its content, the launcher still byte for byte.
+
 ## [2.23.3] - 2026-10-25
 
 ### Fixed
@@ -817,7 +824,10 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.23.1...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.23.4...HEAD
+[2.23.4]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.4
+[2.23.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.3
+[2.23.2]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.2
 [2.23.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.1
 [2.23.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.0
 [2.22.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.22.0

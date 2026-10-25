@@ -30,10 +30,16 @@ $manifestText = ([ordered]@{
 if ($CheckOnly) {
     $registered = Invoke-RegistreReel @("query `"$RegistryKey`" /ve")
     if (-not $registered.Contains($manifestPath)) { throw "Hote natif $hostName non declare a Chrome : reexecuter install.ps1" }
-    foreach ($pair in @(@($launcher, $launcherText), @($manifestPath, $manifestText))) {
-        if (-not (Test-Path -LiteralPath $pair[0]) -or [IO.File]::ReadAllText($pair[0], $utf8) -cne $pair[1]) {
-            throw "Hote natif $hostName non aligne ($($pair[0])) : reexecuter install.ps1"
+    # Le manifeste est compare par son contenu : ConvertTo-Json ne met pas en forme pareil sous Windows PowerShell 5.1
+    # et sous pwsh 7, et install.ps1 peut avoir tourne sous l'un ou l'autre.
+    $canonical = { param($text) $text | ConvertFrom-Json | ConvertTo-Json -Depth 4 -Compress }
+    foreach ($pair in @(@($launcher, $launcherText, $false), @($manifestPath, $manifestText, $true))) {
+        $aligned = Test-Path -LiteralPath $pair[0]
+        if ($aligned) {
+            $current = [IO.File]::ReadAllText($pair[0], $utf8)
+            $aligned = if ($pair[2]) { (& $canonical $current) -ceq (& $canonical $pair[1]) } else { $current -ceq $pair[1] }
         }
+        if (-not $aligned) { throw "Hote natif $hostName non aligne ($($pair[0])) : reexecuter install.ps1" }
     }
     Write-Host "Hote natif $hostName : OK."
     return

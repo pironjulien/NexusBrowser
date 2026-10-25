@@ -250,4 +250,4 @@ def test_chrome_found_in_user_install_and_app_paths(tmp_path, monkeypatch):
 
 def test_versions_bumped_for_changed_tools():
     manifest = json.loads((REPO_ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == bridge_security.VERSION == "2.23.3"
+    assert manifest["version"] == bridge_security.VERSION == "2.23.4"
