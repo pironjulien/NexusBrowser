@@ -35,6 +35,7 @@ from pathlib import Path
 # Aucun __pycache__ à côté des sources (OneDrive), quel que soit le lanceur.
 sys.dont_write_bytecode = True
 
+import bridge_update  # noqa: E402
 from bridge_auth import (  # noqa: E402
     PROTOCOL,
     AuthError,
@@ -568,6 +569,19 @@ async def handle_http(reader, writer):
             )
             return
 
+        # Mise à jour par le produit lui-même (bridge_update) : état, ou lancement de la tâche de mise à jour.
+        if path == "/api/update":
+            if method == "GET":
+                await send_json_response(writer, 200, {"success": True, **bridge_update.read_status()})
+            elif method == "POST":
+                code, status = await asyncio.to_thread(bridge_update.start, VERSION)
+                await send_json_response(writer, code, {"success": code in (200, 202), **status})
+            else:
+                await send_json_response(
+                    writer, 405, {"success": False, "error": "Method not allowed"}, {"Allow": "GET, POST"}
+                )
+            return
+
         # Appairage sans hôte natif (bridge_pairing) : offre d'un secret à usage unique, ou révocation.
         if path in {"/api/pair", "/api/pair/revoke"}:
             if method != "POST":
@@ -720,6 +734,16 @@ async def send_json_response(writer, status: int, payload: dict, extra_headers: 
             pass
 
 
+async def watch_updates() -> None:
+    """État de mise à jour au démarrage, puis relu chaque heure (la dernière version : au plus une lecture par jour)."""
+    while True:
+        try:
+            await asyncio.to_thread(bridge_update.check, VERSION)
+        except Exception as error:  # noqa: BLE001 - l'état de mise à jour ne doit jamais arrêter le pont
+            LOGGER.warning("Update status not written: %s", error)
+        await asyncio.sleep(3600)
+
+
 def exclusive_listener(port: int) -> socket.socket:
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -766,7 +790,7 @@ async def main(token_file: Path | None = None, log_file: Path | None = None):
     http_server = await asyncio.start_server(handle_http, sock=exclusive_listener(PORT + 1), limit=MAX_HEADER_BYTES + 4)
     print(f"  HTTP API available at http://127.0.0.1:{PORT + 1}/api/command")
 
-    await asyncio.gather(ws_server.wait_closed(), http_server.serve_forever(), watch_emergency_stop())
+    await asyncio.gather(ws_server.wait_closed(), http_server.serve_forever(), watch_emergency_stop(), watch_updates())
 
 
 if __name__ == "__main__":

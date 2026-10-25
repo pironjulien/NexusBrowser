@@ -95,6 +95,11 @@ Windows 10 or 11 and Google Chrome. No admin rights, nothing else to install fir
    as Markdown."*
 
 Run the same command again to update: the folder stays the same, so Chrome keeps the extension and reloads it.
+The bridge can also update a public install itself (the contract shared by the Nexus products): it writes
+`~\.nexus\status\browser.json` (`version`, `latest` read from the `releases/latest` redirect at most once a day,
+`state`, `message`), `GET /api/update` returns it and `POST /api/update` (bridge token) starts the "Nexus Browser
+Update" task, which runs `get.ps1` outside the bridge and records `done` or `failed` (the current version is kept;
+deferred while an agent works in Chrome). A clone updates with git instead.
 Installed an AI client later? Run it again too. An entry you wrote yourself, or a `nexus-browser` plugin that already
 provides the server, is never changed.
 

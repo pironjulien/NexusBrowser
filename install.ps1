@@ -91,6 +91,23 @@ Register-ScheduledTask -TaskName $bridgeTaskName -Action $action -Principal $pri
     -Description 'Pont Chrome NexusBrowser (Antigravity, Claude, Codex), lance a la demande (aucun declencheur).' | Out-Null
 Write-Host "Tache '$bridgeTaskName' installee."
 
+# --- Tache de mise a jour (contrat des produits Nexus) : installation publique seulement (get.ps1, dossier
+#     %LOCALAPPDATA%\NexusBrowser\app). Sans declencheur : le pont la lance sur POST /api/update
+#     (native-host\bridge_update.py), elle execute scripts\self-update.ps1 sans fenetre. Un clone se met a jour par git.
+$updateTaskName = 'Nexus Browser Update'
+$publicApp = Join-Path $env:LOCALAPPDATA 'NexusBrowser\app'
+if ((Test-Path -LiteralPath $publicApp) -and ((Resolve-Path -LiteralPath $repositoryRoot).Path -eq (Resolve-Path -LiteralPath $publicApp).Path)) {
+    $updateAction = New-ScheduledTaskAction -Execute $pythonwExe -Argument "-B `"$(Join-Path $repositoryRoot 'scripts\self_update.py')`"" -WorkingDirectory $localRoot
+    $updateSettings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+    if (Get-ScheduledTask -TaskName $updateTaskName -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $updateTaskName -Confirm:$false
+    }
+    Register-ScheduledTask -TaskName $updateTaskName -Action $updateAction -Principal $principal -Settings $updateSettings `
+        -Description 'Mise a jour de NexusBrowser, lancee par son pont (POST /api/update), aucun declencheur.' | Out-Null
+    Write-Host "Tache '$updateTaskName' installee."
+}
+
 # --- Migration depuis NexusAGY : son pont, son hote natif et son jeton ne servent plus.
 if (Get-ScheduledTask -TaskName 'NexusAGY Browser Bridge' -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName 'NexusAGY Browser Bridge' -Confirm:$false

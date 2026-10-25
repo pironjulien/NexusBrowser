@@ -9,6 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the π icon is sent and the
   listing's 128 px icon is replaced by the π one.
 
+## [2.26.0] - 2026-10-26
+
+### Added
+- Self-update, the contract shared by the Nexus products (an app from the Microsoft Store copies nothing itself): the
+  bridge writes `~\.nexus\status\browser.json` (`product`, `version`, `latest` from the redirect of
+  `releases/latest` at most once a day, without the GitHub API, `state` idle/checking/updating/done/failed,
+  `checked_at`, `message`). `GET /api/update` returns it; `POST /api/update` (bridge token) answers 202 and starts the
+  "Nexus Browser Update" task (no trigger), which runs `scripts/self-update.ps1`: `get.ps1` with `-File` outside the
+  bridge, so the bridge and the extension come to the new release. Deferred while an agent works in Chrome; a failure
+  keeps the current version and says why in `message`. Public install only (`%LOCALAPPDATA%\NexusBrowser\app`, the
+  task is registered there only): a clone answers 409 and updates with git. Nothing changes for a clone.
+
 ## [2.25.0] - 2026-10-25
 
 ### Added
@@ -957,7 +969,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.25.0...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.26.0...HEAD
+[2.26.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.0
 [2.25.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.25.0
 [2.24.6]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.6
 [2.24.5]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.5
