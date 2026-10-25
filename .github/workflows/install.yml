@@ -66,3 +66,41 @@ jobs:
         env:
           NEXUS_BROWSER_SOURCE: ${{ github.workspace }}
         run: Get-Content -Raw .\get.ps1 | Invoke-Expression
+
+  pack:
+    # The Nexus pack (get-nexus.ps1) runs get.ps1 with NEXUS_PACK=1 on a clean Windows: no question, no wait, no window,
+    # exit code 0, a NEXUS_PACK_RESULT line, Antigravity as a plugin; the guide is the pack's own last step.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Antigravity and Codex folders a user may have
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force "$HOME\.gemini\antigravity", "$HOME\.codex" | Out-Null
+      - name: get.ps1 under NEXUS_PACK=1, as the pack runs it
+        shell: pwsh
+        env:
+          NEXUS_PACK: '1'
+          NEXUS_BROWSER_SOURCE: ${{ github.workspace }}
+        run: |
+          $before = @(Get-Process chrome -ErrorAction SilentlyContinue).Count
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1 2>&1 | ForEach-Object { "$_" }
+          $code = $LASTEXITCODE
+          $out | Write-Host
+          if ($code -ne 0) { throw "get.ps1 exit code $code" }
+          $line = $out | Where-Object { $_ -like 'NEXUS_PACK_RESULT *' } | Select-Object -Last 1
+          if ($line -notmatch 'Antigravity=plugin' -or $line -notmatch 'Codex=declared') { throw "unexpected summary: $line" }
+          if (@(Get-Process chrome -ErrorAction SilentlyContinue).Count -gt $before) { throw 'Chrome was opened' }
+          $plugin = Join-Path $HOME '.gemini\antigravity\plugins\nexus-browser'
+          foreach ($f in 'plugin.json', 'mcp_config.json', 'skills\nexus-browser\SKILL.md') {
+            if (-not (Test-Path (Join-Path $plugin $f))) { throw "missing $f" }
+          }
+          Write-Host "Pack install OK in $([int]$watch.Elapsed.TotalSeconds) s: $line"
+      - name: The pack's final step, the guide, does not wait
+        shell: powershell
+        run: |
+          & "$env:LOCALAPPDATA\NexusBrowser\app\scripts\guide-extension.ps1" -WaitSeconds 0
+          if (-not $?) { exit 1 }

@@ -23,12 +23,17 @@ def check_entries() -> None:
     codex = tomllib.loads((HOME / ".codex" / "config.toml").read_text(encoding="utf-8"))["mcp_servers"]["nexus-browser"]
     assert codex["args"] == ["-B", SERVER] and codex["env"]["NEXUS_BROWSER_AGENT"] == "Codex"
     for path, agent in (
-        (HOME / ".gemini" / "antigravity" / "mcp_config.json", "Antigravity"),
+        (HOME / ".gemini" / "antigravity" / "plugins" / "nexus-browser" / "mcp_config.json", "Antigravity"),
         (HOME / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json", "Claude"),
     ):
         server = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["nexus-browser"]
         assert server["args"] == ["-B", SERVER] and server["env"]["NEXUS_BROWSER_AGENT"] == agent, path
-    print("Entries: Claude Code, Claude Desktop, Codex, Antigravity OK")
+    assert "nexus-browser" not in json.loads(
+        (HOME / ".gemini" / "antigravity" / "mcp_config.json").read_text(encoding="utf-8")
+        if (HOME / ".gemini" / "antigravity" / "mcp_config.json").exists()
+        else "{}"
+    ).get("mcpServers", {})
+    print("Entries: Claude Code, Claude Desktop, Codex, Antigravity plugin OK")
 
 
 async def round_trip() -> None:
