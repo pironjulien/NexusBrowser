@@ -116,8 +116,9 @@ pwsh -NoProfile -File install.ps1
   the plugin points to the shared HTTP daemon (`client/mcp_server.py --http`, port 16182) with `?agent=antigravity`.
   Without that token, `install.ps1` warns and skips the daemon and this registration; the bridge, native host and
   task are still installed. `install.ps1 -Register` (what the one-line installer runs) declares the server over
-  stdio to Claude Code, Claude Desktop, Codex and Antigravity when found (`scripts/register_clients.py`), with
-  `NEXUS_BROWSER_AGENT` set to the client's name (its tab group); without it, add the server yourself (see below).
+  stdio to Claude Code, Claude Desktop and Codex, and as a `nexus-browser` plugin to Antigravity, when found
+  (`scripts/register_clients.py`), with `NEXUS_BROWSER_AGENT` set to the client's name (its tab group); without it,
+  add the server yourself (see below). `NEXUS_PACK=1` (the Nexus pack) runs it with no question, wait or window.
 - When the bridge has to relaunch Chrome, it uses the `Default` profile; extra Chrome flags (language...)
   can be added with the `NEXUS_CHROME_EXTRA_ARGS` environment variable (allowlist: `--lang`, `--accept-lang`,
   `--variations-override-country`, `--disable-features=Glic…`, `--force-dark-mode`; anything else is ignored).
@@ -266,8 +267,8 @@ to the author or to any third party.
   registry key `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth`, then delete
   `~/.nexus/nexus-browser/` and `%LOCALAPPDATA%\NexusJournal\browser\` (and `%LOCALAPPDATA%\NexusBrowser\` after
   the one-line install). The `nexus-browser` entries the installer declared: `claude mcp remove nexus-browser -s user`,
-  `[mcp_servers.nexus-browser]` in `~/.codex/config.toml`, and `nexus-browser` under `mcpServers` in Antigravity's
-  `mcp_config.json` and Claude Desktop's `claude_desktop_config.json`.
+  `[mcp_servers.nexus-browser]` in `~/.codex/config.toml`, Antigravity's `plugins/nexus-browser` folder, and
+  `nexus-browser` under `mcpServers` in Claude Desktop's `claude_desktop_config.json`.
 
 Questions or concerns: open an issue on this repository.
 

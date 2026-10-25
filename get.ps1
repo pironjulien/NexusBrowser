@@ -5,6 +5,9 @@
 # install.ps1 -Register: Python environment, local bridge, native host, MCP server declared to the AI clients found
 # (Claude Code, Claude Desktop, Codex, Antigravity), and a guide for the one manual step, loading the extension.
 # Run it again to update. NEXUS_BROWSER_SOURCE (a local folder) installs that copy instead of the latest release.
+# NEXUS_PACK=1 (the Nexus pack, get-nexus.ps1): no question, no wait, no window (no Chrome, no guide, no clipboard);
+# exit code 0 on success; a last "NEXUS_PACK_RESULT ..." line; the pack shows the guide itself at the end:
+#   & "$env:LOCALAPPDATA\NexusBrowser\app\scripts\guide-extension.ps1" -WaitSeconds 0
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'  # Invoke-WebRequest is many times slower with its progress bar
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12

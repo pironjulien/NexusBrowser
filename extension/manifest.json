@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NexusBrowser",
-  "version": "2.24.3",
+  "version": "2.24.4",
   "minimum_chrome_version": "116",
   "description": "Chrome bridge shared by Antigravity, Claude and Codex (NexusBrowser): each agent in its own background tabs.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw8lgOqyVrU2QqvE92/ASo6/QabBL8JO2a15ouUs6UtMEdl7PI9g5Qf3BZGWSksLUkNPVbAp2FQEiWI+sZQNJkr7n/UVe/5ym8DOtXyFUsgpF2x7SHd47V1Kx2b6VOlFy4BGf4UYRw5Mc5zRVeu6FZyKaPNmuFHk0QdbdHz8OlRiOL5ILyp63jidgam6s6Loo/QTOxFzJXE+oJ6N/3HRMSTy8Zlu6NfqcfW7LuLs+YJEstCUY2ZVdx8sWTTYSiWRlAmWz6ZbGNmNV4EzGLHMdgtMfO7o+Kl8gJSWcPwZA8iCwMzXuJzY5YCsN/EsEKsy2UGiNtHVZuwAVE406RbISHwIDAQAB",

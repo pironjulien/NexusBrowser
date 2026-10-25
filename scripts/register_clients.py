@@ -1,10 +1,12 @@
 """Declares the nexus-browser MCP server to the AI clients found on this PC (install.ps1 -Register, one-line install).
 
-Claude Code (CLI or ~/.claude.json), Claude Desktop, Codex (~/.codex/config.toml) and Antigravity (mcp_config.json):
-one stdio entry each, run by the local environment's Python, with the client's name as NEXUS_BROWSER_AGENT (its tab
-group). An entry of ours is replaced in place; an entry the user wrote differently, or a nexus-browser plugin that
-already provides the server, is left alone. Nothing else in these files is touched; each file is written atomically
-after a backup next to the install's logs. Prints one line per client.
+Claude Code (CLI or ~/.claude.json), Claude Desktop and Codex (~/.codex/config.toml): one stdio entry each, run by the
+local environment's Python, with the client's name as NEXUS_BROWSER_AGENT (its tab group). Antigravity: a
+nexus-browser plugin (plugins/nexus-browser: that stdio server and the skill), never an entry in its global
+mcp_config.json. An entry of ours is replaced in place; an entry the user wrote differently, or a nexus-browser plugin
+that already provides another server, is left alone. Nothing else in these files is touched; each file is written
+atomically after a backup next to the install's logs. Prints one line per client, and with NEXUS_PACK=1 a last
+"NEXUS_PACK_RESULT Claude Code=...; Codex=...; Antigravity=..." line for the Nexus pack.
 """
 
 from __future__ import annotations
@@ -192,14 +194,57 @@ def codex(home: Path, python: str, server: str, backups: Path) -> str | None:
     return f"declared in {config}"
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def antigravity_running() -> bool:
+    found = subprocess.run(
+        ["tasklist", "/FI", "IMAGENAME eq Antigravity.exe", "/NH"], capture_output=True, text=True, check=False
+    )
+    return "antigravity.exe" in found.stdout.lower()
+
+
 def antigravity(home: Path, python: str, server: str, backups: Path) -> str | None:
+    """One plugin per product (no entry in the global mcp_config.json): plugins/nexus-browser with its stdio server
+    and the public skill, enabled in config.json while Antigravity is closed (open, it would write its file back)."""
     # Antigravity has used both folders; the one that exists is the one it reads.
     for folder in (home / ".gemini" / "config", home / ".gemini" / "antigravity"):
-        if folder.is_dir():
-            if (folder / "plugins" / NAME).is_dir():
+        if not folder.is_dir():
+            continue
+        plugin = folder / "plugins" / NAME
+        plugin_config = plugin / "mcp_config.json"
+        if plugin_config.exists():
+            current = json.loads(plugin_config.read_text(encoding="utf-8-sig")).get("mcpServers", {}).get(NAME)
+            if current is not None and not ours(current, server):  # a plugin of the user's own (another server)
                 return REMOVED if remove_json_server(folder / "mcp_config.json", server, backups) else PLUGIN
-            return set_json_server(folder / "mcp_config.json", entry(python, server, "Antigravity"), server, backups)
+        manifest = json.loads((ROOT / "plugins" / NAME / "plugin.json").read_text(encoding="utf-8"))
+        write_atomic(plugin / "plugin.json", json.dumps(manifest, indent=2) + "\n")
+        servers = {"mcpServers": {NAME: entry(python, server, "Antigravity")}}
+        write_atomic(plugin_config, json.dumps(servers, indent=2, ensure_ascii=False) + "\n")
+        write_atomic(
+            plugin / "skills" / NAME / "SKILL.md", (ROOT / "skills" / "public" / "SKILL.md").read_text("utf-8")
+        )
+        remove_json_server(folder / "mcp_config.json", server, backups)  # global entry of an earlier version
+        app = folder / "config.json"
+        if app.exists() and not antigravity_running():
+            data = json.loads(app.read_text(encoding="utf-8-sig"))
+            if (data.get("plugins") or {}).get(NAME, {}).get("enabled") is not True:
+                backup(app, backups)
+                data.setdefault("plugins", {})[NAME] = {"enabled": True}
+                write_atomic(app, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+            return f"plugin installed and enabled in {plugin}"
+        return f"plugin installed in {plugin} (enable nexus-browser in Antigravity's plugins if it is not)"
     return None
+
+
+def short(result: str | None) -> str:
+    """One word per client for the Nexus pack's summary line."""
+    if result is None:
+        return "absent"
+    for prefix, word in (("failed", "failed"), ("kept", "kept"), ("provided by", "plugin"), ("plugin", "plugin")):
+        if result.startswith(prefix):
+            return word
+    return "declared"
 
 
 def main() -> int:
@@ -228,6 +273,8 @@ def main() -> int:
             print(f"{client}: {result}")
     if not found:
         print("No AI client found (Claude, Codex, Antigravity): install one, then run the installer again.")
+    if os.environ.get("NEXUS_PACK") == "1":  # summary line read by the Nexus pack (get-nexus.ps1)
+        print("NEXUS_PACK_RESULT " + "; ".join(f"{client}={short(result)}" for client, result in results.items()))
     return 1 if any(r and r.startswith("failed") for r in results.values()) else 0
 
 

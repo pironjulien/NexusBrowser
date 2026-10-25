@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.24.4] - 2026-10-25
+
+### Added
+- Nexus pack mode (`NEXUS_PACK=1`, used by the pack's `get-nexus.ps1`): no question, no wait, no window (Chrome, guide
+  and clipboard left out), exit code 0 on success and a last line `NEXUS_PACK_RESULT Claude Code=...; Codex=...;
+  Antigravity=...`. The pack shows the guide itself at the end:
+  `%LOCALAPPDATA%\NexusBrowser\app\scripts\guide-extension.ps1 -WaitSeconds 0`. CI job "pack" on a clean Windows.
+
+### Changed
+- Antigravity gets a `nexus-browser` plugin (`plugins/nexus-browser`: the stdio server and the English skill
+  `skills/public/SKILL.md`, enabled in its `config.json` while it is closed) instead of an entry in its global
+  `mcp_config.json`; a global entry left by 2.24.0-2.24.3 is removed. A plugin of the user's own is left alone.
+
 ## [2.24.3] - 2026-10-25
 
 ### Changed
@@ -888,7 +901,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.3...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.4...HEAD
+[2.24.4]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.4
 [2.24.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.3
 [2.24.2]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.2
 [2.24.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.1

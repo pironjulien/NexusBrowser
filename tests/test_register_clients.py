@@ -58,28 +58,62 @@ def test_codex_absent(home):
     assert rc.codex(home, PY, SERVER, home / "b") is None
 
 
-def test_antigravity_config_folder_and_plugin(home):
+def test_antigravity_gets_a_plugin_and_the_global_entry_of_an_earlier_version_goes(home, monkeypatch):
+    monkeypatch.setattr(rc, "antigravity_running", lambda: False)
     folder = home / ".gemini" / "config"
     folder.mkdir(parents=True)
-    (folder / "mcp_config.json").write_text('{"mcpServers": {"other": {"command": "x"}}}', encoding="utf-8")
-    assert rc.antigravity(home, PY, SERVER, home / "b").startswith("declared")
-    servers = json.loads((folder / "mcp_config.json").read_text(encoding="utf-8"))["mcpServers"]
-    assert (
-        servers["other"] == {"command": "x"} and servers["nexus-browser"]["env"]["NEXUS_BROWSER_AGENT"] == "Antigravity"
-    )
-    # The plugin installed afterwards: our entry would start a second server, it is removed (the other one kept).
-    (folder / "plugins" / "nexus-browser").mkdir(parents=True)
-    assert rc.antigravity(home, PY, SERVER, home / "b") == rc.REMOVED
-    assert json.loads((folder / "mcp_config.json").read_text(encoding="utf-8"))["mcpServers"] == {
-        "other": {"command": "x"}
+    old = {"mcpServers": {"other": {"command": "x"}, "nexus-browser": rc.entry(PY, SERVER, "Antigravity")}}
+    (folder / "mcp_config.json").write_text(json.dumps(old), encoding="utf-8")
+    (folder / "config.json").write_text('{"theme": "dark"}', encoding="utf-8")
+    assert rc.antigravity(home, PY, SERVER, home / "b").startswith("plugin installed and enabled")
+    plugin = folder / "plugins" / "nexus-browser"
+    assert json.loads((plugin / "mcp_config.json").read_text(encoding="utf-8")) == {
+        "mcpServers": {"nexus-browser": rc.entry(PY, SERVER, "Antigravity")}
     }
+    assert json.loads((plugin / "plugin.json").read_text(encoding="utf-8"))["name"] == "nexus-browser"
+    assert "Julien" not in (plugin / "skills" / "nexus-browser" / "SKILL.md").read_text(encoding="utf-8")
+    assert json.loads((folder / "mcp_config.json").read_text(encoding="utf-8")) == {
+        "mcpServers": {"other": {"command": "x"}}
+    }
+    assert json.loads((folder / "config.json").read_text(encoding="utf-8")) == {
+        "theme": "dark",
+        "plugins": {"nexus-browser": {"enabled": True}},
+    }
+    assert rc.short(rc.antigravity(home, PY, SERVER, home / "b")) == "plugin"  # run again: same plugin, in place
+
+
+def test_antigravity_open_or_without_config_is_told_to_enable_it(home, monkeypatch):
+    monkeypatch.setattr(rc, "antigravity_running", lambda: True)
+    folder = home / ".gemini" / "antigravity"
+    folder.mkdir(parents=True)
+    (folder / "config.json").write_text("{}", encoding="utf-8")
+    assert "enable nexus-browser" in rc.antigravity(home, PY, SERVER, home / "b")
+    assert json.loads((folder / "config.json").read_text(encoding="utf-8")) == {}
+
+
+def test_antigravity_plugin_of_the_user_kept(home):
+    """Poste Nexus : le plugin pointe vers le démon partagé (serverUrl) ; il n'est pas touché."""
+    plugin = home / ".gemini" / "config" / "plugins" / "nexus-browser"
+    plugin.mkdir(parents=True)
+    mine = {"mcpServers": {"nexus-browser": {"serverUrl": "http://127.0.0.1:16182/mcp?agent=antigravity"}}}
+    (plugin / "mcp_config.json").write_text(json.dumps(mine), encoding="utf-8")
     assert rc.antigravity(home, PY, SERVER, home / "b") == rc.PLUGIN
+    assert json.loads((plugin / "mcp_config.json").read_text(encoding="utf-8")) == mine
 
 
-def test_antigravity_older_folder(home):
-    (home / ".gemini" / "antigravity").mkdir(parents=True)
-    assert rc.antigravity(home, PY, SERVER, home / "b").startswith("declared")
-    assert (home / ".gemini" / "antigravity" / "mcp_config.json").exists()
+def test_pack_summary_words():
+    assert [rc.short(r) for r in (None, "declared in x", "already declared", rc.PLUGIN, rc.REMOVED)] == [
+        "absent",
+        "declared",
+        "declared",
+        "plugin",
+        "plugin",
+    ]
+    assert (
+        rc.short("plugin installed in x") == "plugin"
+        and rc.short("kept (y)") == "kept"
+        and rc.short("failed: z") == "failed"
+    )
 
 
 def test_claude_code_without_cli_edits_claude_json(home):

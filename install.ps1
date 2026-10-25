@@ -14,6 +14,8 @@
 #  - tests hors ligne ; -SkipTests pour les sauter
 #  - -Register (installation publique, get.ps1) : serveur declare aux clients trouves (Claude Code, Claude Desktop,
 #    Codex, Antigravity) par scripts\register_clients.py, puis guide du chargement de l'extension dans Chrome
+#  - NEXUS_PACK=1 (pack Nexus, get-nexus.ps1) : aucune question, aucune attente, aucune fenetre (ni Chrome, ni guide,
+#    ni presse-papiers) ; le pack appelle lui-meme scripts\guide-extension.ps1 -WaitSeconds 0 a la fin
 # Tourne sous Windows PowerShell 5.1 comme sous pwsh 7 (fichier en ASCII : 5.1 lit un .ps1 sans BOM en page ANSI).
 # Usage : pwsh -NoProfile -File install.ps1 [-SkipTests] [-SkipLaunch] [-Register]
 param([switch]$SkipTests, [switch]$SkipLaunch, [switch]$Register)
@@ -223,10 +225,12 @@ if (-not $SkipTests) {
 }
 if (-not $SkipLaunch) {
     Start-ScheduledTask -TaskName $bridgeTaskName
-    & $pythonExe -B (Join-Path $PSScriptRoot 'scripts\refresh_extension.py') --wait-ready 30
+    $pack = $env:NEXUS_PACK -eq '1'
+    $wait = if ($pack) { 0 } else { 30 }
+    & $pythonExe -B (Join-Path $PSScriptRoot 'scripts\refresh_extension.py') --wait-ready $wait
     if ($LASTEXITCODE -notin 0, 2) { throw "Le rechargement de l'extension n'est pas verifie ; installation non marquee a jour." }
     if ($LASTEXITCODE -eq 2 -and $Register) {
-        & (Join-Path $PSScriptRoot 'scripts\guide-extension.ps1')
+        if (-not $pack) { & (Join-Path $PSScriptRoot 'scripts\guide-extension.ps1') }
     } elseif ($LASTEXITCODE -eq 2 -and (Get-Process -Name chrome -ErrorAction SilentlyContinue)) {
         throw 'Extension Chrome ouverte mais injoignable.'
     }
