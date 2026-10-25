@@ -61,6 +61,24 @@ jobs:
         run: |
           & "$env:LOCALAPPDATA\NexusBrowser\app\scripts\guide-extension.ps1" -WaitSeconds 0
           if (-not $?) { exit 1 }
+      - name: Self-update by the bridge (Nexus contract) - task, state, a real run to the latest release
+        shell: pwsh
+        run: |
+          if (-not (Get-ScheduledTask -TaskName 'Nexus Browser Update' -ErrorAction SilentlyContinue)) { throw 'update task missing' }
+          $token = (Get-Content (Join-Path $HOME '.nexus\nexus-browser\bridge-token') -Raw).Trim()
+          $state = Invoke-RestMethod -Uri 'http://127.0.0.1:9225/api/update' -Headers @{ 'X-Nexus-Browser-Token' = $token }
+          Write-Host ($state | ConvertTo-Json -Compress)
+          if ($state.product -ne 'browser' -or -not $state.version) { throw 'no update state' }
+          $file = Join-Path $HOME '.nexus\status\browser.json'
+          schtasks /Run /TN 'Nexus Browser Update' | Out-Null
+          $deadline = (Get-Date).AddMinutes(10)
+          do {
+            Start-Sleep -Seconds 5
+            $status = Get-Content $file -Raw | ConvertFrom-Json
+          } while ($status.state -notin 'done', 'failed' -and (Get-Date) -lt $deadline)
+          Get-Content (Join-Path $HOME '.nexus\nexus-browser\update.log') -ErrorAction SilentlyContinue
+          if ($status.state -ne 'done') { throw "self-update: $($status.state) $($status.message)" }
+          Write-Host "Self-update OK: $($status.message)"
       - name: Running the installer again changes nothing (update path)
         shell: powershell
         env:
