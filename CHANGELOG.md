@@ -5,6 +5,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.24.0] - 2026-10-25
+
+### Added
+- One-line install for Windows (`irm https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/get.ps1 | iex`),
+  no admin rights and no prerequisite: installs uv if needed, downloads the latest release into
+  `%LOCALAPPDATA%\NexusBrowser\app` (the same folder on every update, so Chrome keeps the extension) and runs
+  `install.ps1 -Register`.
+- `install.ps1 -Register`: the server is declared over stdio to the AI clients found (Claude Code, Claude Desktop,
+  Codex, Antigravity; `scripts/register_clients.py`), with the client's name as its tab group. An entry the user wrote,
+  or a `nexus-browser` plugin that already provides the server, is left alone; each file is backed up and written
+  atomically. Then a guide for the one manual step: `chrome://extensions` opened, the extension folder copied to the
+  clipboard, three steps shown, and a wait until the extension is connected.
+- CI "Install": the one-line installer on a fresh Windows runner under Windows PowerShell 5.1, then every client
+  entry and a real MCP round trip through the bridge and the extension (Chrome for Testing).
+
+### Fixed
+- `install.ps1` runs under Windows PowerShell 5.1, the only PowerShell of a new Windows (the install log was written
+  with a pwsh-only encoding; the script is now plain ASCII, which 5.1 reads right without a BOM). A test checks that
+  every install script is ASCII and parses under 5.1.
+- With `-Register`, Chrome open without the extension yet (a first install) no longer stops the installer.
+
 ## [2.23.5] - 2026-10-25
 
 ### Security
@@ -834,7 +855,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.23.5...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.0...HEAD
+[2.24.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.0
 [2.23.5]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.5
 [2.23.4]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.4
 [2.23.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.3

@@ -10,7 +10,7 @@ function Invoke-RegistreReel([string[]]$Commandes) {
     $sortie = Join-Path $dossier "$nom.txt"
     $script = Join-Path $dossier "$nom.cmd"
     # Les commandes reg vont dans un fichier .cmd, pas sur la ligne de commande de la tache : Microsoft Defender juge
-    # « conhost --headless cmd /c reg add ...\Run » malveillant (Trojan:Win32/Commando.A!ml, au hasard d'un appel sur
+    # "conhost --headless cmd /c reg add ...\Run" malveillant (Trojan:Win32/Commando.A!ml, au hasard d'un appel sur
     # dix environ) et bloque alors le lancement (0x80070005), sans aucune sortie.
     # Dans un fichier .cmd, doubler les '%' pour qu'ils ne soient pas interpretes comme variables ou arguments cmd (%1, etc.).
     $lignes = @("@echo off", "chcp 65001 >nul", "(") + ($Commandes | ForEach-Object { "reg $($_.Replace('%', '%%'))" }) + @(") > `"$sortie`" 2>&1")

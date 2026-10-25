@@ -118,3 +118,36 @@ def test_no_cache_folders_in_the_repository():
     for name in (".ruff_cache", ".pytest_cache"):
         assert not (REPO_ROOT / name).exists(), name
     assert not list(REPO_ROOT.glob("client/__pycache__")) and not list(REPO_ROOT.glob("native-host/__pycache__"))
+
+
+INSTALL_SCRIPTS = [
+    "get.ps1",
+    "install.ps1",
+    "scripts/guide-extension.ps1",
+    "scripts/installer-hote-natif.ps1",
+    "scripts/registre-reel.ps1",
+    "scripts/runtime.ps1",
+]
+
+
+@pytest.mark.parametrize("script", INSTALL_SCRIPTS)
+def test_install_scripts_read_by_windows_powershell_5(script):
+    """L'installation publique tourne sous Windows PowerShell 5.1 (seul présent sur un Windows neuf) : il lit un .ps1
+    sans BOM en page de code ANSI, où un caractère UTF-8 peut devenir un guillemet. Le dépôt n'a pas de BOM
+    (test_no_utf8_bom_in_sources) : donc ASCII seul ; et le script s'analyse sans erreur sous 5.1."""
+    assert (REPO_ROOT / script).read_bytes().isascii(), script
+    shell = shutil.which("powershell")
+    if shell is None:
+        pytest.skip("Windows PowerShell 5.1 absent")
+    command = (
+        "$t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile("
+        f"'{REPO_ROOT / script}', [ref]$t, [ref]$e); $e.Count"
+    )
+    parsed = subprocess.run(
+        [shell, "-NoProfile", "-Command", command],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    assert parsed.stdout.strip() == "0", parsed.stdout + parsed.stderr
