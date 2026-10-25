@@ -9,6 +9,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the π icon is sent and the
   listing's 128 px icon is replaced by the π one.
 
+## [2.25.0] - 2026-10-25
+
+### Added
+- Pairing without the native host, for installs where `com.nexus.browser_auth` cannot be declared to Chrome (an app
+  from the Microsoft Store, whose HKCU writes are virtualized): `scripts/pair-extension.ps1` (or `-Print` for a code to
+  paste) asks the bridge for a single-use 256-bit secret (5 minutes, 5 wrong proofs end it; `POST /api/pair` with the
+  bridge token) and opens the extension's new `pair.html` page. Both sides derive the extension's key from the secret
+  and the handshake that consumed it; the extension keeps it as a non-extractable WebCrypto key in its IndexedDB, the
+  bridge in `paired-extensions.json` next to its token. The extension then authenticates as `paired` with the same
+  proofs and signed messages. The native host stays first whenever it is installed: nothing changes for current
+  installs. The popup links to the pairing page while the bridge is not connected. Revocation: `POST /api/pair/revoke`.
+  Measured end to end in a test Chromium 151 (separate profile, extension without `nativeMessaging`): page opened
+  from the command line, pairing, service worker and offscreen authenticated, a command answered; no Local Network
+  Access prompt for the extension's connection to 127.0.0.1.
+
+### Fixed
+- A refused handshake now closes the extension's WebSocket at once (code 4008): browsers refuse code 1008 from a
+  client, so the socket stayed open until the bridge's 10 s handshake timeout.
+
 ## [2.24.6] - 2026-10-25
 
 ### Added
@@ -938,7 +957,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.6...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.25.0...HEAD
+[2.25.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.25.0
 [2.24.6]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.6
 [2.24.5]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.5
 [2.24.4]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.4

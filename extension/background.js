@@ -22,7 +22,7 @@ const AGY_FEATURES = [
     "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree",
     "history-navigation-cdp", "full-page-capture", "opener-tabs-webnav",
     "installer-reload", "tab-list-redaction", "download-ownership", "gmail-counter", "wait-load-navigation",
-    "map-field-labels"
+    "map-field-labels", "bridge-pairing"
 ];
 
 let attachedDebuggers = new Set();
@@ -293,6 +293,27 @@ let reconnectTimer = null;
 let keepaliveInterval = null;
 let reconnectAttempts = 0;
 
+// Méthode d'authentification : l'hôte natif d'abord (installé par install.ps1) ; s'il manque à Chrome (application
+// du Microsoft Store, qui ne peut pas le déclarer) et que l'extension a été appairée (pair.html), la clé d'appairage.
+let nativeHostMissing = !chrome.runtime?.sendNativeMessage;
+
+async function bridgeAuthMethod() {
+    if (!nativeHostMissing) return "native";
+    try {
+        return (await globalThis.AgyPairing.load()) ? "paired" : "native";
+    } catch (_) {
+        return "native";
+    }
+}
+
+/** Preuves de la poignée de main : par l'hôte natif (« native ») ou par la clé d'appairage non extractible. */
+async function proveBridge(args) {
+    if (args.auth !== "paired") return proveWithNativeHost(args);
+    const key = await globalThis.AgyPairing.load().catch(() => null);
+    if (!key) return { ok: false, error: "extension non appairée : ouvrir l'appairage depuis l'application NexusBrowser" };
+    return globalThis.AgyPairing.prove(key, args);
+}
+
 /** Preuves de la poignée de main calculées par l'hôte natif (il lit le jeton ; l'extension ne le voit jamais). */
 function proveWithNativeHost(args) {
     return new Promise((resolve) => {
@@ -304,6 +325,8 @@ function proveWithNativeHost(args) {
             chrome.runtime.sendNativeMessage(NATIVE_AUTH_HOST, args, (reply) => {
                 const error = chrome.runtime.lastError;
                 if (error || !reply) {
+                    // Hôte absent de Chrome : la prochaine connexion passe par la clé d'appairage, si elle existe.
+                    if (/not found|introuvable/i.test(error?.message || "")) nativeHostMissing = true;
                     resolve({ ok: false, error: `hôte natif ${NATIVE_AUTH_HOST} injoignable (${error?.message || "aucune réponse"}) : lancer install.ps1 de NexusBrowser` });
                 } else {
                     resolve(reply);
@@ -387,19 +410,35 @@ async function envoyerCompteurs() {
 }
 
 
+let connectingBridge = false;
+
 function connectBridgeWS() {
     if (typeof WebSocket === "undefined" || typeof globalThis.AgyBridgeLink !== "function") return;
-    if (bridgeLink && bridgeLink.alive) return;
+    if ((bridgeLink && bridgeLink.alive) || connectingBridge) return;
     if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
     }
+    if (!nativeHostMissing) {
+        openBridgeLink("native");
+        return;
+    }
+    // Hôte natif absent : la clé d'appairage, si elle existe, est lue d'abord (IndexedDB, asynchrone).
+    connectingBridge = true;
+    bridgeAuthMethod().then((auth) => {
+        connectingBridge = false;
+        if (!(bridgeLink && bridgeLink.alive)) openBridgeLink(auth);
+    });
+}
+
+function openBridgeLink(auth) {
     try {
         bridgeLink = new globalThis.AgyBridgeLink({
             url: BRIDGE_WS_URL,
             role: "service_worker",
             extensionId: chrome.runtime?.id,
-            prove: proveWithNativeHost,
+            auth,
+            prove: proveBridge,
             onRequest: (request) => handleCommand(request),
             onStateChange: (link) => {
                 if (link.error) lastBridgeAuthError = link.error;
@@ -513,6 +552,16 @@ if (typeof chrome !== "undefined") {
                 sendResponse({ pong: true, connected: bridgeReady() });
                 return true;
             }
+            if (message.bridgePaired && sender?.id === chrome.runtime?.id
+                && String(sender.url || "").startsWith(`chrome-extension://${chrome.runtime.id}/pair.html`)) {
+                // pair.html (onglet de l'extension) vient d'enregistrer la clé : reconnexion immédiate, par elle si
+                // l'hôte natif manque. Rien d'autre n'est accepté de cette page.
+                reconnectAttempts = 0;
+                if (bridgeLink && !bridgeLink.ready) bridgeLink.close();
+                connectBridgeWS();
+                sendResponse({ ok: true });
+                return true;
+            }
             if (!fromExtensionPage(sender)) return;
             if (message.getStatus) {
                 sendResponse(bridgeStatus());
@@ -520,7 +569,11 @@ if (typeof chrome !== "undefined") {
             }
             if (message.bridgeProve) {
                 // Poignée de main de la liaison offscreen (qui n'a pas accès à la messagerie native).
-                proveWithNativeHost(message.bridgeProve).then(sendResponse);
+                proveBridge(message.bridgeProve).then(sendResponse);
+                return true;
+            }
+            if (message.bridgeAuth) {
+                bridgeAuthMethod().then(sendResponse);
                 return true;
             }
             if (message.bridgeState) {

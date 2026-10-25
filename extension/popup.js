@@ -22,6 +22,8 @@ async function showBridge() {
     const reason = ok ? "" : (status && status.authError) || "Il démarre à la première commande d'un agent.";
     detail.hidden = !reason;
     detail.textContent = reason;
+    // Sans hôte natif (application du Microsoft Store) : appairage par un code donné par l'application.
+    document.getElementById("pair").hidden = ok;
 }
 
 async function showAgents() {

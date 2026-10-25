@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Appairer NexusBrowser</title>
+    <link rel="stylesheet" href="popup.css">
+    <style>
+        body { width: auto; max-width: 34rem; margin: 3rem auto; padding: 0 1rem; }
+        form { display: flex; gap: .5rem; margin-top: 1rem; }
+        input { flex: 1; font: inherit; padding: .4rem .6rem; }
+    </style>
+</head>
+<body>
+    <header class="top">
+        <img class="logo" src="icons/logo96.png" alt="">
+        <span class="brand">NexusBrowser</span>
+    </header>
+    <main>
+        <h1 id="state" class="state">Appairer l'extension au pont local</h1>
+        <p id="detail" class="detail">Collez le code d'appairage donné par l'application NexusBrowser (valable 5 minutes,
+            une seule fois). Il ne sert qu'à ce PC et ne quitte pas votre ordinateur.</p>
+        <form id="form">
+            <input id="code" autocomplete="off" spellcheck="false" aria-label="Code d'appairage" maxlength="43">
+            <button type="submit">Appairer</button>
+        </form>
+    </main>
+    <script src="bridge_link.js"></script>
+    <script src="pair.js"></script>
+</body>
+</html>

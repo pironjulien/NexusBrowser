@@ -48,6 +48,7 @@ from bridge_auth import (  # noqa: E402
     server_proof,
     session_key,
 )
+from bridge_pairing import PAIRING_ROLE, PairingStore  # noqa: E402
 from bridge_security import (  # noqa: E402
     AGENT_HEADER,
     CLIENT_HEADER,
@@ -89,6 +90,7 @@ pending_requests: dict = {}
 _background_tasks: set = set()
 _auth_order = 0
 BRIDGE_TOKEN_PATH: Path | None = None
+PAIRING: PairingStore | None = None  # appairage sans hôte natif (bridge_pairing), à côté du jeton
 # (agent, id) -> processus annoncé par la session (None : identité stable, la CLI) ; les plus récentes seulement.
 client_processes: dict[tuple[str, str], int | None] = {}
 MAX_KNOWN_SESSIONS = 256
@@ -102,6 +104,13 @@ def _token_path() -> Path:
     if BRIDGE_TOKEN_PATH is None:
         raise RuntimeError("pont non configuré : chemin du jeton absent")
     return BRIDGE_TOKEN_PATH
+
+
+def _pairing() -> PairingStore:
+    global PAIRING
+    if PAIRING is None:
+        PAIRING = PairingStore(_token_path().with_name("paired-extensions.json"))
+    return PAIRING
 
 
 LOGGER = logging.getLogger("nexus-browser.bridge")
@@ -168,8 +177,12 @@ def select_target() -> BridgeClient | None:
     return min(active_connections, key=lambda client: (ROLE_PRIORITY.get(client.role, 99), -client.order))
 
 
-async def authenticate(websocket) -> BridgeClient:
-    """Poignée de main nexus-browser/1 (bridge_auth) ; AuthError si l'extension ne prouve pas le jeton."""
+async def authenticate(websocket, origin: str | None = None) -> BridgeClient | None:
+    """Poignée de main nexus-browser/1 (bridge_auth) ; AuthError si l'extension ne prouve pas sa clé.
+
+    Clé prouvée selon « auth » : « native » (défaut) le jeton du pont, par l'hôte natif ; « paired » la clé
+    d'appairage de cette extension ; « pair » le secret d'une offre d'appairage en attente (bridge_pairing), qui
+    devient la clé de l'extension : None est alors rendu (connexion d'appairage, jamais un client actif)."""
     global _auth_order
 
     async def receive() -> dict:
@@ -188,9 +201,25 @@ async def authenticate(websocket) -> BridgeClient:
     if hello.get("type") != "auth_hello" or hello.get("protocol") != PROTOCOL:
         raise AuthError("poignée de main attendue")
     client_nonce = check_nonce(hello.get("client_nonce"), "client_nonce")
-    role = check_role(hello.get("role"))
     extension_id = check_extension_id(hello.get("extension_id"))
-    token = read_bridge_token(_token_path())
+    auth = hello.get("auth", "native")
+    if auth == "native":
+        role = check_role(hello.get("role"))
+        token = read_bridge_token(_token_path())
+    elif auth in ("paired", "pair"):
+        # Sans hôte natif, Chrome ne garantit plus l'identifiant annoncé : il doit être celui de l'origine.
+        if origin is None or origin.rstrip("/") != f"chrome-extension://{extension_id}":
+            raise AuthError("identifiant d'extension différent de l'origine de la connexion")
+        if auth == "paired":
+            role = check_role(hello.get("role"))
+            token = _pairing().key_for(extension_id)
+        else:
+            if hello.get("role") != PAIRING_ROLE:
+                raise AuthError("rôle d'appairage attendu")
+            role = PAIRING_ROLE
+            token = _pairing().pending_secret()
+    else:
+        raise AuthError("méthode d'authentification inconnue")
     server_nonce = new_nonce()
     await websocket.send(
         json.dumps(
@@ -205,7 +234,15 @@ async def authenticate(websocket) -> BridgeClient:
     if reply.get("type") != "auth_proof" or not same(
         reply.get("client_proof"), client_proof(token, client_nonce, server_nonce, role, extension_id)
     ):
+        if auth == "pair":
+            _pairing().failed()
         raise AuthError("preuve du client fausse")
+    if auth == "pair":
+        _pairing().complete(client_nonce, server_nonce, extension_id)
+        channel = Channel(session_key(token, client_nonce, server_nonce, role, extension_id), "s2c", "c2s")
+        await websocket.send(json.dumps(channel.seal(json.dumps({"type": "auth_ok"}))))
+        LOGGER.info("Chrome Extension paired: extension=%s", extension_id)
+        return None
     _auth_order += 1
     client = BridgeClient(
         websocket, role, extension_id, session_key(token, client_nonce, server_nonce, role, extension_id), _auth_order
@@ -224,7 +261,7 @@ async def ws_handler(websocket):
         return
     # L'en-tête Origin se falsifie : seule la preuve du jeton fait d'une connexion un client actif.
     try:
-        client = await authenticate(websocket)
+        client = await authenticate(websocket, origin)
     except (TimeoutError, AuthError) as error:
         reason = str(error) if isinstance(error, AuthError) else "poignée de main trop lente"
         LOGGER.warning("WebSocket authentication rejected: %s", reason)
@@ -232,6 +269,9 @@ async def ws_handler(websocket):
         return
     except Exception as exc:
         LOGGER.info("WebSocket connection ended during authentication: %s", exc)
+        return
+    if client is None:  # appairage réussi : la connexion a fini son rôle
+        await websocket.close()
         return
 
     active_connections.append(client)
@@ -526,6 +566,27 @@ async def handle_http(reader, writer):
                     "port": PORT,
                 },
             )
+            return
+
+        # Appairage sans hôte natif (bridge_pairing) : offre d'un secret à usage unique, ou révocation.
+        if path in {"/api/pair", "/api/pair/revoke"}:
+            if method != "POST":
+                await send_json_response(
+                    writer, 405, {"success": False, "error": "Method not allowed"}, {"Allow": "POST"}
+                )
+                return
+            if path == "/api/pair":
+                await send_json_response(writer, 200, {"success": True, **_pairing().offer()})
+                return
+            try:
+                request = json.loads(body.decode("utf-8")) if body else {}
+                extension_id = request.get("extension_id") if isinstance(request, dict) else None
+                if extension_id is not None:
+                    check_extension_id(extension_id)
+            except (json.JSONDecodeError, UnicodeDecodeError, AuthError):
+                await send_json_response(writer, 400, {"success": False, "error": "extension_id invalide"})
+                return
+            await send_json_response(writer, 200, {"success": True, "revoked": _pairing().revoke(extension_id)})
             return
 
         if path == "/api/command" and method != "POST":

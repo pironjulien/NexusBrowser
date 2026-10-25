@@ -2499,6 +2499,8 @@ function controlledSockets() {
         constructor(url) { this.url = url; this.readyState = 0; this.sent = []; this.closeCode = null; instances.push(this); }
         send(data) { if (this.readyState !== 1) throw new Error('socket fermée'); this.sent.push(JSON.parse(data)); }
         close(code) {
+            // Comme un navigateur : un client ne ferme qu'avec 1000 ou 3000-4999 (sinon InvalidAccessError).
+            if (code !== undefined && code !== 1000 && (code < 3000 || code > 4999)) throw new Error('InvalidAccessError');
             if (this.readyState === 3) return;
             this.readyState = 3;
             this.closeCode = code ?? 1000;
@@ -2599,7 +2601,7 @@ test('pont : un serveur qui envoie une commande sans poignée de main n\'obtient
         ws.deliver({requestId: 'r1', action: 'eval', params: {tabId: 1, code: '1 + 1'}, client: TEST_CLIENT});
         await until(() => ws.readyState === 3, 'fermeture');
         await settle();
-        assert.equal(ws.closeCode, 1008);
+        assert.equal(ws.closeCode, 4008);
         assert.equal(evaluations(), 0);
         assert.equal(host.calls.length, 0);
         assert.deepEqual(ws.sent.map(m => m.type), ['auth_hello']);  // ni preuve, ni réponse
@@ -2733,7 +2735,11 @@ test('document offscreen : serveur sans preuve -> rien relayé au service worker
     await settle();
     assert.equal(toBackground.filter(m => m.request).length, 0);
     // Serveur authentique : la commande signée est relayée au service worker et la réponse revient signée.
+    // Après un refus, l'offscreen redemande la méthode au service worker (ici : hôte natif) avant de se reconnecter.
+    const before = sockets.instances.length;
     vm.runInContext('connectWS()', ctx);
+    await until(() => sockets.instances.length > before, 'nouvelle connexion');
+    assert.ok(toBackground.some(m => m.bridgeAuth));
     const ws2 = sockets.instances.at(-1);
     ws2.open();
     const server = fakeServer(ws2);
@@ -4483,4 +4489,76 @@ test('export : une liste de références très citée (Wikipedia) ne passe pas d
     const {h} = exportHarness(build, {url: 'https://en.wikipedia.org/wiki/Chromium_(web_browser)'});
     const res = await h.run('export_content', {tabId: 1});
     assert.match(res.data.content, /free and open-source web browser project/);
+});
+
+// Appairage sans hôte natif (bridge_link.js AgyPairing, native-host/bridge_pairing.py) ------------------------------
+function pairingContext() {
+    const ctx = vm.createContext({console, setTimeout, clearTimeout, atob, btoa, TextEncoder, Uint8Array, crypto: globalThis.crypto});
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/bridge_link.js'), 'utf8'), ctx);
+    return ctx;
+}
+
+test('appairage : preuves et clé dérivée identiques au pont (Python), clé jamais extractible', async () => {
+    const {AgyPairing} = pairingContext();
+    const secret = nodeCrypto.randomBytes(32).toString('base64url');
+    assert.ok(AgyPairing.isSecret(secret) && !AgyPairing.isSecret(secret.slice(1)) && !AgyPairing.isSecret(`${secret.slice(1)}+`));
+    const secretKey = await AgyPairing.secretKey(secret);
+    const [cn, sn] = [testNonce(), testNonce()];
+    const parts = [cn, sn, 'pairing', EXT_ID];
+    // Poignée de main « pair » : le serveur doit prouver le secret ; sinon aucune preuve du client.
+    const refused = await AgyPairing.prove(secretKey, {client_nonce: cn, server_nonce: sn, role: 'pairing', extension_id: EXT_ID,
+        server_proof: hmac64('autre', 'server', ...parts)});
+    assert.equal(refused.ok, false);
+    assert.equal(refused.client_proof, undefined);
+    const proof = await AgyPairing.prove(secretKey, {client_nonce: cn, server_nonce: sn, role: 'pairing', extension_id: EXT_ID,
+        server_proof: hmac64(secret, 'server', ...parts)});
+    assert.deepEqual({...proof}, {ok: true, client_proof: hmac64(secret, 'client', ...parts),
+        session_key: hmacRaw(secret, 'session', ...parts).toString('base64url')});
+    // Clé durable = bridge_pairing.paired_key(secret, cn, sn, extension) ; elle signe comme le pont, jamais exportée.
+    const derived = await AgyPairing.derive(secretKey, cn, sn, EXT_ID);
+    const pairedKey = hmac64(secret, 'paired', cn, sn, EXT_ID);
+    assert.equal(derived.extractable, false);
+    assert.equal(secretKey.extractable, false);
+    await assert.rejects(globalThis.crypto.subtle.exportKey('raw', derived));
+    const later = [testNonce(), testNonce(), 'service_worker', EXT_ID];
+    const paired = await AgyPairing.prove(derived, {client_nonce: later[0], server_nonce: later[1], role: 'service_worker',
+        extension_id: EXT_ID, server_proof: hmac64(pairedKey, 'server', ...later)});
+    assert.equal(paired.client_proof, hmac64(pairedKey, 'client', ...later));
+});
+
+test('appairage : sans hôte natif, le service worker se connecte en « paired » avec sa clé ; avec l\'hôte, rien ne change', async () => {
+    // Avec hôte natif : poignée de main identique à celle d'un pont antérieur (aucun champ « auth »).
+    const native = bridgeHarness();
+    try {
+        assert.equal('auth' in native.ws.sent[0], false);
+    } finally { native.stop(); }
+
+    const pairedKey = nodeCrypto.randomBytes(32).toString('base64url');
+    const sockets = controlledSockets();
+    const h = harness({}, {WebSocket: sockets.ControlledWebSocket, runtime: {id: EXT_ID, lastError: undefined}});
+    try {
+        h.evalInContext(`AgyPairing.load = async () => AgyPairing.secretKey(${JSON.stringify(pairedKey)}); connectBridgeWS();`);
+        await until(() => sockets.instances.length > 0, 'connexion');
+        const ws = sockets.instances.at(-1);
+        ws.open();
+        assert.equal(ws.sent[0].auth, 'paired');
+        const server = fakeServer(ws, {token: pairedKey});
+        server.challenge();
+        await until(() => server.proof(), 'preuve du client');
+        assert.equal(server.proof().client_proof, server.expectedProof());
+        server.send({type: 'auth_ok'});
+        await until(() => server.replies().some(r => r.event === 'bridge_connected'), 'liaison prête');
+    } finally {
+        h.evalInContext('if (bridgeLink) bridgeLink.close(); clearTimeout(reconnectTimer); clearInterval(keepaliveInterval);');
+    }
+});
+
+test('appairage : seule pair.html peut demander la reconnexion ; ni un script de contenu ni une autre page', async () => {
+    const h = harness({}, {runtime: {id: EXT_ID}});
+    h.evalInContext('globalThis.__asked = 0; connectBridgeWS = () => { __asked++; };');
+    const message = {target: 'background', bridgePaired: true};
+    assert.equal(await h.sendMessage(message, {id: EXT_ID, url: 'https://example.com/', tab: {id: 1}}), undefined);
+    assert.equal(await h.sendMessage(message, {id: 'autre', url: `chrome-extension://${EXT_ID}/pair.html`}), undefined);
+    assert.equal((await h.sendMessage(message, {id: EXT_ID, url: `chrome-extension://${EXT_ID}/pair.html`, tab: {id: 2}})).ok, true);
+    assert.equal(h.evalInContext('__asked'), 1);
 });

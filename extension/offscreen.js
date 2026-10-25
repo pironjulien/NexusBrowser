@@ -27,17 +27,34 @@ function scheduleReconnect(delayMs = 2000) {
     reconnectTimeout = setTimeout(connectWS, delayMs);
 }
 
+let connecting = false;
+let askAuth = false; // dernière tentative refusée : demander la méthode au service worker
+
 function connectWS() {
-    if (link && link.alive) return;
+    if ((link && link.alive) || connecting) return;
     if (reconnectTimeout) {
         clearTimeout(reconnectTimeout);
         reconnectTimeout = null;
     }
+    if (!askAuth) {
+        openLink("native");
+        return;
+    }
+    // Même méthode que le service worker (hôte natif, ou clé d'appairage s'il manque) : c'est lui qui prouve.
+    connecting = true;
+    toBackground({ bridgeAuth: true }).then((answer) => {
+        connecting = false;
+        if (!(link && link.alive)) openLink(answer === "paired" ? "paired" : "native");
+    });
+}
+
+function openLink(auth) {
     try {
         link = new globalThis.AgyBridgeLink({
             url: BRIDGE_WS_URL,
             role: "offscreen",
             extensionId: chrome.runtime.id,
+            auth,
             prove: async (args) => (await toBackground({ bridgeProve: args })) || { ok: false, error: "service worker injoignable" },
             onRequest: async (request) => {
                 const response = await toBackground({ request });
@@ -52,6 +69,8 @@ function connectWS() {
             onClose: (current) => {
                 if (current !== link) return;
                 link = null;
+                // Refus (hôte natif absent ou injoignable, clé d'appairage...) : le service worker redit la méthode.
+                askAuth = !!current.error;
                 scheduleReconnect(current.error ? 5000 : 2000);
             }
         });

@@ -159,6 +159,15 @@ points to the one-time install.
 - **Mutually authenticated bridge** (`nexus-browser/1`): HMAC proofs over both nonces, then every message signed
   with a per-connection key and a strict sequence number. HTTP requires `X-Nexus-Browser-Token` and refuses any
   browser origin.
+- **Pairing without the native host** (when it cannot be declared to Chrome, e.g. an app from the Microsoft Store whose
+  registry writes are virtualized): `scripts/pair-extension.ps1` asks the bridge for a single-use 256-bit secret
+  (valid 5 minutes, 5 wrong proofs end it, `POST /api/pair` with the bridge token) and opens
+  `chrome-extension://<id>/pair.html#<secret>`; the page clears the secret from its address, proves it both ways, and
+  both sides derive the extension's key from it and that handshake. The bridge keeps the key for that extension ID
+  (the announced ID must match the connection's origin), the extension keeps it as a non-extractable WebCrypto key in
+  its own IndexedDB (never in `chrome.storage`, which content scripts can read). Same proofs, session key and
+  signed messages as with the native host, which stays first whenever it is installed. Revoke:
+  `POST /api/pair/revoke`.
 - **Tab ownership**: every bridge client identifies itself (agent + session headers, forwarded by the bridge in the
   signed channel). A tab opened by `browser_new_tab` belongs to that session (`chrome.storage.session`); any page
   command on another tab (the user's, another agent's) is refused. A tab of the user only through

@@ -126,6 +126,7 @@ INSTALL_SCRIPTS = [
     "install.ps1",
     "scripts/guide-extension.ps1",
     "scripts/installer-hote-natif.ps1",
+    "scripts/pair-extension.ps1",
     "scripts/registre-reel.ps1",
     "scripts/runtime.ps1",
 ]

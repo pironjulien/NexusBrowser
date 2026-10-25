@@ -42,9 +42,10 @@
          * onRequest(request) -> réponse {data | error} d'une commande authentifiée ;
          * onStateChange(link) à chaque changement d'état ; onClose(link) une seule fois à la fermeture.
          */
-        constructor({ url, role, extensionId, prove, onRequest, onStateChange, onClose, WebSocketImpl }) {
+        constructor({ url, role, extensionId, auth, prove, onRequest, onStateChange, onClose, WebSocketImpl }) {
             this.url = url;
             this.role = role;
+            this.auth = auth || "native"; // "native" (hôte natif), "paired" (clé d'appairage) ou "pair" (appairage)
             this.extensionId = extensionId;
             this.prove = prove;
             this.onRequest = onRequest;
@@ -93,7 +94,9 @@
                 protocol: PROTOCOL,
                 client_nonce: this.clientNonce,
                 role: this.role,
-                extension_id: this.extensionId
+                extension_id: this.extensionId,
+                // Champ absent pour l'hôte natif : un pont antérieur à l'appairage reste compatible.
+                ...(this.auth === "native" ? {} : { auth: this.auth })
             }));
         }
 
@@ -120,7 +123,8 @@
                         server_nonce: message.server_nonce,
                         server_proof: message.server_proof,
                         role: this.role,
-                        extension_id: this.extensionId
+                        extension_id: this.extensionId,
+                        auth: this.auth
                     });
                 } catch (error) {
                     proof = { ok: false, error: error.message || String(error) };
@@ -188,7 +192,8 @@
             if (this.closed) return;
             this.error = reason;
             console.warn(`[NexusBrowser] Pont local refusé (${this.role}) : ${reason}`);
-            try { this.ws.close(1008, "NexusBrowser authentication failed"); } catch (_) {}
+            // Code 4008 : un navigateur refuse 1008 à un client (seuls 1000 et 3000-4999), la socket restait ouverte.
+            try { this.ws.close(4008, "NexusBrowser authentication failed"); } catch (_) {}
             this._closed();
         }
 
@@ -212,5 +217,66 @@
         }
     }
 
+    // Appairage sans hôte natif (native-host/bridge_pairing.py) ---------------------------------------------------
+    // La clé d'appairage est une clé WebCrypto NON extractible, gardée dans l'IndexedDB de l'origine de l'extension
+    // (jamais dans chrome.storage, lisible par les content scripts) : aucun script, pas même celui de l'extension, ne
+    // peut en relire les octets ; elle sert seulement à signer.
+    const SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
+    const DB_NAME = "nexus-browser";
+    const DB_STORE = "keys";
+    const PAIRED_KEY = "paired";
+
+    function hmacKey(text) {
+        return crypto.subtle.importKey("raw", encoder.encode(text), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+    }
+
+    async function digest(key, ...parts) {
+        return new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode([PROTOCOL, ...parts].join("\n"))));
+    }
+
+    function withStore(mode, action) {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(DB_NAME, 1);
+            request.onupgradeneeded = () => request.result.createObjectStore(DB_STORE);
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                const db = request.result;
+                const transaction = db.transaction(DB_STORE, mode);
+                const result = action(transaction.objectStore(DB_STORE));
+                transaction.oncomplete = () => { db.close(); resolve(result.result); };
+                transaction.onerror = () => { db.close(); reject(transaction.error); };
+            };
+        });
+    }
+
+    const Pairing = {
+        isSecret: (text) => SECRET_RE.test(String(text || "")),
+        secretKey: (secret) => hmacKey(secret),
+        load: () => withStore("readonly", (store) => store.get(PAIRED_KEY)).then((key) => key || null),
+        save: (key) => withStore("readwrite", (store) => store.put(key, PAIRED_KEY)),
+        clear: () => withStore("readwrite", (store) => store.delete(PAIRED_KEY)),
+
+        /** Preuves de la poignée de main avec une clé (même forme que la réponse de l'hôte natif). */
+        async prove(key, args) {
+            const parts = [args.client_nonce, args.server_nonce, args.role, args.extension_id];
+            const expected = await crypto.subtle.verify("HMAC", key, fromB64url(String(args.server_proof || "")),
+                encoder.encode([PROTOCOL, "server", ...parts].join("\n")));
+            if (!expected) {
+                return { ok: false, error: "le serveur du port 9224 ne prouve pas qu'il connaît la clé d'appairage : connexion refusée" };
+            }
+            return {
+                ok: true,
+                client_proof: b64url(await digest(key, "client", ...parts)),
+                session_key: b64url(await digest(key, "session", ...parts))
+            };
+        },
+
+        /** Clé durable dérivée du secret consommé et de sa poignée de main (comme bridge_pairing.paired_key). */
+        async derive(secretKey, clientNonce, serverNonce, extensionId) {
+            return hmacKey(b64url(await digest(secretKey, "paired", clientNonce, serverNonce, extensionId)));
+        }
+    };
+
     scope.AgyBridgeLink = BridgeLink;
+    scope.AgyPairing = Pairing;
 })(typeof globalThis !== "undefined" ? globalThis : self);
