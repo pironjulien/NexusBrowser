@@ -285,25 +285,49 @@ def fichier_compteurs() -> Path:
 
 def ecrire_compteurs(data: dict) -> None:
     """Compteurs pour le pad MX Keypad (case cochée dans la fenêtre de l'extension) : seul le nombre de mails non lus de
-    Gmail, écrit en local dans ~/.nexus/nexus-browser/compteurs.json ; décoché, le fichier est effacé. Un nombre hors
-    bornes ou d'un autre type est ignoré (null)."""
+    Gmail, écrit en local dans ~/.nexus/nexus-browser/compteurs.json, une entrée par profil Chrome (« sources », clé =
+    identifiant aléatoire du profil) ; décoché, l'entrée du profil est retirée, et le fichier effacé quand il n'en reste
+    aucune. Entrées de plus d'un jour retirées (profil supprimé). Un nombre hors bornes ou d'un autre type est ignoré
+    (null) ; un message sans identifiant valide (extension d'avant la 2.23.2) compte pour la source « defaut »."""
     fichier = fichier_compteurs()
+    source = data.get("source")
+    if not (isinstance(source, str) and re.fullmatch(r"[0-9a-f-]{36}", source)):
+        source = "defaut"
+    maintenant = datetime.now(timezone.utc)
     try:
-        if data.get("actif") is not True:
+        sources = {}
+        try:
+            lu = json.loads(fichier.read_text(encoding="utf-8"))
+            if isinstance(lu, dict) and isinstance(lu.get("sources"), dict):
+                sources = lu["sources"]
+        except (OSError, ValueError):
+            pass  # absent, illisible ou ancien format : repart de zéro
+        garde = {}
+        for cle, entree in sources.items():
+            try:
+                if (maintenant - datetime.fromisoformat(entree["at"])).total_seconds() < 86_400:
+                    garde[cle] = entree
+            except (KeyError, TypeError, ValueError):
+                pass
+        sources = garde
+        if data.get("actif") is True:
+            gmail = data.get("gmail")
+            if not (type(gmail) is int and 0 <= gmail <= 1_000_000):
+                gmail = None
+            raison = data.get("raison")
+            if not (
+                gmail is None and isinstance(raison, str) and re.fullmatch(r"deconnecte|reseau|http-\d{3}", raison)
+            ):
+                raison = None  # mot d'une liste fixe, seulement quand le nombre manque
+            sources[source] = {"gmail": gmail, "raison": raison, "at": maintenant.isoformat()}
+        else:
+            sources.pop(source, None)
+        if not sources:
             fichier.unlink(missing_ok=True)
             return
-        gmail = data.get("gmail")
-        if not (type(gmail) is int and 0 <= gmail <= 1_000_000):
-            gmail = None
-        raison = data.get("raison")
-        if not (gmail is None and isinstance(raison, str) and re.fullmatch(r"deconnecte|reseau|http-\d{3}", raison)):
-            raison = None  # mot d'une liste fixe, seulement quand le nombre manque
         fichier.parent.mkdir(parents=True, exist_ok=True)
         temporaire = fichier.with_suffix(".tmp")
-        temporaire.write_text(
-            json.dumps({"gmail": gmail, "raison": raison, "at": datetime.now(timezone.utc).isoformat()}),
-            encoding="utf-8",
-        )
+        temporaire.write_text(json.dumps({"sources": sources}), encoding="utf-8")
         os.replace(temporaire, fichier)
     except OSError as error:
         LOGGER.warning("Compteurs non écrits : %s", error)

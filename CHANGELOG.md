@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.23.2] - 2026-10-25
+
+### Fixed
+- Gmail unread counter with several Chrome profiles: each profile now has its own entry (a random identifier, nothing
+  personal) in `compteurs.json` (`{"sources": {...}}`), and the pad adds them up. Unticking the box in one profile
+  removes only that profile's entry; the file is deleted when none is left, and entries older than a day are dropped.
+- Unticking the box while the feed was being read could write the number back afterwards: each send is numbered and
+  the box is read again after the feed, so a late result is dropped.
+
 ## [2.23.1] - 2026-10-25
 
 ### Fixed

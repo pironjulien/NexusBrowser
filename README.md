@@ -230,8 +230,9 @@ to the author or to any third party.
 - **Gmail unread counter (off by default)**: a box in the toolbar popup, for the
   [MX Keypad AI Agents](https://github.com/pironjulien/mx-keypad-ai-agents) pad. When ticked, the extension reads
   Gmail's official unread feed once a minute in your own session (like a "Gmail checker" extension) and the bridge
-  writes only the number to `~/.nexus/nexus-browser/compteurs.json`: no sender, subject or content. Unticked, the file
-  is deleted.
+  writes only the number to `~/.nexus/nexus-browser/compteurs.json`, one entry per Chrome profile under a random
+  identifier: no sender, subject or content. Unticked, that profile's entry is removed (the file is deleted when none
+  is left).
 - **Journal**, under `%LOCALAPPDATA%\NexusJournal\browser\<agent>\<YYYY-MM>.jsonl` (or `NEXUS_JOURNAL_HOME`), shared
   format of the Nexus tools: one line per tool call with the calling AI, the action, the outcome, the duration, the
   technique, the registrable domain of the tab (`google.com`, never the address) and an error category from a fixed

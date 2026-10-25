@@ -329,15 +329,40 @@ function bridgeReady() {
 // de Gmail, lu une fois par minute dans le flux officiel de Gmail avec la session de ce Chrome, comme une extension
 // « Gmail Checker ». Seul ce nombre part au pont, en local : ni expéditeur, ni objet, ni contenu. Session fermée (Google
 // redirige vers sa connexion, page sans <fullcount>) : nombre inconnu (null). Décoché : le pont efface le fichier du compteur.
+// Chaque profil Chrome a sa propre source (identifiant aléatoire, sans rien de personnel) : le pont garde une entrée par
+// profil et le pad en fait la somme. Une lecture lancée avant une décoche ne réécrit pas le nombre après elle : chaque
+// envoi porte un numéro, et la case est relue après la lecture du flux.
 const COMPTEUR_GMAIL = "compteurGmail";
+const SOURCE_COMPTEURS = "sourceCompteurs";
 const FLUX_GMAIL = "https://mail.google.com/mail/feed/atom";
+let generationCompteurs = 0;
+
+async function sourceCompteurs() {
+    const lu = (await chrome.storage.local.get(SOURCE_COMPTEURS))[SOURCE_COMPTEURS];
+    if (typeof lu === "string" && /^[0-9a-f-]{36}$/.test(lu)) return lu;
+    const source = crypto.randomUUID();
+    await chrome.storage.local.set({ [SOURCE_COMPTEURS]: source });
+    return source;
+}
+
+async function caseCompteur() {
+    try {
+        return !!(await chrome.storage.local.get(COMPTEUR_GMAIL))[COMPTEUR_GMAIL];
+    } catch (_) {
+        return false;
+    }
+}
 
 async function envoyerCompteurs() {
     if (!bridgeLink || !bridgeLink.ready) return;
-    let actif = false;
+    const generation = ++generationCompteurs;
+    let source;
     try {
-        actif = !!(await chrome.storage.local.get(COMPTEUR_GMAIL))[COMPTEUR_GMAIL];
-    } catch (_) {}
+        source = await sourceCompteurs();
+    } catch (_) {
+        return;
+    }
+    let actif = await caseCompteur();
     let gmail = null;
     let raison = null; // nombre inconnu : pourquoi, en un mot d'une liste fixe (jamais de contenu)
     if (actif) {
@@ -350,7 +375,14 @@ async function envoyerCompteurs() {
             raison = "reseau";
         }
     }
-    if (bridgeLink && bridgeLink.ready) bridgeLink.send({ event: "compteurs", actif, gmail, raison, timestamp: Date.now() });
+    if (generation !== generationCompteurs) return; // un envoi plus récent (case décochée entre-temps) fait foi
+    if (actif && !(await caseCompteur())) {
+        actif = false; // décochée pendant la lecture du flux : rien n'est écrit
+        gmail = null;
+        raison = null;
+    }
+    if (generation !== generationCompteurs) return;
+    if (bridgeLink && bridgeLink.ready) bridgeLink.send({ event: "compteurs", source, actif, gmail, raison, timestamp: Date.now() });
 }
 
 
