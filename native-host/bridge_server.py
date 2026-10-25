@@ -428,7 +428,7 @@ async def send_command_to_chrome(action, params=None, timeout=15.0, client=None,
         chosen = target if target is not None and target in active_connections else select_target()
         if chosen is None:
             raise RuntimeError(
-                "No Chrome browser extension connected to Nexus Browser Bridge. Make sure the extension is active in Chrome."
+                "No Chrome browser extension connected to the NexusBrowser bridge. Make sure the extension is active in Chrome."
             )
         req_id = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()

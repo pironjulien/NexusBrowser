@@ -1190,7 +1190,7 @@ def preflight() -> None:
     except Exception as error:  # noqa: BLE001 - toute panne du pont est un échec de la validation réelle
         raise SystemExit(
             f"ÉCHEC : pont NexusBrowser ou extension Chrome injoignable ({error}). Ouvrir Chrome avec l'extension "
-            "Nexus Browser Bridge chargée (chrome://extensions), puis relancer."
+            "NexusBrowser chargée (chrome://extensions), puis relancer."
         ) from error
     version = (pong or {}).get("version")
     if version != expected:

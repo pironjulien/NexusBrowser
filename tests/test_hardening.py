@@ -198,7 +198,7 @@ def test_chrome_extra_args_whitelist_keeps_julien_flags_only():
 
 
 def test_extension_not_connected_is_reported_clearly(monkeypatch):
-    body = json.dumps({"success": False, "error": "No Chrome browser extension connected to Nexus Browser Bridge."})
+    body = json.dumps({"success": False, "error": "No Chrome browser extension connected to the NexusBrowser bridge."})
 
     def urlopen(request, timeout=None):
         raise urllib.error.HTTPError(bridge_client.API_URL, 503, "unavailable", Message(), io.BytesIO(body.encode()))

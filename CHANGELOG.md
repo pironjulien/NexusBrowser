@@ -5,6 +5,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.24.2] - 2026-10-25
+
+### Added
+- Chrome Web Store extension accepted: its ID (`fjapmaccbgdfneoccclmlpgknbbfkaco`, `store_id` in
+  `native-host/bridge_config.json`) is in `allowed_origins`, so the bridge and the native host accept it as well as
+  the unpacked one (a test checks both). `store_public`, false until the extension is published, then makes the
+  installer's last step open the store page ("Add to Chrome") instead of developer mode.
+
+### Changed
+- The extension is named "NexusBrowser" (was "Nexus Browser Bridge"), the public name, in Chrome and on the store;
+  messages naming it follow. The scheduled task keeps its name.
+
 ## [2.24.1] - 2026-10-25
 
 ### Added
@@ -869,7 +881,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.1...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.24.2...HEAD
+[2.24.2]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.2
 [2.24.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.1
 [2.24.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.0
 [2.23.5]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.5

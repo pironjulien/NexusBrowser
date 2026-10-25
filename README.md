@@ -52,7 +52,7 @@ bridge shared by several agents.
 
 | Folder | Role |
 | --- | --- |
-| `extension/` | Chrome MV3 extension "Nexus Browser Bridge": CDP actions, locators, network, dialogs, cross-origin iframes, exports, tab ownership |
+| `extension/` | Chrome MV3 extension "NexusBrowser": CDP actions, locators, network, dialogs, cross-origin iframes, exports, tab ownership |
 | `native-host/` | Local bridge (`bridge_server.py`: WebSocket 9224 for the extension, HTTP 9225 for the agents) and native host `com.nexus.browser_auth` |
 | `client/` | MCP server `nexus-browser` (`mcp_server.py`), authenticated transport (`bridge_client.py`), CLI (`browser_cli.py`), shared emergency stop |
 | `skills/`, `plugins/` | Skill (single source) and Antigravity plugin; `install.ps1` copies the skill into that plugin only |

@@ -1,6 +1,9 @@
 {
-  "description": "Origine de l'extension autorisée à ouvrir le pont local : identifiant fixe, tiré de la clé publique \"key\" de extension/manifest.json (le même sur tous les PC, quel que soit le dossier).",
+  "description": "Origines de l'extension autorisées à ouvrir le pont local et l'hôte natif. La première : identifiant fixe de l'extension non empaquetée, tiré de la clé publique \"key\" de extension/manifest.json (le même sur tous les PC, quel que soit le dossier). store_id : identifiant de l'extension sur le Chrome Web Store, ajouté à allowed_origins. store_public : true une fois l'extension publiée ; l'installeur guide alors vers la boutique au lieu du mode développeur.",
   "allowed_origins": [
-    "chrome-extension://blcgddmjdkobmgakjffjpgiicjlflgjf/"
-  ]
+    "chrome-extension://blcgddmjdkobmgakjffjpgiicjlflgjf/",
+    "chrome-extension://fjapmaccbgdfneoccclmlpgknbbfkaco/"
+  ],
+  "store_id": "fjapmaccbgdfneoccclmlpgknbbfkaco",
+  "store_public": false
 }

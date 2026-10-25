@@ -19,15 +19,25 @@ if (-not $chrome) {
     return
 }
 
-try { Set-Clipboard -Value $extension; $copied = ' (already copied: paste it with Ctrl+V)' } catch { $copied = '' }
-Start-Process -FilePath $chrome -ArgumentList 'chrome://extensions/'
+# Publiee sur le Chrome Web Store (store_public de bridge_config.json) : "Ajouter a Chrome", sans mode developpeur.
+$config = Get-Content (Join-Path $repositoryRoot 'native-host\bridge_config.json') -Raw | ConvertFrom-Json
+$storeId = if ($config.store_public) { $config.store_id } else { $null }
 Write-Host ''
-Write-Host 'Last step, once: load the NexusBrowser extension in Chrome.' -ForegroundColor Cyan
-Write-Host '  1. In the Chrome tab that just opened (chrome://extensions), turn on "Developer mode" (top right).'
-Write-Host '  2. Click "Load unpacked".'
-Write-Host "  3. Choose this folder$copied, then click ""Select Folder"":"
-Write-Host "     $extension"
-Write-Host '  (Tab not opened? Type chrome://extensions in the Chrome address bar.)'
+Write-Host 'Last step, once: add the NexusBrowser extension to Chrome.' -ForegroundColor Cyan
+if ($storeId) {
+    $page = "https://chromewebstore.google.com/detail/$storeId"
+    Start-Process -FilePath $chrome -ArgumentList $page
+    Write-Host '  In the Chrome Web Store tab that just opened, click "Add to Chrome", then "Add extension".'
+    Write-Host "  (Tab not opened? Go to $page)"
+} else {
+    try { Set-Clipboard -Value $extension; $copied = ' (already copied: paste it with Ctrl+V)' } catch { $copied = '' }
+    Start-Process -FilePath $chrome -ArgumentList 'chrome://extensions/'
+    Write-Host '  1. In the Chrome tab that just opened (chrome://extensions), turn on "Developer mode" (top right).'
+    Write-Host '  2. Click "Load unpacked".'
+    Write-Host "  3. Choose this folder$copied, then click ""Select Folder"":"
+    Write-Host "     $extension"
+    Write-Host '  (Tab not opened? Type chrome://extensions in the Chrome address bar.)'
+}
 
 if ($WaitSeconds -le 0) { return }
 Write-Host ''

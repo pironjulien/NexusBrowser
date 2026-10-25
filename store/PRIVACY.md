@@ -1,6 +1,6 @@
 # NexusBrowser privacy policy
 
-Applies to the Chrome extension "Nexus Browser Bridge" and the rest of NexusBrowser (local bridge, native host, MCP
+Applies to the Chrome extension "NexusBrowser" and the rest of NexusBrowser (local bridge, native host, MCP
 server). Last updated: 2026-10-25.
 
 ## In short

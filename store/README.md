@@ -11,20 +11,23 @@ python -B scripts/store_package.py --assets
 
 - `dist/nexus-browser-extension-<version>.zip`: `extension/` as Chrome loads it, without the manifest's `key` (the
   store signs the package with its own key). The store gives the extension **its own ID**, different from the
-  unpacked one (`blcgddmjdkobmgakjffjpgiicjlflgjf`): once it is known, add `chrome-extension://<store-id>/` to
-  `native-host/bridge_config.json` (`allowed_origins`), release, and `install.ps1` declares the native host for both.
+  unpacked one (`blcgddmjdkobmgakjffjpgiicjlflgjf`): `fjapmaccbgdfneoccclmlpgknbbfkaco`, already in
+  `native-host/bridge_config.json` (`store_id` and `allowed_origins`, a test checks both), so `install.ps1` declares
+  the native host for both IDs and the bridge accepts both. Once the extension is published, set `store_public` to
+  `true` and release: the installer's last step becomes "Add to Chrome" on the store page instead of developer mode.
+  Keep only one of the two installed in a Chrome profile (both would connect to the same bridge).
 - `store/assets/`: two screenshots 1280x800 and the small promo tile 440x280 (PNG); the 128x128 icon is
   `extension/icons/icon128.png`.
 
 ## Listing
 
-- **Name** (from the manifest): Nexus Browser Bridge
+- **Name** (from the manifest): NexusBrowser
 - **Summary** (from the manifest, 132 characters at most): Chrome bridge shared by Antigravity, Claude and Codex
   (NexusBrowser): each agent in its own background tabs.
 - **Category**: Developer Tools. **Language**: English.
 - **Homepage**: https://julienpiron.fr/nexusbrowser/ · **Support**: https://github.com/pironjulien/NexusBrowser/issues
-- **Privacy policy**: https://github.com/pironjulien/NexusBrowser/blob/main/store/PRIVACY.md
-- **Visibility**: Unlisted at first (reachable by its link, not in search), Public later.
+- **Privacy policy**: https://julienpiron.fr/en/nexusbrowser/confidentialite/ (from `store/PRIVACY.md`: tell the site session when it changes)
+- **Visibility**: Public. **Regions**: all. **Price**: free.
 
 ### Description
 

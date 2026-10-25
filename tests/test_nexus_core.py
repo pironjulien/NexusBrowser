@@ -73,7 +73,12 @@ def test_extension_id_is_fixed_by_its_public_key():
     digest = hashlib.sha256(base64.b64decode(extension["key"])).hexdigest()[:32]
     extension_id = "".join(chr(ord("a") + int(c, 16)) for c in digest)
     bridge_config = json.loads((NATIVE_HOST_DIR / "bridge_config.json").read_text(encoding="utf-8"))
-    assert bridge_config["allowed_origins"] == [f"chrome-extension://{extension_id}/"]
+    # Plus celle du Chrome Web Store, et rien d'autre, une fois l'extension publiée (store_id).
+    store_id = bridge_config["store_id"]
+    expected = [f"chrome-extension://{extension_id}/"] + ([f"chrome-extension://{store_id}/"] if store_id else [])
+    assert bridge_config["allowed_origins"] == expected
+    assert store_id is None or (re.fullmatch(r"[a-p]{32}", store_id) and store_id != extension_id)
+    assert bridge_config["store_public"] in (False, True) and (store_id or not bridge_config["store_public"])
 
 
 def test_install_registers_the_three_agents_under_their_own_name():

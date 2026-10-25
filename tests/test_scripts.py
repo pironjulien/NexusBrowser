@@ -67,7 +67,7 @@ def test_old_extension_is_reported_from_profile_preferences(tmp_path):
             "manifest": {"name": "Antigravity Browser Bridge"},
             "disable_reasons": [1],
         },
-        "blcgddmjdkobmgakjffjpgiicjlflgjf": {"manifest": {"name": "Nexus Browser Bridge"}},
+        "blcgddmjdkobmgakjffjpgiicjlflgjf": {"manifest": {"name": "NexusBrowser"}},
     }
     for profile in ("Default", "Profile 2", "System Profile"):
         (user_data / profile).mkdir(parents=True)

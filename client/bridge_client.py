@@ -312,7 +312,7 @@ def chrome_launch_args() -> list[str]:
 def launch_chrome() -> bool:
     """Relance Google Chrome normalement sur le profil Default, avec les drapeaux de NEXUS_CHROME_EXTRA_ARGS.
 
-    L'extension Nexus Browser Bridge doit y être installée et activée : Chrome stable n'accepte plus
+    L'extension NexusBrowser doit y être installée et activée : Chrome stable n'accepte plus
     --load-extension, ce chemin ne sert donc plus de relance. Vrai si le processus a été lancé (la connexion de
     l'extension est vérifiée ensuite par ensure_chrome_running).
     """
@@ -346,7 +346,7 @@ def ping_bridge() -> bool:
 
 
 EXTENSION_NOT_CONNECTED = (
-    "The Nexus Browser Bridge extension did not connect to the NexusBrowser bridge{detail}. Check that it is "
+    "The NexusBrowser extension did not connect to the NexusBrowser bridge{detail}. Check that it is "
     "installed and enabled in chrome://extensions on the Default profile (stable Chrome no longer accepts "
     "--load-extension: it must be loaded once from the repository's extension folder)."
 )
