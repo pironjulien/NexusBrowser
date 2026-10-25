@@ -21,7 +21,7 @@ const AGY_FEATURES = [
     "sensitive-field-masking", "cdp-reload-no-script", "ax-value-masking", "capture-screencast",
     "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree",
     "history-navigation-cdp", "full-page-capture", "opener-tabs-webnav",
-    "installer-reload", "tab-list-redaction", "download-ownership"
+    "installer-reload", "tab-list-redaction", "download-ownership", "gmail-counter"
 ];
 
 let attachedDebuggers = new Set();
@@ -328,9 +328,9 @@ function bridgeReady() {
 // Compteur pour le pad MX Keypad AI Agents (facultatif, coché dans la fenêtre de l'icône) : le nombre de mails non lus
 // de Gmail, lu une fois par minute dans le flux officiel de Gmail avec la session de ce Chrome, comme une extension
 // « Gmail Checker ». Seul ce nombre part au pont, en local : ni expéditeur, ni objet, ni contenu. Session fermée (Google
-// redirige vers sa connexion) : nombre inconnu (null). Décoché : le pont efface le fichier du compteur.
+// redirige vers sa connexion, page sans <fullcount>) : nombre inconnu (null). Décoché : le pont efface le fichier du compteur.
 const COMPTEUR_GMAIL = "compteurGmail";
-const FLUX_GMAIL = "https://mail.google.com/mail/u/0/feed/atom";
+const FLUX_GMAIL = "https://mail.google.com/mail/feed/atom";
 
 async function envoyerCompteurs() {
     if (!bridgeLink || !bridgeLink.ready) return;
@@ -339,14 +339,18 @@ async function envoyerCompteurs() {
         actif = !!(await chrome.storage.local.get(COMPTEUR_GMAIL))[COMPTEUR_GMAIL];
     } catch (_) {}
     let gmail = null;
+    let raison = null; // nombre inconnu : pourquoi, en un mot d'une liste fixe (jamais de contenu)
     if (actif) {
         try {
-            const reponse = await fetch(FLUX_GMAIL, { credentials: "include", cache: "no-store", redirect: "error" });
+            const reponse = await fetch(FLUX_GMAIL, { credentials: "include", cache: "no-store" });
             const nombre = reponse.ok ? (await reponse.text()).match(/<fullcount>(\d+)<\/fullcount>/i) : null;
             if (nombre) gmail = Number(nombre[1]);
-        } catch (_) {}
+            else raison = reponse.ok ? "deconnecte" : `http-${reponse.status}`;
+        } catch (_) {
+            raison = "reseau";
+        }
     }
-    if (bridgeLink && bridgeLink.ready) bridgeLink.send({ event: "compteurs", actif, gmail, timestamp: Date.now() });
+    if (bridgeLink && bridgeLink.ready) bridgeLink.send({ event: "compteurs", actif, gmail, raison, timestamp: Date.now() });
 }
 
 

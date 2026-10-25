@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.23.1] - 2026-10-25
+
+### Fixed
+- Gmail unread counter for the pad (new in 2.23.0) never got a number: the extension's content security policy only
+  allowed the local bridge (`connect-src`), so the request to Gmail's feed was blocked. `https://mail.google.com` is
+  added to `connect-src` (that origin only). The counter reads `https://mail.google.com/mail/feed/atom` and follows its
+  redirect; a signed-out session lands on a page without `<fullcount>`, so the count stays unknown.
+- When the number is unknown, the counter file says why, as one word of a fixed list (`deconnecte`, `reseau`,
+  `http-<code>`), never any mail content.
+- The counter is declared among the extension's features (`gmail-counter`).
+
 ## [2.23.0] - 2026-10-25
 
 ### Added
@@ -791,7 +802,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.23.0...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.23.1...HEAD
+[2.23.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.1
 [2.23.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.23.0
 [2.22.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.22.0
 [2.21.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.21.0

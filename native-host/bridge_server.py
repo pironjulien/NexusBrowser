@@ -24,6 +24,7 @@ import json
 import logging
 import math
 import os
+import re
 import socket
 import sys
 import uuid
@@ -294,10 +295,14 @@ def ecrire_compteurs(data: dict) -> None:
         gmail = data.get("gmail")
         if not (type(gmail) is int and 0 <= gmail <= 1_000_000):
             gmail = None
+        raison = data.get("raison")
+        if not (gmail is None and isinstance(raison, str) and re.fullmatch(r"deconnecte|reseau|http-\d{3}", raison)):
+            raison = None  # mot d'une liste fixe, seulement quand le nombre manque
         fichier.parent.mkdir(parents=True, exist_ok=True)
         temporaire = fichier.with_suffix(".tmp")
         temporaire.write_text(
-            json.dumps({"gmail": gmail, "at": datetime.now(timezone.utc).isoformat()}), encoding="utf-8"
+            json.dumps({"gmail": gmail, "raison": raison, "at": datetime.now(timezone.utc).isoformat()}),
+            encoding="utf-8",
         )
         os.replace(temporaire, fichier)
     except OSError as error:
