@@ -21,8 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   CI (a lock pointing to an unreachable host without cache, an installer failing after it stopped the bridge).
 
 ### Added
-- `NEXUS_PACK_AIS` (the Nexus pack's `-Only` / `-Skip`, e.g. `claude-code,codex`): only these AI apps are
-  configured, the others are not touched and reported as `skipped`; an unknown name is refused.
+- `NEXUS_PACK_TARGETS` (the Nexus pack's `-Only` / `-Skip`, e.g. `claude-code,codex`): only these AI apps are
+  configured, the others are not touched and reported as `skipped` (an empty list: none); an unknown name is refused.
 - Install without `irm | iex`: `get.ps1` and `get.ps1.sha256` are attached to every release, first in the README
   (download, check the SHA-256, right-click > Run with PowerShell); the window stays open when started from Explorer,
   also on an error.

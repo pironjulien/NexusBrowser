@@ -7,7 +7,7 @@ mcp_config.json. An entry of ours is replaced in place; an entry the user wrote 
 that already provides another server, is left alone. Nothing else in these files is touched; each file is written
 atomically after a backup next to the install's logs. Prints one line per client, and with NEXUS_PACK=1 a last
 "NEXUS_PACK_RESULT Claude Code=...; Codex=...; Antigravity=..." line for the Nexus pack.
-NEXUS_PACK_AIS (the pack's -Only / -Skip, e.g. "claude-code,codex"): only these AI apps are configured; the others are
+NEXUS_PACK_TARGETS (the pack's -Only / -Skip, e.g. "claude-code,codex"): only these AI apps are configured; the others are
 not touched at all and reported as skipped.
 """
 
@@ -35,13 +35,14 @@ PACK_AIS = {
 
 
 def pack_scope(value: str | None) -> set[str] | None:
-    """Clients to configure from NEXUS_PACK_AIS (None: every client found). Unknown names are refused."""
-    if value is None or not value.strip():
+    """Clients to configure from NEXUS_PACK_TARGETS, set by the pack (get-nexus.ps1): None when it is not set (every
+    client found), an empty set when it is empty (none). Unknown names are refused."""
+    if value is None:
         return None
     names = {part.strip().lower() for part in re.split(r"[,\s]+", value) if part.strip()}
     unknown = names - PACK_AIS.keys()
     if unknown:
-        raise ValueError(f"unknown AI app in NEXUS_PACK_AIS: {', '.join(sorted(unknown))}")
+        raise ValueError(f"unknown AI app in NEXUS_PACK_TARGETS: {', '.join(sorted(unknown))}")
     return {PACK_AIS[name] for name in names}
 
 
@@ -286,7 +287,7 @@ def main() -> int:
     backups = Path(args.backups)
     results: dict[str, str | None] = {}
     try:
-        scope = pack_scope(os.environ.get("NEXUS_PACK_AIS"))
+        scope = pack_scope(os.environ.get("NEXUS_PACK_TARGETS"))
     except ValueError as error:
         print(error)
         return 2
