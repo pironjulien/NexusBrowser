@@ -9,6 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the π icon is sent and the
   listing's 128 px icon is replaced by the π one.
 
+## [2.26.4] - 2026-10-26
+
+### Fixed
+- Infinite and lazy-loaded feeds now load in a background tab. `browser_scroll` scrolled, but the page stayed
+  hidden (`visibilityState` "hidden"): Chrome suspended rendering, `requestAnimationFrame` and
+  `IntersectionObserver`, so X, Reddit, LinkedIn or YouTube never fetched the next items. Scrolling now turns on
+  the tab's focus emulation first (as clicks already did), which makes the page visible and active without
+  selecting the tab or touching the user's window. Measured in a real Chrome, tab kept in the background: an X
+  profile went from 5 posts after 8 scrolls to 21, a Reddit feed from 3 posts after 6 scrolls to 24.
+
 ## [2.26.3] - 2026-10-26
 
 ### Added

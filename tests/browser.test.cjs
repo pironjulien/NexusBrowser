@@ -525,6 +525,16 @@ test('une simple lecture n\'émule jamais le focus', async () => {
     assert.equal(h.calls.filter(c => c.method === 'Emulation.setFocusEmulationEnabled').length, 0);
 });
 
+test('défilement : focus émulé avant, la page cachée redevient visible (fil infini en arrière-plan)', async () => {
+    const h = harness();
+    await h.run('scroll', {tabId: 1, direction: 'down', y: 1500});
+    await h.run('scroll', {tabId: 1, direction: 'down', y: 1500});
+    assert.equal(h.calls.filter(c => c.method === 'Emulation.setFocusEmulationEnabled').length, 1);
+    const focus = h.calls.findIndex(c => c.method === 'Emulation.setFocusEmulationEnabled');
+    const scroll = h.calls.findIndex(c => c.method === 'Runtime.evaluate' && /scrollBy/.test(c.params?.expression || ''));
+    assert.ok(focus >= 0 && scroll > focus);
+});
+
 test('hover dispatches mouseMoved CDP command and coordinates', async () => {
     const h = harness();
     const res = await h.run('hover', {tabId: 1, selector: 'button', timeoutMs: 50});

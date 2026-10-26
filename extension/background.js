@@ -2203,8 +2203,9 @@ async function pageHasFocus(target) {
 /**
  * Page d'un onglet en arrière-plan : Chrome y ignore les appuis de souris CDP tant qu'elle ne se croit pas active
  * (mesuré le 15/10 sur le vrai Chrome : page HTTP, mouseMoved reçu mais mousePressed/Released perdus, aucun
- * pointerdown ; émulation du focus activée → clic de confiance reçu). Activée seulement avant une action de souris,
- * jamais sur une simple lecture ; levée par Chrome au détachement du débogueur.
+ * pointerdown ; émulation du focus activée → clic de confiance reçu). Elle rend aussi la page visible (rendu et
+ * chargement paresseux repris). Activée seulement avant une action de souris, de clavier ou un défilement, jamais sur
+ * une simple lecture ; levée par Chrome au détachement du débogueur.
  */
 async function ensureFocusEmulation(target) {
     if (!target?.tabId || focusEmulatedTabs.has(sessionKey(target))) return;
@@ -4391,6 +4392,11 @@ async function typeKeys(params) {
 
 async function scrollPage(params = {}) {
     let tabId = await resolveTargetTab(params);
+    // Onglet en arrière-plan : document caché, rendu et requestAnimationFrame suspendus, IntersectionObserver muet,
+    // donc un fil infini (X, Reddit, LinkedIn, YouTube) ne charge plus la suite (mesuré le 26/10 sur x.com : 5 posts
+    // sur 8 défilements). L'émulation du focus rend la page visible et active sans toucher à l'onglet ni à la fenêtre
+    // de l'utilisateur (même mesure : visibilityState "visible", 21 posts ; Reddit : 3 → 24).
+    await ensureFocusEmulation(await ensureDebugger(tabId));
 
     const sign = params.direction === "up" ? -1 : 1;
     const dy = sign * Math.abs(params.y !== undefined && params.y !== null ? Number(params.y) : 500);

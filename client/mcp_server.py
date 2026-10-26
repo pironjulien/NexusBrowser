@@ -1299,7 +1299,8 @@ def browser_eval(script: str, *, tab_id: TabId) -> str:
 
 @browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "Scroll"))
 def browser_scroll(direction: str = "down", y: int = 400, *, tab_id: TabId) -> str:
-    """Scrolls the web page by y pixels down (down) or up (up)."""
+    """Scrolls the web page by y pixels down (down) or up (up). A background tab renders while scrolled: lazy and
+    infinite lists (X, Reddit, YouTube...) keep loading."""
     return _call_bridge("scroll", {"direction": direction, "y": y, "tab_id": tab_id})
 
 
