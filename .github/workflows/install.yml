@@ -124,6 +124,7 @@ jobs:
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
           if ($LASTEXITCODE -eq 0) { throw 'failing installer: the update should have failed' }
           Assert-Working 'failing installer'
+          exit 0  # the step's result is the assertions above, not the expected failure code of the last get.ps1
 
   pack:
     # The Nexus pack (get-nexus.ps1) runs get.ps1 with NEXUS_PACK=1 on a clean Windows: no question, no wait, no window,
