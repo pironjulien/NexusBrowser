@@ -9,6 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the Nexus family icon is
   sent and the listing's 128 px icon is replaced by `extension/icons/icon128.png`.
 
+## [2.26.7] - 2026-10-27
+
+### Changed
+- Small icons (Chrome toolbar 16 and 32 px, popup logo shown at 26 px, spinning working indicator) are the
+  julienpiron.fr medallion cut round (`docs/assets/nexusbrowser-round.svg`, transparent corners) instead of the window
+  pictogram alone, which is no longer shown anywhere; 48 px and up keep the full medallion. `notes/icons.mjs` names
+  the variant of each icon.
+
 ## [2.26.6] - 2026-10-26
 
 ### Changed
