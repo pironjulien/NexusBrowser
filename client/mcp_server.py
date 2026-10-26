@@ -194,10 +194,8 @@ def _serve_http(port: int) -> None:
 TabId = Annotated[
     int,
     Field(
-        description=(
-            "Tab of THIS agent session (required): the id returned by browser_new_tab, or a user tab adopted with "
-            "browser_adopt_tab. Any other tab is refused by the extension."
-        )
+        # Une phrase : la règle (onglets de cette session seulement, adoption) est dans les instructions du serveur.
+        description="Your tab's id (from browser_new_tab, or a tab adopted with browser_adopt_tab)."
     ),
 ]
 Confirm = Annotated[
@@ -701,30 +699,24 @@ def browser_click(
     confirm: Confirm = False,
     accord: Accord = "",
 ) -> str:
-    """Clicks an element with a real CDP mouse click (isTrusted events), tab left in the background.
+    """Real CDP mouse click (trusted events) on an element; the tab stays in the background.
 
-    The element is scrolled to the center of the view; the clicked point must hit the element itself (not an
-    overlay), otherwise an explicit error and no click elsewhere. Crosses Shadow DOM, same-origin and cross-origin
-    iframes (frame field of the response). Auto-waits up to timeout_ms.
-    Targeting, one of:
-    - locator (takes precedence): Playwright-inspired role and label locator:
-      {"role": "button", "name": "Submit"} (explicit or implicit ARIA role: button, link, textbox, checkbox, radio,
-      combobox, heading, listitem, tab, menuitem, option...; accessible name: aria-labelledby, aria-label, <label>,
-      alt/title, text), {"label": "Email"}, {"text": "Continue"}, {"placeholder": "Search"}, {"testId": "submit"};
-      also altText, title, hasText. Options: exact (default false = case-insensitive substring; true = whole text;
-      "/pattern/i" = regex), nth (0 first, -1 last), includeHidden, checked, disabled, expanded, pressed, selected,
-      level. Strict: several matches without nth -> error listing the candidates; none -> clear error. Visible
-      elements only by default.
-    - mark: mark number from browser_interactive_map (e.g. mark=2)
-    - selector: standard CSS selector or mark (e.g. "#2", "button.primary")
-    - text: search by visible text label (e.g. "Submit")
-    - index: index when several elements match the same selector (default 0)
-    - button: "left" (default), "right" (context menu) or "middle"; click_count: 2 for a double click
-    Response: method ("cdp", or "js_fallback" if the debugger is unavailable) and trusted_click (a trusted click
-    reached the element; null if not read back, e.g. after a navigation).
-    Outward click (the control says send, pay, order, publish, call..., or Submit on a form carrying entered data):
-    refused with a one-time accord token bound to this exact action; resend with confirm=true and accord=<token>
-    only after the user's explicit yes.
+    The element is scrolled to the view center and the click must land on it (not on an overlay), else an explicit
+    error and no click. Crosses Shadow DOM and iframes, cross-origin included (frame in the response). Waits up to
+    timeout_ms.
+    Target, one of: locator (first), mark (from browser_interactive_map), selector (CSS; "#2" = mark 2), text
+    (visible label); index picks among several matches of a selector.
+    locator: {"role": "button", "name": "Submit"} (explicit or implicit ARIA role, accessible name), {"label": ...},
+    {"text": ...}, {"placeholder": ...}, {"testId": ...}, also altText, title, hasText. Options: exact (false:
+    case-insensitive substring; true: whole text; "/re/i": regex), nth (0 first, -1 last), includeHidden (visible
+    elements only otherwise), checked, disabled, expanded, pressed, selected, level. Several matches without nth:
+    error listing the candidates.
+    button: "left", "right" (context menu) or "middle"; click_count=2: double click.
+    Returns method ("cdp", or "js_fallback" without the debugger) and trusted_click (null if not read back, e.g.
+    after a navigation).
+    Outward click (send, pay, order, publish, call..., Submit of a form carrying entered data): refused with a
+    one-time accord token for this exact action; resend with confirm=true and accord=<token> only after the user's
+    explicit yes.
     """
     params: dict = {
         "tab_id": tab_id,
@@ -764,19 +756,17 @@ def browser_fill(
     confirm: Confirm = False,
     accord: Accord = "",
 ) -> str:
-    """Types text with real keyboard events (trusted typing) into an input, textarea or contenteditable (rich editors
-    such as Gmail, Notion), in the main frame or an iframe (cross-origin included).
+    """Types text with trusted keyboard events into an input, textarea or contenteditable (rich editors such as
+    Gmail, Notion), in the page or an iframe (cross-origin included).
 
-    Flow: focus by a real CDP click on the field (or DOM focus); replace=True: real Ctrl+A then text
-    (Input.insertText: trusted beforeinput/input); replace=False: append at the end; per_key=True: key by key
-    (trusted keydown/keyup, slower); keys: keys or shortcuts sent afterwards (["Enter"], ["Control+Enter"],
-    ["Tab"]). The value is read back: verified (true/false), value ("[masked value]" for a password, a one-time code
-    or a bank card), trusted_input.
-    mode: "auto" (React native setter fallback, reported as method="native_setter_fallback", only if typing is
-    impossible or had no effect), "trusted" (never a fallback), "setter" (legacy path, synthetic events).
-    Targeting: locator (see browser_click), mark, selector ("#3" = mark); none = the focused field.
-    keys that submit (Enter, Control+Enter...) toward an outward button of the field's form (send, pay, order...):
-    accord required, as for browser_click (the typed value is part of the approved action).
+    Focuses the field with a real click; replace=True selects all then types, False appends; per_key=True types key
+    by key (slower); keys: keys or shortcuts sent afterwards (["Enter"], ["Control+Enter"], ["Tab"]). Read back:
+    verified, value ("[masked value]" for a password, a one-time code or a bank card), trusted_input.
+    mode: "auto" (React setter fallback only if typing was impossible or had no effect, reported as
+    method="native_setter_fallback"), "trusted" (never a fallback), "setter" (synthetic events).
+    Target: locator (see browser_click), mark or selector ("#3" = mark 3); none: the focused field.
+    keys that submit toward an outward button of the field's form (send, pay, order...): accord required as for
+    browser_click (the typed value is part of the approved action).
     """
     params: dict = {
         "value": value,
@@ -1596,13 +1586,12 @@ def browser_drag_and_drop(
     confirm: Confirm = False,
     accord: Accord = "",
 ) -> str:
-    """Performs a real CDP mouse drag and drop (pressed, moves with the button down, released) or moves a slider
-    between two targets (locators, selectors, mark numbers or viewport {x, y} coordinates). The emergency stop
-    interrupts a drag in progress (button released).
+    """Real CDP mouse drag and drop (press, move with the button down, release), sliders included, between two
+    targets: locators, selectors, marks or viewport {x, y}. The emergency stop releases a drag in progress.
 
-    Response: method ("cdp", "cdp+html5_fallback" if no trusted drop happened on a draggable source, or
-    "js_fallback"), drop_events, trusted_drop and trusted_drag. A drag whose source or destination says send, pay,
-    publish... (e.g. "Slide to pay"): accord required, as for browser_click. Bare coordinates are not read."""
+    Returns method ("cdp", "cdp+html5_fallback" without a trusted drop on a draggable source, or "js_fallback"),
+    drop_events, trusted_drop, trusted_drag. Source or destination saying send, pay, publish... ("Slide to pay"):
+    accord required as for browser_click; bare coordinates are not read."""
     targets = [
         target
         for target in (

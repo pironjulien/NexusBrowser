@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the π icon is sent and the
   listing's 128 px icon is replaced by the π one.
 
+## [2.26.2] - 2026-10-26
+
+### Changed
+- Lighter tool list for the AI app, same names, parameters, schemas and behavior: `tab_id` is described in one
+  sentence on the 42 tools that take it (the rule, this session's tabs only, stays in the server instructions), and
+  the descriptions of `browser_click`, `browser_fill` and `browser_drag_and_drop` are tightened without dropping
+  what the model needs. `tools/list`: 68,501 to 64,033 characters (compact JSON), 16,355 to 15,492 tokens
+  (o200k_base).
+
 ## [2.26.1] - 2026-10-26
 
 ### Fixed
@@ -991,7 +1000,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.26.1...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.26.2...HEAD
+[2.26.2]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.2
 [2.26.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.1
 [2.26.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.0
 [2.25.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.25.0
