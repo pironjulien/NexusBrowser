@@ -9,6 +9,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the π icon is sent and the
   listing's 128 px icon is replaced by the π one.
 
+## [2.26.1] - 2026-10-26
+
+### Fixed
+- A failed update keeps the working version. `get.ps1` prepares the new version beside the current one
+  (`app.next`) and installs its Python dependencies once in a throwaway environment before changing anything: a
+  failed download or an unavailable dependency leaves the install untouched. Each folder is then switched by a single
+  rename; if the installation fails, the previous folder comes back, is installed again and its bridge restarted.
+  `install.ps1` deferred by an agent at work now exits with code 3, and only the folders go back. Tested with
+  injected faults: locally (unavailable dependency, failing installer, deferral) and on a fresh Windows in the public
+  CI (a lock pointing to an unreachable host without cache, an installer failing after it stopped the bridge).
+
+### Added
+- `NEXUS_PACK_AIS` (the Nexus pack's `-Only` / `-Skip`, e.g. `claude-code,codex`): only these AI apps are
+  configured, the others are not touched and reported as `skipped`; an unknown name is refused.
+- Install without `irm | iex`: `get.ps1` and `get.ps1.sha256` are attached to every release, first in the README
+  (download, check the SHA-256, right-click > Run with PowerShell); the window stays open when started from Explorer,
+  also on an error.
+- Chrome Web Store, prepared and not submitted: `store/SINGLE_PURPOSE.md` (the single purpose and the optional Gmail
+  counter, a reply to paste) and `scripts/store_package.py --without-gmail-counter` (the same package without the
+  counter: no checkbox, never read, `https://mail.google.com` out of the CSP), in case Google objects. The version
+  under review is unchanged.
+
 ## [2.26.0] - 2026-10-26
 
 ### Added
@@ -969,7 +991,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.26.0...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.26.1...HEAD
+[2.26.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.1
 [2.26.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.0
 [2.25.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.25.0
 [2.24.6]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.24.6

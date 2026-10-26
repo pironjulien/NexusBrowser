@@ -357,6 +357,9 @@ function bridgeReady() {
 // profil et le pad en fait la somme. Une lecture lancée avant une décoche ne réécrit pas le nombre après elle : chaque
 // envoi porte un numéro, et la case est relue après la lecture du flux.
 const COMPTEUR_GMAIL = "compteurGmail";
+// Faux dans la variante du Chrome Web Store sans compteur (scripts/store_package.py --without-gmail-counter) : ni case,
+// ni lecture de Gmail, ni mail.google.com dans la CSP.
+const COMPTEUR_GMAIL_DISPONIBLE = true;
 const SOURCE_COMPTEURS = "sourceCompteurs";
 const FLUX_GMAIL = "https://mail.google.com/mail/feed/atom";
 let generationCompteurs = 0;
@@ -370,6 +373,7 @@ async function sourceCompteurs() {
 }
 
 async function caseCompteur() {
+    if (!COMPTEUR_GMAIL_DISPONIBLE) return false;
     try {
         return !!(await chrome.storage.local.get(COMPTEUR_GMAIL))[COMPTEUR_GMAIL];
     } catch (_) {

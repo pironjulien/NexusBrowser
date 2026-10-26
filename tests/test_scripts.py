@@ -3,6 +3,7 @@ nexus-browser chez Antigravity, ancienne extension dans un profil Chrome (lu seu
 résidus de l'ancien pont. Aucun vrai fichier de Julien n'est lu ni écrit."""
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -195,3 +196,76 @@ def test_get_reads_the_latest_tag_without_the_github_api(tmp_path):
             run.stderr,
         )  # aucun avertissement de secours
         assert re.fullmatch(r"v\d+\.\d+\.\d+", lines[0]), (shell, lines)
+
+
+FAKE_INSTALL = """param([switch]$SkipTests, [switch]$Register)
+$version = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'VERSION') -Raw).Trim()
+Add-Content -LiteralPath $env:FAKE_LOG -Value "install $version"
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'FAIL_INSTALL')) { exit 1 }
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'DEFER_INSTALL')) { exit 3 }
+"""
+
+
+@pytest.mark.skipif(shutil.which("powershell") is None, reason="Windows PowerShell 5.1")
+def test_get_switches_atomically_and_restores_the_working_version(tmp_path):
+    """get.ps1 : nouvelle version préparée à côté, dépendances vérifiées avant toute bascule, bascule par renommage,
+    restauration réelle si l'installation échoue (panne injectée : dépendance indisponible, installeur en échec,
+    installation différée). uv et install.ps1 factices, LOCALAPPDATA jetable, aucune vraie tâche touchée."""
+    fakebin = tmp_path / "bin"
+    fakebin.mkdir()
+    # uv factice : « sync ... --project <dossier> » échoue si le dossier contient FAIL_SYNC (dépendance indisponible).
+    (fakebin / "uv.cmd").write_text(
+        '@echo off\r\nif exist "%~8\\FAIL_SYNC" exit /b 1\r\nexit /b 0\r\n', encoding="ascii"
+    )
+    log = tmp_path / "install.log"
+    local = tmp_path / "local"
+    app = local / "NexusBrowser" / "app"
+    env = {
+        **os.environ,
+        "LOCALAPPDATA": str(local),
+        "PATH": f"{fakebin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_LOG": str(log),
+        "NEXUS_BROWSER_BRIDGE_TASK": "Nexus Browser Test Task That Does Not Exist",
+    }
+
+    def release(version: str, *markers: str) -> Path:
+        source = tmp_path / f"src-{version}-{'-'.join(markers) or 'ok'}"
+        source.mkdir()
+        (source / "VERSION").write_text(version + "\n", encoding="ascii")
+        (source / "install.ps1").write_text(FAKE_INSTALL, encoding="ascii")
+        for marker in markers:
+            (source / marker).write_text("", encoding="ascii")
+        return source
+
+    def get(source: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(REPO_ROOT / "get.ps1")],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env={**env, "NEXUS_BROWSER_SOURCE": str(source)},
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+    def state() -> tuple[str, list[str], list[str]]:
+        installs = log.read_text(encoding="utf-8").split() if log.exists() else []
+        folders = sorted(p.name for p in (local / "NexusBrowser").iterdir())
+        return (app / "VERSION").read_text(encoding="ascii").strip(), installs[1::2], folders
+
+    assert get(release("1.0.0")).returncode == 0
+    assert state() == ("1.0.0", ["1.0.0"], ["app"])
+
+    run = get(release("2.0.0", "FAIL_SYNC"))  # dépendance indisponible : rien ne bouge, rien n'est installé
+    assert run.returncode != 0 and "nothing was changed" in run.stdout + run.stderr
+    assert state() == ("1.0.0", ["1.0.0"], ["app"])
+
+    run = get(release("2.0.0", "FAIL_INSTALL"))  # installeur en échec : version précédente remise et réinstallée
+    assert run.returncode != 0 and "previous version is restored" in run.stdout + run.stderr
+    assert state() == ("1.0.0", ["1.0.0", "2.0.0", "1.0.0"], ["app"])
+
+    run = get(release("2.0.0", "DEFER_INSTALL"))  # différée (agent au travail) : dossiers remis, rien réinstallé
+    assert run.returncode != 0 and "deferred" in run.stdout + run.stderr
+    assert state() == ("1.0.0", ["1.0.0", "2.0.0", "1.0.0", "2.0.0"], ["app"])
+
+    assert get(release("2.0.0")).returncode == 0
+    assert state() == ("2.0.0", ["1.0.0", "2.0.0", "1.0.0", "2.0.0", "2.0.0"], ["app"])

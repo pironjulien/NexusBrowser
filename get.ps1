@@ -9,6 +9,23 @@
 # exit code 0 on success; a last "NEXUS_PACK_RESULT ..." line; the pack shows the guide itself at the end:
 #   & "$env:LOCALAPPDATA\NexusBrowser\app\scripts\guide-extension.ps1" -WaitSeconds 0
 $ErrorActionPreference = 'Stop'
+# Started from Explorer (right click > Run with PowerShell): the window would close at once, before the result or an
+# error could be read. Never under the pack or `irm | iex`.
+function Test-StartedFromExplorer {
+    if (-not $PSCommandPath -or $env:NEXUS_PACK -eq '1') { return $false }
+    $parent = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction SilentlyContinue).ParentProcessId
+    return [bool]($parent -and (Get-Process -Id $parent -ErrorAction SilentlyContinue).ProcessName -eq 'explorer')
+}
+function Wait-IfStartedFromExplorer {
+    if (Test-StartedFromExplorer) { Read-Host 'Press Enter to close this window' | Out-Null }
+}
+trap {
+    if (Test-StartedFromExplorer) {
+        Write-Host $_ -ForegroundColor Red
+        Read-Host 'Press Enter to close this window' | Out-Null
+    }
+    break
+}
 $ProgressPreference = 'SilentlyContinue'  # Invoke-WebRequest is many times slower with its progress bar
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
@@ -65,12 +82,67 @@ if ($env:NEXUS_BROWSER_SOURCE) {
     $source = (Get-ChildItem -LiteralPath $download -Directory | Select-Object -First 1).FullName
 }
 
-# Mirror into the stable folder (files of an older version that no longer exist are removed).
-& robocopy.exe $source $app /MIR /NFL /NDL /NJH /NJS /NP /XD .git | Out-Null
-if ($LASTEXITCODE -ge 8) { throw "Copy to $app failed (robocopy $LASTEXITCODE)." }
-Get-ChildItem -LiteralPath $app -Recurse -File | Unblock-File
+# The new version is prepared beside the working one (app.next) and its Python dependencies are installed once in a
+# throwaway environment: a failed download or an unavailable dependency changes nothing. Then each folder is switched
+# by a single rename, and a failed installation puts the previous folder back, installs it again and restarts its
+# bridge. The folder name stays the same, so Chrome keeps the extension.
+$next = Join-Path $root 'app.next'
+$previous = Join-Path $root 'app.previous'
+$failed = Join-Path $root 'app.failed'
+foreach ($leftover in $next, $failed) {
+    if (Test-Path -LiteralPath $leftover) { Remove-Item -LiteralPath $leftover -Recurse -Force }
+}
+& robocopy.exe $source $next /MIR /NFL /NDL /NJH /NJS /NP /XD .git | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "Copy to $next failed (robocopy $LASTEXITCODE)." }
+Get-ChildItem -LiteralPath $next -Recurse -File | Unblock-File
 if (-not $env:NEXUS_BROWSER_SOURCE) { Remove-Item -LiteralPath (Join-Path $root 'download') -Recurse -Force }
+
+Write-Host 'Checking that every Python dependency of this version can be installed...'
+$check = Join-Path $root 'venv.check'
+$savedEnvironment = $env:UV_PROJECT_ENVIRONMENT
+$env:UV_PROJECT_ENVIRONMENT = $check
+& uv sync --frozen --all-groups --quiet --python 3.14 --project $next
+$checkCode = $LASTEXITCODE
+if ($null -eq $savedEnvironment) { Remove-Item Env:UV_PROJECT_ENVIRONMENT } else { $env:UV_PROJECT_ENVIRONMENT = $savedEnvironment }
+if (Test-Path -LiteralPath $check) { Remove-Item -LiteralPath $check -Recurse -Force }
+if ($checkCode) {
+    Remove-Item -LiteralPath $next -Recurse -Force
+    throw "The Python dependencies of this version cannot be installed (uv exit code $checkCode): nothing was changed."
+}
+
+$hadApp = Test-Path -LiteralPath $app
+if (Test-Path -LiteralPath $previous) { Remove-Item -LiteralPath $previous -Recurse -Force }
+if ($hadApp) {
+    try {
+        Rename-Item -LiteralPath $app -NewName 'app.previous'
+    } catch {
+        Remove-Item -LiteralPath $next -Recurse -Force
+        throw "The folder $app is in use ($($_.Exception.Message)): nothing was changed. Close what uses it and try again."
+    }
+}
+Rename-Item -LiteralPath $next -NewName 'app'
 
 $shell = (Get-Process -Id $PID).Path  # the same PowerShell that runs this script
 & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $app 'install.ps1') -SkipTests -Register
-if ($LASTEXITCODE) { throw "NexusBrowser installation failed (see above). Log: $HOME\.nexus\nexus-browser\install.log" }
+$installCode = $LASTEXITCODE
+if ($installCode -and $hadApp) {
+    Rename-Item -LiteralPath $app -NewName 'app.failed'
+    Rename-Item -LiteralPath $previous -NewName 'app'
+    if ($installCode -eq 3) {
+        # Deferred by install.ps1 before it stopped anything (an agent drives tabs): the folders alone go back.
+        Remove-Item -LiteralPath $failed -Recurse -Force -ErrorAction SilentlyContinue
+        throw 'Update deferred: an agent is working in Chrome. The current version is kept; run this again later.'
+    }
+    Write-Warning "The installation failed (exit code $installCode): restoring the previous version."
+    & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $app 'install.ps1') -SkipTests -Register
+    $restoreCode = $LASTEXITCODE
+    $bridgeTask = if ($env:NEXUS_BROWSER_BRIDGE_TASK) { $env:NEXUS_BROWSER_BRIDGE_TASK } else { 'Nexus Browser Bridge' }
+    if (Get-ScheduledTask -TaskName $bridgeTask -ErrorAction SilentlyContinue) { Start-ScheduledTask -TaskName $bridgeTask }
+    Remove-Item -LiteralPath $failed -Recurse -Force -ErrorAction SilentlyContinue
+    if ($restoreCode) { throw "The update failed and so did restoring the previous version (exit code $restoreCode). Log: $HOME\.nexus\nexus-browser\install.log" }
+    throw "The update failed; the previous version is restored and its bridge restarted. Log: $HOME\.nexus\nexus-browser\install.log"
+}
+if ($installCode) { throw "NexusBrowser installation failed (see above). Log: $HOME\.nexus\nexus-browser\install.log" }
+if (Test-Path -LiteralPath $previous) { Remove-Item -LiteralPath $previous -Recurse -Force }
+
+Wait-IfStartedFromExplorer

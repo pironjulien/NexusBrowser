@@ -7,6 +7,8 @@ mcp_config.json. An entry of ours is replaced in place; an entry the user wrote 
 that already provides another server, is left alone. Nothing else in these files is touched; each file is written
 atomically after a backup next to the install's logs. Prints one line per client, and with NEXUS_PACK=1 a last
 "NEXUS_PACK_RESULT Claude Code=...; Codex=...; Antigravity=..." line for the Nexus pack.
+NEXUS_PACK_AIS (the pack's -Only / -Skip, e.g. "claude-code,codex"): only these AI apps are configured; the others are
+not touched at all and reported as skipped.
 """
 
 from __future__ import annotations
@@ -23,6 +25,24 @@ from datetime import datetime
 from pathlib import Path
 
 NAME = "nexus-browser"
+# Names of the AI apps as the Nexus pack gives them (get-nexus.ps1 -Only / -Skip) -> client shown in the summary.
+PACK_AIS = {
+    "claude-code": "Claude Code",
+    "claude-desktop": "Claude Desktop",
+    "codex": "Codex",
+    "antigravity": "Antigravity",
+}
+
+
+def pack_scope(value: str | None) -> set[str] | None:
+    """Clients to configure from NEXUS_PACK_AIS (None: every client found). Unknown names are refused."""
+    if value is None or not value.strip():
+        return None
+    names = {part.strip().lower() for part in re.split(r"[,\s]+", value) if part.strip()}
+    unknown = names - PACK_AIS.keys()
+    if unknown:
+        raise ValueError(f"unknown AI app in NEXUS_PACK_AIS: {', '.join(sorted(unknown))}")
+    return {PACK_AIS[name] for name in names}
 
 
 def entry(python: str, server: str, agent: str) -> dict:
@@ -244,7 +264,13 @@ def short(result: str | None) -> str:
     """One word per client for the Nexus pack's summary line."""
     if result is None:
         return "absent"
-    for prefix, word in (("failed", "failed"), ("kept", "kept"), ("provided by", "plugin"), ("plugin", "plugin")):
+    for prefix, word in (
+        ("skipped", "skipped"),
+        ("failed", "failed"),
+        ("kept", "kept"),
+        ("provided by", "plugin"),
+        ("plugin", "plugin"),
+    ):
         if result.startswith(prefix):
             return word
     return "declared"
@@ -259,14 +285,26 @@ def main() -> int:
     home = Path.home()
     backups = Path(args.backups)
     results: dict[str, str | None] = {}
+    try:
+        scope = pack_scope(os.environ.get("NEXUS_PACK_AIS"))
+    except ValueError as error:
+        print(error)
+        return 2
+    skipped = "skipped (not in the Nexus pack's list)"
     for client, declare in (("Claude Code", claude_code), ("Codex", codex), ("Antigravity", antigravity)):
+        if scope is not None and client not in scope:
+            results[client] = skipped
+            continue
         try:
             results[client] = declare(home, args.python, args.server, backups)
         except (OSError, ValueError) as error:  # unreadable file (JSON or TOML): left as it is
             results[client] = f"failed: {error}"
     try:
-        for index, result in enumerate(claude_desktop(home, args.python, args.server, backups)):
-            results["Claude Desktop" + (f" ({index + 1})" if index else "")] = result
+        if scope is not None and "Claude Desktop" not in scope:
+            results["Claude Desktop"] = skipped
+        else:
+            for index, result in enumerate(claude_desktop(home, args.python, args.server, backups)):
+                results["Claude Desktop" + (f" ({index + 1})" if index else "")] = result
     except (OSError, ValueError) as error:
         results["Claude Desktop"] = f"failed: {error}"
     found = False

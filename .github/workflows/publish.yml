@@ -111,8 +111,9 @@ jobs:
       - run: ./mcp-publisher publish server.json
 
   mcpb:
-    # Claude Desktop extension (MCPB, server type "uv": the host installs this exact version from PyPI), attached to
-    # the release under a fixed name so that releases/latest/download/nexus-browser.mcpb always points to it.
+    # Claude Desktop extension (MCPB, server type "uv": the host installs this exact version from PyPI) and get.ps1 with
+    # its SHA-256, attached to the release under fixed names so that releases/latest/download/<name> always points to
+    # them.
     needs: publish
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
@@ -140,3 +141,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$TAG" nexus-browser.mcpb --clobber --repo "$GITHUB_REPOSITORY"
+      - name: Installer and its SHA-256 attached to the release (the install path without irm | iex)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          sha256sum get.ps1 > get.ps1.sha256
+          gh release upload "$TAG" get.ps1 get.ps1.sha256 --clobber --repo "$GITHUB_REPOSITORY"

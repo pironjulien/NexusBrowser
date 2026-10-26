@@ -78,7 +78,16 @@ bridge shared by several agents.
 
 Windows 10 or 11 and Google Chrome. No admin rights, nothing else to install first.
 
-1. Open **PowerShell** (Start menu, type `PowerShell`) and paste:
+1. Download [`get.ps1`](https://github.com/pironjulien/NexusBrowser/releases/latest/download/get.ps1) from the
+   latest release, right-click it and choose **Run with PowerShell**. To check the file first, compare its SHA-256
+   with [`get.ps1.sha256`](https://github.com/pironjulien/NexusBrowser/releases/latest/download/get.ps1.sha256),
+   published with it:
+
+   ```powershell
+   (Get-FileHash "$HOME\Downloads\get.ps1" -Algorithm SHA256).Hash
+   ```
+
+   Or, in one line, open **PowerShell** (Start menu, type `PowerShell`) and paste:
 
    ```powershell
    irm https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/get.ps1 | iex
@@ -94,7 +103,9 @@ Windows 10 or 11 and Google Chrome. No admin rights, nothing else to install fir
 3. Restart your AI app and ask it, for example: *"Open https://example.com in a background tab and give me the page
    as Markdown."*
 
-Run the same command again to update: the folder stays the same, so Chrome keeps the extension and reloads it.
+Run it again to update: the folder stays the same, so Chrome keeps the extension and reloads it. The new version
+is prepared beside the working one and its Python dependencies are checked first; a failed update puts the
+previous version back, installs it again and restarts its bridge.
 The bridge can also update a public install itself (the contract shared by the Nexus products): it writes
 `~\.nexus\status\browser.json` (`version`, `latest` read from the `releases/latest` redirect at most once a day,
 `state`, `message`), `GET /api/update` returns it and `POST /api/update` (bridge token) starts the "Nexus Browser

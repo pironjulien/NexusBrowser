@@ -44,17 +44,18 @@ function Stop-BridgeTask([string]$Name) {
     if ((Get-ScheduledTask -TaskName $Name).State -eq 'Running') { throw "Le pont '$Name' ne s'est pas arrete." }
 }
 
-# Les deux ponts (ancien et nouveau) ecoutent les memes ports 9224/9225 : arretes avant tout.
+# Les deux ponts (ancien et nouveau) ecoutent les memes ports 9224/9225 : arretes avant tout. Des onglets pilotes par
+# un agent : code de sortie 3, rien n'est touche (get.ps1 remet alors le dossier precedent en place).
 if (-not $SkipLaunch -and (Test-Path -LiteralPath $pythonExe)) {
     & $pythonExe -B (Join-Path $PSScriptRoot 'scripts\refresh_extension.py') --check-only
-    if ($LASTEXITCODE -eq 3) { throw 'Actualisation differee : des onglets sont pilotes par un agent. Aucun pont arrete.' }
+    if ($LASTEXITCODE -eq 3) { Write-Warning 'Actualisation differee : des onglets sont pilotes par un agent. Aucun pont arrete.'; exit 3 }
     if ($LASTEXITCODE -eq 2 -and (Get-Process -Name chrome -ErrorAction SilentlyContinue) -and
         (Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue).State -ne 'Running') {
         # Pont a la demande pas encore demarre : le lancer pour que l'extension reponde, puis reverifier.
         schtasks /Run /TN $bridgeTaskName | Out-Null
         Start-Sleep -Seconds 5
         & $pythonExe -B (Join-Path $PSScriptRoot 'scripts\refresh_extension.py') --check-only
-        if ($LASTEXITCODE -eq 3) { throw 'Actualisation differee : des onglets sont pilotes par un agent. Aucun pont arrete.' }
+        if ($LASTEXITCODE -eq 3) { Write-Warning 'Actualisation differee : des onglets sont pilotes par un agent. Aucun pont arrete.'; exit 3 }
     }
     # -Register : a la premiere installation, l'extension n'est souvent pas encore chargee dans Chrome.
     if ($LASTEXITCODE -eq 2 -and -not $Register -and (Get-Process -Name chrome -ErrorAction SilentlyContinue)) {

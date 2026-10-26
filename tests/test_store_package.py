@@ -35,3 +35,22 @@ def test_listing_matches_the_manifest():
     assert set(manifest["permissions"]) == justified
     assert len(manifest["description"]) <= 132
     assert manifest["name"] in listing and " ".join(manifest["description"].split()) in " ".join(listing.split())
+
+
+def test_variant_without_the_gmail_counter(tmp_path):
+    """Variante prête au cas où le Chrome Web Store refuserait le compteur Gmail : ni case, ni lecture, ni
+    mail.google.com dans la CSP ; tout le reste identique au paquet par défaut."""
+    default = store.build_zip(out_dir=tmp_path)
+    variant = store.build_zip(gmail_counter=False, out_dir=tmp_path)
+    assert variant.name.endswith("-without-gmail-counter.zip")
+    with zipfile.ZipFile(default) as a, zipfile.ZipFile(variant) as b:
+        assert a.namelist() == b.namelist()
+        changed = sorted(name for name in a.namelist() if a.read(name) != b.read(name))
+        assert changed == ["background.js", "manifest.json", "popup.html"]
+        csp = json.loads(b.read("manifest.json"))["content_security_policy"]["extension_pages"]
+        assert "mail.google.com" not in csp and "ws://127.0.0.1:*" in csp
+        assert "mail.google.com" in json.loads(a.read("manifest.json"))["content_security_policy"]["extension_pages"]
+        popup = b.read("popup.html").decode("utf-8")
+        assert "compteur-gmail" not in popup and "<label" not in popup and 'id="bridge"' in popup
+        assert b"const COMPTEUR_GMAIL_DISPONIBLE = false;" in b.read("background.js")
+        assert b"const COMPTEUR_GMAIL_DISPONIBLE = true;" in a.read("background.js")

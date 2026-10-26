@@ -84,6 +84,46 @@ jobs:
         env:
           NEXUS_BROWSER_SOURCE: ${{ github.workspace }}
         run: Get-Content -Raw .\get.ps1 | Invoke-Expression
+      - name: A failed update keeps the working version (injected faults)
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:LOCALAPPDATA 'NexusBrowser'
+          $app = Join-Path $root 'app'
+          $token = (Get-Content (Join-Path $HOME '.nexus\nexus-browser\bridge-token') -Raw).Trim()
+          function Assert-Working([string]$Case) {
+            $left = @(Get-ChildItem $root -Directory | Where-Object Name -ne 'app' | ForEach-Object Name)
+            if ($left) { throw "$Case : folders left behind: $left" }
+            if ((Get-Content (Join-Path $app 'install.ps1') -Raw) -match 'Injected failure') { throw "$Case : broken version installed" }
+            $deadline = (Get-Date).AddSeconds(60)
+            do {
+              try { $status = Invoke-RestMethod -Uri 'http://127.0.0.1:9225/api/status' -Headers @{ 'X-Nexus-Browser-Token' = $token }; break } catch { Start-Sleep -Seconds 2 }
+            } while ((Get-Date) -lt $deadline)
+            if (-not $status) { throw "$Case : the bridge is not running" }
+            Write-Host "$Case : working version kept, bridge $($status.version) running"
+          }
+          Start-ScheduledTask -TaskName 'Nexus Browser Bridge'
+          Assert-Working 'before the faults'
+          # 1. A Python dependency cannot be downloaded (lock pointing to an unreachable host, no cache): nothing changes.
+          $deps = Join-Path $env:RUNNER_TEMP 'broken-deps'
+          Copy-Item $env:GITHUB_WORKSPACE $deps -Recurse
+          (Get-Content (Join-Path $deps 'uv.lock') -Raw).Replace('files.pythonhosted.org', 'files.pythonhosted.invalid') |
+            Set-Content (Join-Path $deps 'uv.lock') -NoNewline
+          $env:NEXUS_BROWSER_SOURCE = $deps; $env:UV_NO_CACHE = '1'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
+          if ($LASTEXITCODE -eq 0) { throw 'unavailable dependency: the update should have failed' }
+          Remove-Item Env:UV_NO_CACHE
+          Assert-Working 'unavailable dependency'
+          # 2. The installer fails after stopping the bridge: the previous folder comes back, is installed again and its
+          #    bridge restarted.
+          $bridge = Join-Path $env:RUNNER_TEMP 'broken-install'
+          Copy-Item $env:GITHUB_WORKSPACE $bridge -Recurse
+          $install = Join-Path $bridge 'install.ps1'
+          (Get-Content $install -Raw).Replace('# --- Tache du pont', "throw 'Injected failure (CI)'`r`n# --- Tache du pont") |
+            Set-Content $install -NoNewline
+          $env:NEXUS_BROWSER_SOURCE = $bridge
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
+          if ($LASTEXITCODE -eq 0) { throw 'failing installer: the update should have failed' }
+          Assert-Working 'failing installer'
 
   pack:
     # The Nexus pack (get-nexus.ps1) runs get.ps1 with NEXUS_PACK=1 on a clean Windows: no question, no wait, no window,

@@ -52,6 +52,7 @@ async function showAgents() {
 
 async function showCompteur() {
     const caseGmail = document.getElementById("compteur-gmail");
+    if (!caseGmail) return; // variante du Chrome Web Store sans compteur Gmail
     try {
         caseGmail.checked = !!(await chrome.storage.local.get("compteurGmail")).compteurGmail;
     } catch (_) {}

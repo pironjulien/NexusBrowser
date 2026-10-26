@@ -182,3 +182,26 @@ def test_unreadable_file_left_untouched(home):
     with pytest.raises(ValueError):
         rc.codex(home, PY, SERVER, home / "b")
     assert (home / ".codex" / "config.toml").read_text(encoding="utf-8") == "not = [valid"
+
+
+def test_pack_scope_configures_only_the_listed_ai_apps(home, monkeypatch, capsys):
+    """NEXUS_PACK_AIS (le -Only / -Skip du pack) : seules ces IA sont configurées, les autres ne sont pas touchées."""
+    monkeypatch.setattr(rc.Path, "home", classmethod(lambda cls: home))
+    (home / ".codex").mkdir()
+    (home / ".codex" / "config.toml").write_text('model = "x"\n', encoding="utf-8")
+    desktop = home / "AppData" / "Roaming" / "Claude"
+    desktop.mkdir(parents=True)
+    claude_json = home / ".claude.json"
+    claude_json.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEXUS_PACK", "1")
+    monkeypatch.setenv("NEXUS_PACK_AIS", "codex")
+    argv = ["register_clients.py", "--python", PY, "--server", SERVER, "--backups", str(home / "b")]
+    monkeypatch.setattr(rc.sys, "argv", argv)
+    assert rc.main() == 0
+    out = capsys.readouterr().out
+    assert "nexus-browser" in (home / ".codex" / "config.toml").read_text(encoding="utf-8")
+    assert not (desktop / "claude_desktop_config.json").exists()  # Claude Desktop exclue : rien d'écrit
+    assert claude_json.read_text(encoding="utf-8") == "{}"  # Claude Code exclu : fichier intact
+    assert "Claude Desktop=skipped" in out and "Claude Code=skipped" in out and "Codex=declared" in out
+    monkeypatch.setenv("NEXUS_PACK_AIS", "codex, chatgpt")
+    assert rc.main() == 2  # nom inconnu : refusé, rien configuré
