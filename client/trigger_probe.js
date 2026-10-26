@@ -10,7 +10,8 @@
     const clip = (v, n) => String(v === undefined || v === null ? "" : v).replace(/[\s ]+/g, " ").trim().slice(0, n || 200);
     const tag = (n) => String((n && n.tagName) || "").toUpperCase();
     const attr = (n, a) => (n && typeof n.getAttribute === "function" ? n.getAttribute(a) : null);
-    const parentOf = (n) => n.parentElement || (n.parentNode && n.parentNode.host) || null;
+    // Arbre RENDU : un nœud placé dans un <slot> remonte par ce slot (le bouton du composant web qui l'affiche).
+    const parentOf = (n) => n.assignedSlot || n.parentElement || (n.parentNode && n.parentNode.host) || null;
     const docOf = (n) => (n && n.ownerDocument) || doc;
     const roleOf = (n) => String(attr(n, "role") || "").toLowerCase();
     // Type d'un <input> selon HTML : absent, vide ou inconnu (type="short_text" de Typeform) = texte ; autres balises :
@@ -28,18 +29,43 @@
     const ACTIVE_ROLES = new Set(["button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option", "switch", "checkbox", "radio", "treeitem"]);
     const BUTTON_TYPES = new Set(["submit", "button", "image", "reset", "checkbox", "radio"]);
     const isTextInput = (n) => tag(n) === "INPUT" && TEXT_TYPES.has(typeOf(n));
-    const activating = (n) => {
+    const activatingSelf = (n) => {
         const t = tag(n);
         if (t === "BUTTON" || t === "SUMMARY" || (t === "A" && attr(n, "href") !== null)) return true;
         if (t === "INPUT") return BUTTON_TYPES.has(typeOf(n));
         return ACTIVE_ROLES.has(roleOf(n));
     };
+    // Bouton d'un composant web (<he-button>, <sl-button>...) : premier contrôle de sa shadow root.
+    const shadowControl = (n) => {
+        if (!n || !n.shadowRoot || !tag(n).includes("-")) return null;
+        try { return Array.from(n.shadowRoot.querySelectorAll("*")).find(activatingSelf) || null; } catch (_) { return null; }
+    };
+    const activating = (n) => activatingSelf(n) || !!shadowControl(n);
     const editable = (n) => isTextInput(n) || tag(n) === "TEXTAREA" || tag(n) === "SELECT" || !!(n && n.isContentEditable)
         || ["textbox", "searchbox", "combobox"].includes(roleOf(n));
     const isField = (n) => !!n && editable(n) && !activating(n);
     const sensitive = (n) => {
         const ac = String(attr(n, "autocomplete") || "").toLowerCase();
         return typeOf(n) === "password" || /one-time-code|cc-|password/.test(ac);
+    };
+    // Texte rendu : shadow roots et contenu distribué dans les <slot> compris (innerText s'arrête à l'hôte).
+    const SKIP_TEXT = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
+    const renderedText = (n, depth) => {
+        depth = depth || 0;
+        if (!n || depth > 40) return "";
+        if (n.nodeType === 3) return String(n.data !== undefined ? n.data : n.textContent || "");
+        if (n.nodeType !== 1 && n.nodeType !== 11) return "";
+        if (SKIP_TEXT.has(tag(n))) return "";
+        let kids = [];
+        try {
+            if (tag(n) === "SLOT" && typeof n.assignedNodes === "function") {
+                kids = Array.from(n.assignedNodes({ flatten: true }));
+                if (!kids.length) kids = Array.from(n.childNodes || []);
+            } else {
+                kids = Array.from((n.shadowRoot || n).childNodes || []);
+            }
+        } catch (_) { return ""; }
+        return kids.map(k => renderedText(k, depth + 1)).join(" ");
     };
     const nameOf = (n) => {
         const d = docOf(n);
@@ -51,11 +77,23 @@
         try { img = typeof n.querySelector === "function" ? n.querySelector("img") : null; } catch (_) {}
         const text = n.innerText !== undefined && n.innerText !== null ? n.innerText : n.textContent;
         const fieldName = isField(n) ? (clip(labels) || attr(n, "placeholder") || attr(n, "title") || attr(n, "name")) : "";
-        return clip(clip(byIds) || attr(n, "aria-label") || fieldName || buttonValue || clip(text) || attr(n, "alt")
+        const inner = shadowControl(n);
+        return clip(clip(byIds) || attr(n, "aria-label") || fieldName || buttonValue || clip(text)
+            || (isField(n) ? "" : clip(renderedText(n))) || (inner ? nameOf(inner) : "") || attr(n, "alt")
             || attr(n, "title") || (img ? attr(img, "alt") : "") || labels, 160);
     };
     const descendants = (root) => {
         try { return Array.from(root.querySelectorAll("*")); } catch (_) { return []; }
+    };
+    // Descendants, shadow roots comprises (même portée que la recherche par texte du clic).
+    const deepDescendants = (root, out, depth) => {
+        out = out || [];
+        if ((depth || 0) > 32) return out;
+        for (const n of descendants(root)) {
+            out.push(n);
+            if (n.shadowRoot) deepDescendants(n.shadowRoot, out, (depth || 0) + 1);
+        }
+        return out;
     };
     function findDeep(root, selector, index) {
         if (!root || !root.querySelectorAll) return null;
@@ -99,13 +137,14 @@
         // Toutes les cibles possibles sont rendues (le serveur les contrôle toutes : prudence).
         const search = clip(spec.text).toLowerCase();
         const targets = [];
-        for (const n of descendants(doc)) {
+        for (const n of deepDescendants(doc)) {
             if (["SCRIPT", "STYLE", "NOSCRIPT", "HTML", "BODY", "HEAD"].includes(tag(n))) continue;
             const own = [attr(n, "aria-label"), attr(n, "title"), attr(n, "placeholder"), attr(n, "alt"), n.innerText !== undefined ? n.innerText : n.textContent];
             if (!own.some(v => clip(v).toLowerCase().includes(search))) continue;
             let t = n;
-            for (let i = 0; t && i < 8 && !activating(t) && !isField(t); i++) t = parentOf(t);
-            const chosen = t && (activating(t) || isField(t)) ? t : n;
+            for (let i = 0; t && i < 12 && !activating(t) && !isField(t); i++) t = parentOf(t);
+            const found = t && (activating(t) || isField(t)) ? t : n;
+            const chosen = shadowControl(found) || found;  // hôte d'un composant : son bouton intérieur
             if (!targets.includes(chosen)) targets.push(chosen);
         }
         const interactive = targets.filter(n => activating(n) || isField(n));

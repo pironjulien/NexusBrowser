@@ -37,6 +37,10 @@ const debuggerIdleTimers = new Map();
 // tabId -> boîte de dialogue JavaScript ouverte ({type, message, ...}) : jamais acceptée d'office.
 const pendingDialogs = new Map();
 const dialogWaiters = new Map();
+// windowId -> {current, previous, at} : onglet actif de chaque fenêtre et celui d'avant. Chrome active l'onglet d'une
+// boîte beforeunload (mesuré le 26/10) : l'onglet de l'utilisateur d'avant lui est rendu, la boîte reste ouverte.
+const activeTabs = new Map();
+const DIALOG_ACTIVATION_MS = 3000;
 // tabId -> commandes en cours sur CET onglet : seul ce compteur retient le détachement de son débogueur.
 const tabCommandsInFlight = new Map();
 // tabId -> échéance (ms) de l'enregistrement réseau demandé (browser_network_record) : débogueur gardé jusque-là.
@@ -673,6 +677,7 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
         pendingDialogs.set(source.tabId, dialog);
         const waiters = dialogWaiters.get(source.tabId);
         if (waiters) for (const notify of [...waiters]) notify(dialog);
+        keepDialogTabBehind(source.tabId).catch(() => {});
     } else if (method === "Page.javascriptDialogClosed") {
         pendingDialogs.delete(source.tabId);
     } else if (method === "Page.fileChooserOpened") {
@@ -709,6 +714,39 @@ chrome.debugger.onDetach.addListener((source) => {
         activeUploads.delete(source.tabId);
     }
 });
+
+/**
+ * Onglet d'agent passé au premier plan par Chrome pour sa boîte de dialogue (beforeunload) : l'onglet que
+ * l'utilisateur regardait juste avant redevient actif. La boîte reste ouverte dans l'onglet de fond et se règle par
+ * handle_dialog comme les autres (vérifié dans Chrome le 26/10). Rien si l'onglet était déjà au premier plan.
+ */
+async function keepDialogTabBehind(tabId) {
+    const dialog = pendingDialogs.get(tabId);
+    if (!dialog || dialog.keptBehind || !tabOwners.has(tabId)) return;
+    let tab = null;
+    try { tab = await chrome.tabs.get(tabId); } catch (_) { return; }
+    const seen = tab?.active ? activeTabs.get(tab.windowId) : null;
+    if (!seen || seen.current !== tabId || !seen.previous || Date.now() - seen.at > DIALOG_ACTIVATION_MS) return;
+    if (Math.abs(seen.at - dialog.openedAt) > DIALOG_ACTIVATION_MS) return;
+    dialog.keptBehind = true;
+    try { await chrome.tabs.update(seen.previous, { active: true }); } catch (_) { dialog.keptBehind = false; }
+}
+
+if (chrome.tabs?.onActivated?.addListener) {
+    chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
+        const seen = activeTabs.get(windowId);
+        if (seen?.current === tabId) return;
+        activeTabs.set(windowId, { current: tabId, previous: seen ? seen.current : null, at: Date.now() });
+        // Activation annoncée après la boîte : même règle.
+        if (pendingDialogs.has(tabId)) keepDialogTabBehind(tabId).catch(() => {});
+    });
+    // Service worker (re)lancé : onglets actifs du moment, pour connaître celui d'avant à la prochaine activation.
+    Promise.resolve(chrome.tabs.query?.({ active: true })).then((tabs) => {
+        for (const t of tabs || []) {
+            if (t && t.windowId !== undefined && !activeTabs.has(t.windowId)) activeTabs.set(t.windowId, { current: t.id, previous: null, at: 0 });
+        }
+    }).catch(() => {});
+}
 
 if (chrome.tabs?.onRemoved?.addListener) {
     chrome.tabs.onRemoved.addListener((tabId) => {
@@ -1288,12 +1326,24 @@ function agyTextKit(install) {
             });
             return best;
         }
+        // Bouton d'un composant web : premier contrôle de sa shadow root (le texte affiché vient souvent d'un <slot>).
+        function __agyShadowControl(el) {
+            if (!el || !el.shadowRoot || !String(__agyTag(el)).includes("-")) return null;
+            let inner = [];
+            try { inner = Array.from(el.shadowRoot.querySelectorAll("button, a[href], [role='button'], [role='link']")); } catch (_) {}
+            return inner[0] || null;
+        }
+        // Contrôle le plus proche dans l'arbre RENDU : un texte placé dans un <slot> remonte par ce slot jusqu'au
+        // bouton du composant qui l'affiche, jamais jusqu'à la carte qui contient le composant.
         function __agyInteractiveTarget(el) {
             let node = el;
-            for (let hops = 0; node && hops < 8; hops++) {
+            for (let hops = 0; node && hops < 12; hops++) {
+                if (node.nodeType === 11) { node = node.host || null; continue; }
                 if (__agySkipped(node)) break;
                 if (__agyIsInteractive(node)) return node;
-                node = node.parentElement || null;
+                const inner = __agyShadowControl(node);
+                if (inner) return inner;
+                node = node.assignedSlot || node.parentElement || (node.parentNode && node.parentNode.host) || null;
             }
             return el;
         }
@@ -1334,8 +1384,11 @@ function agyMouseKit(spec, textKit, locatorKit) {
         store = { probes: new Map(), seq: 0 };
         try { win0.__nexusBrowserMouse = store; } catch (_) {}
     }
+    if (!store.layers || typeof store.layers.get !== "function") store.layers = new Map();
 
-    function up(node) { return node ? (node.parentNode || node.parentElement || node.host || null) : null; }
+    // Arbre aplati (rendu) : un nœud placé dans un <slot> remonte par ce slot, donc par le bouton du composant web
+    // qui l'affiche ; sinon parent, puis hôte d'une shadow root.
+    function up(node) { return node ? (node.assignedSlot || node.parentNode || node.parentElement || node.host || null) : null; }
     function within(node, el) {
         for (let n = node, i = 0; n && i < 5000; n = up(n), i++) if (n === el) return true;
         return false;
@@ -1646,8 +1699,128 @@ function agyMouseKit(spec, textKit, locatorKit) {
     }
     function round2(v) { return Math.round(v * 100) / 100; }
 
-    // Sondes oubliées (page bloquée, navigation) : retirées après une minute.
+    // --- Élément couvert : couche vide traversée, barre collante évitée, jamais un clic sur la couche elle-même.
+    const CONTROL_ROLES = new Set(["button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option",
+        "switch", "checkbox", "radio", "treeitem", "textbox", "searchbox", "combobox", "slider", "spinbutton"]);
+    // Contenu qui se voit ou qui réagit : une couche qui en porte n'est jamais traversée.
+    const CONTENT_SELECTOR = "img, svg, video, canvas, iframe, embed, object, picture, button, a, input, select, " +
+        "textarea, label, summary, [role], [tabindex], [onclick], [contenteditable]";
+    function attrOf(n, a) { try { return n && typeof n.getAttribute === "function" ? n.getAttribute(a) : null; } catch (_) { return null; } }
+    function styleOf(n) {
+        try {
+            const w = viewOf(n).win;
+            return w && typeof w.getComputedStyle === "function" ? w.getComputedStyle(n) : null;
+        } catch (_) { return null; }
+    }
+    // Contrôle (bouton, lien, rôle actif) qui contient le nœud, lui compris, dans l'arbre aplati.
+    function controlOf(node) {
+        for (let n = node, i = 0; n && i < 64; n = up(n), i++) {
+            if (n.nodeType !== undefined && n.nodeType !== 1) continue;
+            const t = tagUp(n);
+            if (t === "BODY" || t === "HTML") return null;
+            if (t === "BUTTON" || t === "SUMMARY" || t === "SELECT" || t === "TEXTAREA" || (t === "A" && attrOf(n, "href") !== null)) return n;
+            if (t === "INPUT" && inputTypeOf(n) !== "hidden") return n;
+            if (CONTROL_ROLES.has(String(attrOf(n, "role") || "").toLowerCase())) return n;
+        }
+        return null;
+    }
+    function transparent(color) {
+        const c = String(color || "").replace(/\s+/g, "").toLowerCase();
+        if (!c || c === "transparent") return true;
+        const m = /^rgba\([^,]+,[^,]+,[^,]+,([0-9.]+)\)$/.exec(c);
+        return !!m && Number(m[1]) < 0.05;
+    }
+    // Boîte de dialogue modale ouverte qui ne contient pas l'élément : la couche qui couvre est son fond, refus.
+    function blockedByModal(el) {
+        const d = viewOf(el).doc;
+        let modals = [];
+        try { modals = Array.from(d.querySelectorAll("[aria-modal='true'], dialog[open]")); } catch (_) { return true; }
+        return modals.some(m => !within(el, m));
+    }
+    // Couche sans contenu ni rôle (calque transparent d'une application, X par exemple) : traversable. Tout ce qui ne
+    // se lit pas avec certitude (style, descendants) reste un vrai obstacle.
+    function emptyLayer(n, el) {
+        if (!n || (n.nodeType !== undefined && n.nodeType !== 1) || typeof n.querySelector !== "function") return false;
+        const t = tagUp(n);
+        if (t === "BODY" || t === "HTML" || t === "DIALOG" || t === "IFRAME") return false;
+        if (controlOf(n) || n.isContentEditable) return false;
+        const role = String(attrOf(n, "role") || "").toLowerCase();
+        if (role && role !== "presentation" && role !== "none") return false;
+        if (attrOf(n, "tabindex") !== null || attrOf(n, "onclick") !== null || attrOf(n, "aria-modal") !== null) return false;
+        if (n.shadowRoot) return false;
+        const raw = n.textContent !== undefined && n.textContent !== null ? n.textContent : n.innerText;
+        if (String(raw || "").trim()) return false;
+        try { if (n.querySelector(CONTENT_SELECTOR)) return false; } catch (_) { return false; }
+        const st = styleOf(n);
+        if (!st || !transparent(st.backgroundColor)) return false;
+        if (st.backgroundImage && st.backgroundImage !== "none") return false;
+        if (!n.style || typeof n.style.setProperty !== "function") return false;
+        return !blockedByModal(el);
+    }
+    // Couche traversée le temps du geste (pointer-events: none, valeur d'origine rendue à la libération).
+    function passLayer(n) {
+        const id = ++store.seq;
+        store.layers.set(id, {
+            el: n, value: n.style.getPropertyValue("pointer-events"), priority: n.style.getPropertyPriority("pointer-events"),
+            created: Date.now()
+        });
+        n.style.setProperty("pointer-events", "none", "important");
+        return id;
+    }
+    function restoreLayer(id) {
+        const layer = store.layers.get(id);
+        if (!layer) return;
+        store.layers.delete(id);
+        try {
+            if (layer.value) layer.el.style.setProperty("pointer-events", layer.value, layer.priority);
+            else layer.el.style.removeProperty("pointer-events");
+        } catch (_) {}
+    }
+    // Barre fixe ou collante (en-tête, barre du bas) : l'élément défile hors d'elle, une fois.
+    function stickyBar(n) {
+        for (let b = n, i = 0; b && i < 32; b = up(b), i++) {
+            if (b.nodeType !== undefined && b.nodeType !== 1) continue;
+            const t = tagUp(b);
+            if (t === "BODY" || t === "HTML") return null;
+            const st = styleOf(b);
+            if (st && (st.position === "fixed" || st.position === "sticky")) return b;
+        }
+        return null;
+    }
+    function scrollerOf(el) {
+        for (let n = up(el), i = 0; n && i < 64; n = up(n), i++) {
+            if (n.nodeType !== undefined && n.nodeType !== 1) continue;
+            const t = tagUp(n);
+            if (t === "BODY" || t === "HTML") break;
+            const st = styleOf(n);
+            if (st && /(auto|scroll|overlay)/.test(String(st.overflowY || "")) && n.scrollHeight > n.clientHeight) return n;
+        }
+        return null;
+    }
+    function clearBar(el, blocker) {
+        const bar = stickyBar(blocker);
+        if (!bar || within(el, bar)) return false;
+        const w = viewOf(el).win;
+        const vh = w && w.innerHeight > 0 ? w.innerHeight : 0;
+        const b = rectOf(bar);
+        const r = rectOf(el);
+        if (!vh || !(b.height > 0) || b.height > vh / 2) return false;
+        const delta = b.top + b.height / 2 > vh / 2 ? (r.top + r.height) - b.top + 8 : r.top - (b.top + b.height) - 8;
+        if (!delta) return false;
+        const box = scrollerOf(el);
+        try {
+            if (box && typeof box.scrollBy === "function") box.scrollBy({ top: delta, behavior: "instant" });
+            else if (box) box.scrollTop += delta;
+            else if (w && typeof w.scrollBy === "function") w.scrollBy({ top: delta, behavior: "instant" });
+            else return false;
+        } catch (_) { return false; }
+        return true;
+    }
+
+    // Sondes oubliées (page bloquée, navigation) : retirées après une minute ; couche traversée rendue après 3 s
+    // (geste interrompu par une boîte de dialogue : la libération n'a pas pu passer).
     for (const [id, probe] of store.probes) if (Date.now() - probe.created > 60000) dropProbe(id);
+    for (const [id, layer] of store.layers) if (Date.now() - layer.created > 3000) restoreLayer(id);
 
     if (spec.phase === "prepare") {
         const found = locate(spec.locate);
@@ -1657,22 +1830,41 @@ function agyMouseKit(spec, textKit, locatorKit) {
         if (scroll !== "none" && typeof el.scrollIntoView === "function") {
             try { el.scrollIntoView({ behavior: "instant", block: scroll, inline: scroll }); } catch (_) {}
         }
-        const pts = candidates(el);
-        let blocker = null;
-        let reason = pts.length ? null : "no visible area in the viewport";
-        let chosen = null;
-        const alternatives = [];
-        for (const [lx, ly] of pts) {
-            const p = project(el, lx, ly);
-            if (p.ok) {
-                if (!chosen) chosen = p;
-                alternatives.push({ x: round2(p.x), y: round2(p.y) });
-                if (!spec.allPoints) break;
-                continue;
+        // Clic et survol : un calque intérieur du même contrôle (fond de survol d'un bouton) reçoit le geste pour lui.
+        const ctl = spec.passThrough && !spec.forEdit ? controlOf(el) : null;
+        let pts, blocker, reason, chosen, alternatives;
+        const scan = () => {
+            pts = candidates(el);
+            blocker = null;
+            reason = pts.length ? null : "no visible area in the viewport";
+            chosen = null;
+            alternatives = [];
+            for (const [lx, ly] of pts) {
+                let p = project(el, lx, ly);
+                if (!p.ok && ctl && ctl !== el && p.blocker && within(p.blocker, ctl)) {
+                    const outer = climb(viewOf(el).win, lx, ly, true);
+                    p = outer.ok ? Object.assign(outer, { hit: p.blocker }) : outer;
+                }
+                if (p.ok) {
+                    if (!chosen) chosen = p;
+                    alternatives.push({ x: round2(p.x), y: round2(p.y) });
+                    if (!spec.allPoints) break;
+                    continue;
+                }
+                if (!blocker && p.blocker) blocker = p.blocker;
+                if (!reason && p.reason) reason = p.reason;
             }
-            if (!blocker && p.blocker) blocker = p.blocker;
-            if (!reason && p.reason) reason = p.reason;
+        };
+        scan();
+        const layers = [];
+        let barCleared = false;
+        while (!chosen && blocker && spec.passThrough && layers.length < 4) {
+            if (emptyLayer(blocker, el)) layers.push(passLayer(blocker));
+            else if (!barCleared && clearBar(el, blocker)) barCleared = true;
+            else break;
+            scan();
         }
+        if (!chosen) for (const id of layers) restoreLayer(id);
         const base = info(el);
         const label = describe(el) || "element";
         if (!chosen) {
@@ -1690,13 +1882,16 @@ function agyMouseKit(spec, textKit, locatorKit) {
             const probeId = Array.isArray(spec.probe) && spec.probe.length ? addProbe(el, spec.probe) : null;
             return { success: true, ...base, probeId, point: null, unreachable: failure.error, frameDepth: 0 };
         }
-        const probeId = Array.isArray(spec.probe) && spec.probe.length ? addProbe(el, spec.probe) : null;
+        // Point tenu par le calque intérieur du contrôle : la sonde écoute le contrôle, qui reçoit le geste.
+        const heard = ctl && chosen.hit && !reaches(chosen.hit, el) ? ctl : el;
+        const probeId = Array.isArray(spec.probe) && spec.probe.length ? addProbe(heard, spec.probe) : null;
         const x = round2(chosen.x);
         const y = round2(chosen.y);
         return {
             success: true,
             ...base,
             probeId,
+            layers: layers.length ? layers : undefined,
             point: { x, y },
             points: spec.allPoints ? alternatives : undefined,
             hit: describe(chosen.hit),
@@ -1713,6 +1908,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
 
     if (spec.phase === "release") {
         for (const id of spec.probeIds || []) dropProbe(id);
+        for (const id of spec.layerIds || []) restoreLayer(id);
         return { released: true };
     }
 
@@ -2038,6 +2234,8 @@ const MOUSE_BUTTON_MASK = { none: 0, left: 1, right: 2, middle: 4 };
 const MOUSE_PROOF_EVENT = { left: "click", right: "contextmenu", middle: "auxclick" };
 const MOUSE_COMMAND_TIMEOUT_MS = 10000;
 const MOUSE_RETRY_MS = 60;
+// Fin du message d'un geste refusé avant tout événement (lue par le serveur MCP : accord rendu, geste non parti).
+const NOTHING_SENT = "Nothing was sent.";
 
 /**
  * Attente interrompue par l'arrêt d'urgence (frappe, glisser, attentes de chargement, de réseau, de téléchargement) :
@@ -2726,7 +2924,8 @@ function prepareError(prep, locate) {
 async function prepareInRoot(root, locate, options) {
     const spec = {
         phase: "prepare", locate, scroll: options.scroll || "center", probe: options.probe || null,
-        allowUnreachable: !!options.allowUnreachable, allPoints: root.key !== "top", forEdit: !!options.forEdit
+        allowUnreachable: !!options.allowUnreachable, allPoints: root.key !== "top", forEdit: !!options.forEdit,
+        passThrough: !!options.passThrough
     };
     const prep = await pageCall(root, spec);
     if (prep?.__dialog || !prep?.success) return prep;
@@ -2744,7 +2943,7 @@ async function prepareInRoot(root, locate, options) {
             : `frame ${proj.frame} is not reachable (${proj.reason || "outside the viewport"})`;
         const error = `<${String(prep.tagName || "element").toLowerCase()}> in ${root.label}: ${reason}: no mouse action sent.`;
         if (options.allowUnreachable) return { ...prep, point: null, unreachable: error };
-        await releaseMouseProbes(root, [prep.probeId]);
+        await releaseMouseProbes(root, [prep.probeId], prep.layers);
         return { notReachable: true, error };
     }
     // Iframe hors processus : son moteur de rendu doit aussi se croire actif (focus clavier dans le cadre).
@@ -2847,10 +3046,11 @@ async function readMouseProbe(where, probeId, remove = true) {
     }
 }
 
-async function releaseMouseProbes(where, probeIds) {
+async function releaseMouseProbes(where, probeIds, layerIds = null) {
     const ids = probeIds.filter(Boolean);
-    if (!ids.length) return;
-    try { await pageCall(where, { phase: "release", probeIds: ids }); } catch (_) {}
+    const layers = (layerIds || []).filter(Boolean);
+    if (!ids.length && !layers.length) return;
+    try { await pageCall(where, { phase: "release", probeIds: ids, layerIds: layers }); } catch (_) {}
 }
 
 // Repli sans débogueur : monde ISOLÉ de l'extension (celui des scripts de contenu), jamais le monde de la page.
@@ -2928,6 +3128,7 @@ async function performMouseAction(params, options) {
             // pointerdown en plus : prouve qu'AUCUN événement n'a atteint l'élément (condition de la relance unique).
             probe: kind === "hover" ? mouseProbeTypes(kind, button, clickCount)
                 : [...mouseProbeTypes(kind, button, clickCount), "pointerdown"],
+            passThrough: true,
             timeoutMs
         });
     } catch (error) {
@@ -2936,7 +3137,8 @@ async function performMouseAction(params, options) {
         return await mouseJsFallback(tabId, jsSpec, error.message || String(error), timeoutMs);
     }
     if (prep?.__dialog) return { data: { ...dialogInterruption(prep.__dialog), method: "cdp" } };
-    if (!prep?.success) return { error: prepareError(prep, locate) };
+    // Échec avant tout événement : dit tel quel (le serveur MCP rend alors l'accord d'un geste sortant non parti).
+    if (!prep?.success) return { error: `${prepareError(prep, locate)} ${NOTHING_SENT}` };
     const root = prep.root || rootOf(target);
 
     const { x, y } = prep.point;
@@ -2948,7 +3150,7 @@ async function performMouseAction(params, options) {
     try {
         run = await runMouseSequence(target, sequence);
     } catch (error) {
-        await releaseMouseProbes(root, [prep.probeId]);
+        await releaseMouseProbes(root, [prep.probeId], prep.layers);
         throw error;
     } finally {
         scheduleDebuggerDetach(tabId);
@@ -2966,7 +3168,8 @@ async function performMouseAction(params, options) {
     if (root.key !== "top") Object.assign(report, { frame: prep.frame, crossOriginFrame: true });
     if (kind !== "hover") Object.assign(report, { button, clickCount });
     if (run.dialog) {
-        // La page est bloquée par la boîte : la sonde ne peut pas être relue (retirée plus tard).
+        // La page est bloquée par la boîte : la sonde ne peut pas être relue (retirée plus tard, la couche traversée
+        // rendue d'elle-même au prochain passage).
         return { data: { ...dialogInterruption(run.dialog), ...report, trusted_click: null } };
     }
 
@@ -2984,9 +3187,11 @@ async function performMouseAction(params, options) {
         if (run.dialog) return { data: { ...dialogInterruption(run.dialog), ...report, trusted_click: null, resent: true } };
         report.resent = true;
         probe = await readMouseProbe(root, prep.probeId);
-    } else if (kind !== "hover") {
-        await releaseMouseProbes(root, [prep.probeId]);
+        await releaseMouseProbes(root, [], prep.layers);
+    } else {
+        await releaseMouseProbes(root, kind !== "hover" ? [prep.probeId] : [], prep.layers);
     }
+    if (prep.layers) report.passed_layers = prep.layers.length;
     if (kind === "hover") {
         report.trusted_hover = probe ? probe.trusted > 0 : null;
     } else {
@@ -3629,6 +3834,8 @@ async function navigateTab(params) {
     const tabId = await resolveTargetTab(params);
 
     resetNetworkTracking(tabId);
+    // Débogueur attaché d'abord : une boîte beforeunload de la page quittée est vue (rapportée, onglet gardé derrière).
+    try { await ensureDebugger(tabId); } catch (_) {}
     const updatedTab = await chrome.tabs.update(tabId, { url });
     return { data: updatedTab };
 }

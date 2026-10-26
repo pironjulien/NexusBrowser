@@ -9,6 +9,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the π icon is sent and the
   listing's 128 px icon is replaced by the π one.
 
+## [2.26.5] - 2026-10-26
+
+### Fixed
+- Outward-action check bypassed on web components: on a button whose label is rendered by a web component (text
+  passed through a `<slot>` or written in its shadow root, as on Partner Center), a click by `mark` or `selector` read
+  an empty label and went out WITHOUT asking for the accord. The trigger is now read as rendered (shadow roots, slot
+  contents, the inner button of a custom element) whatever the targeting (mark, selector, text, locator).
+- A click by text on such a button hit the card that contains it (`<he-card>`, centre of the card) instead of the
+  button: the nearest control is now found in the rendered tree (through the slot), and a custom element counts as its
+  inner button.
+- An accord is spent only when the gesture really goes out. A click refused before any event was sent (element
+  covered, not found, ambiguous) used up the token, and the user had to be asked again; the token now stays valid
+  (`accord_kept: true`, same token, same expiry). A gesture whose outcome is unknown still spends it.
+- Elements covered by an empty layer or a sticky bar (X's transparent full-screen layer `r-1p0dtai`, its bottom bar
+  over the Reply button): after scrolling the element to the centre, an empty layer (no text, no media, no role, no
+  interactive content, transparent background, no open modal dialog elsewhere) is crossed for the gesture only
+  (`pointer-events: none`, restored right after; `passed_layers` in the response), and a fixed or sticky bar is
+  scrolled away from. The click must still land on the element itself; a real modal, a darkened backdrop or an
+  interactive element on top is still refused, with no mouse action. Refusals now end with "Nothing was sent.".
+- A `beforeunload` dialog in an agent's tab no longer takes the user's view: Chrome brings the tab to the front to
+  show it, and the tab the user was on is now made active again, the dialog staying open in the background tab
+  (answered with `browser_handle_dialog`, checked in Chrome). `browser_navigate` attaches the debugger first so that
+  this dialog is seen.
+
 ## [2.26.4] - 2026-10-26
 
 ### Fixed

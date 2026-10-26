@@ -1403,6 +1403,170 @@ test('élément entièrement couvert : erreur explicite et aucun clic ailleurs',
     assert.equal(h.mouse().length, 0);
 });
 
+// Scène pour les couches : éléments à boîte fixe, peints dans l'ordre (le dernier gagne), pointer-events lu sur le
+// style en ligne (comme elementFromPoint de Chrome), styles calculés donnés par élément.
+function layerScene() {
+    const doc = listenable({});
+    const win = {
+        dispatchEvent() {}, innerWidth: 1000, innerHeight: 800, scrollY: 0,
+        getComputedStyle: (el) => ({backgroundColor: 'rgba(0, 0, 0, 0)', backgroundImage: 'none', position: 'static', overflowY: 'visible', ...(el.computed || {})}),
+        scrollBy({top}) { win.scrollY += top; }
+    };
+    doc.defaultView = win;
+    const painted = [];
+    const all = [];
+    const style = () => {
+        const props = {};
+        return {
+            getPropertyValue: (k) => props[k] ? props[k][0] : '',
+            getPropertyPriority: (k) => props[k] ? props[k][1] : '',
+            setProperty: (k, v, p = '') => { props[k] = [v, p]; },
+            removeProperty: (k) => { delete props[k]; }
+        };
+    };
+    const el = (tag, attrs = {}, {box = null, parent = null, fixed = false, text = '', computed = null} = {}) => {
+        const node = {
+            nodeType: 1, tagName: tag.toUpperCase(), attrs, ownerDocument: doc, parentNode: parent, isConnected: true,
+            textContent: text, innerText: text, style: style(), computed,
+            getAttribute: (k) => Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null,
+            getBoundingClientRect: () => {
+                const b = node.box;
+                const dy = fixed ? 0 : -win.scrollY;
+                return {x: b.x, y: b.y + dy, left: b.x, top: b.y + dy, width: b.w, height: b.h};
+            },
+            querySelector: () => null,
+            querySelectorAll: () => [],
+            scrollIntoView() {},
+            onTrusted(type) { if (type === 'click') node.clicks = (node.clicks || 0) + 1; }
+        };
+        node.box = box;
+        all.push(node);
+        if (box) painted.push(node);
+        return node;
+    };
+    doc.elementFromPoint = (x, y) => {
+        for (const n of [...painted].reverse()) {
+            if (n.style.getPropertyValue('pointer-events') === 'none') continue;
+            const r = n.getBoundingClientRect();
+            if (x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height) return n;
+        }
+        return null;
+    };
+    doc.querySelectorAll = (sel) => sel.includes('aria-modal') ? all.filter(n => n.attrs['aria-modal'] === 'true') : all.filter(n => '#' + n.attrs.id === sel);
+    return {doc, win, el, page: {document: doc, window: win}};
+}
+
+test('X : couche transparente vide par-dessus le bouton traversée le temps du clic, puis rendue', async () => {
+    const s = layerScene();
+    const button = s.el('button', {id: 'reply'}, {box: {x: 100, y: 300, w: 80, h: 30}, text: 'Répondre'});
+    const layer = s.el('div', {class: 'css-175oi2r r-1p0dtai'}, {box: {x: 0, y: 0, w: 1000, h: 800}});
+    const h = harness(s.page);
+    const res = await h.run('click', {tabId: 1, selector: '#reply', timeoutMs: 0});
+    assert.equal(res.data.trusted_click, true);
+    assert.equal(button.clicks, 1);
+    assert.equal(res.data.passed_layers, 1);
+    assert.equal(layer.style.getPropertyValue('pointer-events'), '');  // couche rendue telle quelle
+    assert.equal(layer.clicks, undefined);  // jamais de clic sur la couche
+});
+
+test('couche traversée seulement si vide : fond de modale, texte, rôle ou modale ouverte = refus, aucun clic', async () => {
+    const cases = [
+        {computed: {backgroundColor: 'rgba(0, 0, 0, 0.4)'}},  // fond assombri d'une modale
+        {text: 'Accepter les cookies'},
+        {attrs: {role: 'dialog'}},
+        {modal: true}
+    ];
+    for (const c of cases) {
+        const s = layerScene();
+        const button = s.el('button', {id: 'reply'}, {box: {x: 100, y: 300, w: 80, h: 30}});
+        if (c.modal) s.el('div', {'aria-modal': 'true'}, {});
+        const layer = s.el('div', {id: 'layer', ...(c.attrs || {})}, {box: {x: 0, y: 0, w: 1000, h: 800}, text: c.text || '', computed: c.computed || null});
+        const h = harness(s.page);
+        const res = await h.run('click', {tabId: 1, selector: '#reply', timeoutMs: 0});
+        assert.match(res.error, /covered by <div#layer>/, JSON.stringify(c));
+        assert.match(res.error, /Nothing was sent\./);
+        assert.equal(h.mouse().length, 0);
+        assert.equal(button.clicks, undefined);
+        assert.equal(layer.style.getPropertyValue('pointer-events'), '');
+    }
+});
+
+test('X : barre collante du bas sur le bouton : l\'élément défile hors de la barre puis le clic part', async () => {
+    const s = layerScene();
+    // Bouton en bas de page, déjà au plus bas que le centrage permet : la barre fixe du bas le couvre.
+    const button = s.el('button', {id: 'reply'}, {box: {x: 100, y: 760, w: 80, h: 30}});
+    const bar = s.el('nav', {class: 'r-jumn1c'}, {box: {x: 0, y: 740, w: 1000, h: 60}, fixed: true, computed: {position: 'fixed'}});
+    bar.querySelector = () => ({});  // la barre porte des liens : jamais traversée
+    const h = harness(s.page);
+    const res = await h.run('click', {tabId: 1, selector: '#reply', timeoutMs: 0});
+    assert.equal(res.data.trusted_click, true);
+    assert.equal(button.clicks, 1);
+    assert.equal(bar.clicks, undefined);
+    assert.ok(s.win.scrollY > 0);
+    assert.ok(h.mouse()[0].y < 740);
+});
+
+test('composant web : clic par texte sur le bouton de la shadow root (texte dans un slot), jamais sur la carte', async () => {
+    const doc = listenable({});
+    const win = {dispatchEvent() {}, innerWidth: 1000, innerHeight: 800, getComputedStyle: () => ({display: 'block', visibility: 'visible', opacity: '1'})};
+    doc.defaultView = win;
+    const mk = (tag, attrs, rect, extra = {}) => Object.assign({
+        nodeType: 1, tagName: tag, ownerDocument: doc, isConnected: true, attrs,
+        getAttribute: (k) => Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null,
+        getBoundingClientRect: () => ({x: rect[0], y: rect[1], left: rect[0], top: rect[1], width: rect[2], height: rect[3]}),
+        scrollIntoView() {}, querySelectorAll: () => []
+    }, extra);
+    const card = mk('HE-CARD', {tabindex: '0'}, [0, 0, 600, 300], {innerText: 'Soumission Publier maintenant', textContent: 'Soumission Publier maintenant'});
+    const host = mk('HE-BUTTON', {}, [400, 240, 160, 40], {innerText: 'Publier maintenant', textContent: 'Publier maintenant'});
+    const span = mk('SPAN', {}, [420, 250, 120, 20], {innerText: 'Publier maintenant', textContent: 'Publier maintenant'});
+    const shadow = {nodeType: 11, host};
+    const inner = mk('BUTTON', {}, [400, 240, 160, 40], {innerText: '', textContent: '', parentNode: shadow});
+    inner.onTrusted = (type) => { if (type === 'click') inner.clicks = (inner.clicks || 0) + 1; };
+    const slot = mk('SLOT', {}, [420, 250, 120, 20], {parentNode: inner, parentElement: inner});
+    shadow.querySelectorAll = () => [inner, slot];
+    shadow.elementFromPoint = (x, y) => (x >= 420 && x <= 540 && y >= 250 && y <= 270) ? span : inner;
+    host.shadowRoot = shadow;
+    host.parentNode = host.parentElement = card;
+    span.parentNode = span.parentElement = host;
+    span.assignedSlot = slot;
+    doc.querySelectorAll = (sel) => sel === '*' ? [card, host, span] : [];
+    doc.elementFromPoint = (x, y) => (x >= 400 && x <= 560 && y >= 240 && y <= 280) ? host : card;
+    const h = harness({document: doc, window: win});
+    const res = await h.run('click', {tabId: 1, text: 'Publier maintenant', timeoutMs: 0});
+    assert.equal(res.data.success, true);
+    assert.equal(res.data.tagName, 'BUTTON');  // le bouton du composant, pas <he-card>
+    assert.ok(res.data.coordinates.x >= 400 && res.data.coordinates.y >= 240);
+    assert.equal(res.data.trusted_click, true);  // le slot relie le texte au bouton (arbre rendu)
+});
+
+test('boîte beforeunload : Chrome active l\'onglet de l\'agent, l\'onglet de l\'utilisateur lui est rendu, la boîte reste', async () => {
+    const activated = [];
+    const onActivated = (info) => { for (const fn of activated) fn(info); };
+    const updates = [];
+    let active = 5;
+    const h = harness({}, {tabs: {
+        get: async (id) => ({id, url: 'https://x.com/compose', windowId: 10, active: id === active}),
+        update: async (id, p) => { updates.push([id, p]); return {id, ...p, windowId: 10}; },
+        onActivated: {addListener(fn) { activated.push(fn); }}
+    }});
+    await h.run('eval', {tabId: 1, code: '1'});  // onglet de l'agent, débogueur attaché
+    onActivated({tabId: 5, windowId: 10});  // l'utilisateur sur son onglet
+    active = 1;
+    onActivated({tabId: 1, windowId: 10});  // Chrome passe l'onglet de l'agent devant pour sa boîte
+    await h.emit(1, 'Page.javascriptDialogOpening', {type: 'beforeunload', message: ''});
+    await new Promise(r => setTimeout(r, 0));
+    assert.deepEqual(plain(updates), [[5, {active: true}]]);
+    const pending = await h.run('eval', {tabId: 1, code: '1'});
+    assert.match(pending.error || JSON.stringify(pending), /beforeunload/);  // boîte toujours à régler par handle_dialog
+    // L'utilisateur était déjà sur l'onglet de l'agent (aucune activation récente) : rien ne bouge.
+    updates.length = 0;
+    await h.emit(1, 'Page.javascriptDialogClosed', {});
+    h.evalInContext('activeTabs.get(10).at = 0');
+    await h.emit(1, 'Page.javascriptDialogOpening', {type: 'beforeunload', message: ''});
+    await new Promise(r => setTimeout(r, 0));
+    assert.deepEqual(plain(updates), []);
+});
+
 test('repli JavaScript signalé quand le débogueur ne peut pas s\'attacher', async () => {
     const h = harness({}, {attachError: 'Cannot attach to this target.'});
     const res = await h.run('click', {tabId: 1, selector: 'button'});
@@ -2100,6 +2264,49 @@ test("trigger_probe.js (accord des gestes sortants) : lecture sans geste du déc
     const typed = tf({});
     assert.deepEqual([typed.field, typed.submits], [true, ['Submit']]);
 });
+test("trigger_probe.js : bouton d'un composant web (texte rendu par un slot ou dans la shadow root) lu quel que soit le ciblage", async () => {
+    // Partner Center, 26/10 : <he-card> contient <he-button> dont le <button> est dans la shadow root et affiche, par
+    // un <slot>, le texte « Publier maintenant » placé dans le DOM clair. Le bouton lui-même n'a aucun texte DOM.
+    const source = fs.readFileSync(path.join(__dirname, '..', 'client', 'trigger_probe.js'), 'utf8');
+    const text = (data) => ({nodeType: 3, data});
+    const node = (tag, attrs = {}, kids = []) => {
+        const n = {
+            nodeType: 1, tagName: tag, attrs, childNodes: [], parentNode: null, parentElement: null, innerText: '',
+            getAttribute: (k) => Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null,
+            querySelectorAll: () => n.childNodes.filter(k => k.nodeType === 1).flatMap(k => [k, ...k.querySelectorAll('*')])
+        };
+        for (const k of kids) { k.parentNode = n; if (k.nodeType === 1) k.parentElement = n; n.childNodes.push(k); }
+        Object.defineProperty(n, 'textContent', {get: () => n.childNodes.map(k => k.nodeType === 3 ? k.data : k.textContent).join('')});
+        return n;
+    };
+    const label = text('Publier maintenant');
+    const span = node('SPAN', {}, [label]);
+    span.innerText = 'Publier maintenant';
+    const host = node('HE-BUTTON', {}, [span]);
+    host.innerText = 'Publier maintenant';
+    const slot = node('SLOT');
+    slot.assignedNodes = () => [span];
+    const button = node('BUTTON', {}, [slot]);
+    const shadow = {nodeType: 11, host, childNodes: [button], querySelectorAll: () => [button, slot]};
+    button.parentNode = shadow;
+    host.shadowRoot = shadow;
+    span.assignedSlot = slot;
+    const card = node('HE-CARD', {tabindex: '0'}, [node('H2', {}, [text('Soumission')]), host]);
+    card.innerText = 'Soumission Publier maintenant';
+    const body = node('BODY', {}, [card]);
+    const som = new Map([[30, button], [31, host]]);
+    const doc = {title: 'Partner Center', querySelectorAll: (sel) => sel === '*' ? [body, ...body.querySelectorAll('*')] : [], getElementById: () => null, activeElement: null};
+    const win = {__nexus_som_elements: som, location: {href: 'https://partner.microsoft.com/dashboard/products/x/submissions/1'}};
+    const probe = (spec) => JSON.parse(JSON.stringify(vm.runInNewContext(source, {document: doc, window: win})(spec)));
+    // mark sur le <button> de la shadow root (libellé DOM vide) : le texte rendu par le slot est lu.
+    assert.deepEqual([probe({mark: 30}).label, probe({mark: 30}).clickable], ['Publier maintenant', true]);
+    // mark sur l'hôte du composant : son bouton intérieur le rend cliquable.
+    assert.deepEqual([probe({mark: 31}).label, probe({mark: 31}).clickable], ['Publier maintenant', true]);
+    // Texte : la cible est le bouton le plus proche (par le slot), jamais la carte qui le contient.
+    const byText = probe({text: 'Publier maintenant'});
+    assert.deepEqual([byText.tagName, byText.label, byText.clickable], ['BUTTON', 'Publier maintenant', true]);
+});
+
 test("field_state : liste multiple = l'option voulue SEULE sélectionnée ; champ retiré de la page = erreur", async () => {
     const {h, dom} = richHarness((h) => [
         h('label', {for: 'plans'}, 'Formules'),

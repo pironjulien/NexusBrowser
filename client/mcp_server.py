@@ -509,7 +509,9 @@ def _gated(
     typed: str = "",
 ) -> str:
     """Geste précédé du contrôle d'accord (outward_gate) : déclencheur lu sans geste, geste sortant refusé sans
-    confirm=true et l'accord lié à cette action exacte. Arrêt d'urgence et tab_id contrôlés avant toute lecture."""
+    confirm=true et l'accord lié à cette action exacte. Arrêt d'urgence et tab_id contrôlés avant toute lecture.
+    L'accord n'est consommé que si le geste part : refusé avant tout envoi (couvert, introuvable), il reste valable."""
+    hold = None
     try:
         tab_id = params.get("tab_id")
         if not _valid_tab(tab_id):
@@ -518,7 +520,7 @@ def _gated(
             emergency_stop.check()
             read_timeout = transport_timeout(wait_ms, timeout) if wait_ms is not None else timeout
 
-            outward_gate.check(
+            hold = outward_gate.check(
                 ACCORDS,
                 _read_trigger,
                 [{**target, "tab_id": tab_id} for target in targets],
@@ -533,7 +535,13 @@ def _gated(
         return json.dumps({"status": "error", "error": str(refusal), "accord_required": True}, ensure_ascii=False)
     except (OSError, RuntimeError, ValueError, KeyError, IndexError) as error:
         return json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False)
-    return _call_bridge(action, params, timeout, wait_ms=wait_ms)
+    result = _call_bridge(action, params, timeout, wait_ms=wait_ms)
+    if hold is not None and outward_gate.not_sent(result) and hold.restore():
+        payload = json.loads(result)
+        payload["accord_kept"] = True
+        payload["error"] = f"{payload['error']} The accord was not used: resend with the same accord once fixed."
+        return json.dumps(payload, ensure_ascii=False)
+    return result
 
 
 @browser_mcp.tool(annotations=_titled(LOCAL_READ, "List tabs"))

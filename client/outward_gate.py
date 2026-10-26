@@ -186,6 +186,42 @@ class AccordRequired(Exception):
     """Geste sortant sans l'accord lié à cette action exacte : rien n'a été fait (message pour l'agent, en anglais)."""
 
 
+class Hold:
+    """Accord consommé par un geste permis, rendu tel quel (même jeton, même échéance) si le geste n'est finalement
+    pas parti : élément couvert, introuvable ou ambigu au moment du geste. Copie embarquée de garde_fous identique à
+    la politique commune : son registre interne est repris ici, sans en changer la règle."""
+
+    def __init__(self, accords: garde_fous.Accords, token: str, entry: tuple) -> None:
+        self.accords, self.token, self.entry = accords, token, entry
+
+    def restore(self) -> bool:
+        with self.accords._lock:  # pyright: ignore[reportPrivateUsage]
+            pending = self.accords._pending  # pyright: ignore[reportPrivateUsage]
+            if self.token in pending:
+                return False
+            pending[self.token] = self.entry
+        return True
+
+
+# Refus du geste AVANT tout événement envoyé (extension : « Nothing was sent. », anciennes versions : leurs messages).
+NOT_SENT = re.compile(
+    r"nothing was sent|no mouse action sent|element not found|no element (matches|registered|with text|has focus)|"
+    r"ambiguous locator|out of range|frame of mark #\d+ is gone",
+    re.IGNORECASE,
+)
+
+
+def not_sent(raw: str) -> bool:
+    """Réponse d'un geste (JSON du serveur MCP) refusé avant tout envoi : l'accord n'a pas servi."""
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return False
+    if not isinstance(payload, dict) or payload.get("status") != "error" or payload.get("dialogOpened"):
+        return False
+    return bool(NOT_SENT.search(str(payload.get("error") or "")))
+
+
 PROBE_JS = (Path(__file__).resolve().with_name("trigger_probe.js")).read_text(encoding="utf-8").strip()
 ACTIVE_ROLES = {
     "button",
@@ -323,21 +359,22 @@ def check(
     timeout: float = 20.0,
     focus_ok: bool = False,
     typed: str = "",
-) -> None:
+) -> Hold | None:
     """Contrôle avant le geste. targets : éléments du geste (glisser : source puis destination), chacun donné par ses
     paramètres de ciblage (tab_id compris : locator, mark, selector, text, ou rien = élément actif).
     gestures : « click », « drag », « Enter », « Control+Enter », « Space »... focus_ok : aucun élément actif = la touche
     part sur la page, libre ; sinon une cible introuvable refuse (jamais un clic non lu). typed : texte frappé avec le
-    geste. Lève AccordRequired si un accord manque, RuntimeError/ValueError/OSError si la lecture échoue."""
+    geste. Lève AccordRequired si un accord manque, RuntimeError/ValueError/OSError si la lecture échoue. Rend le
+    Hold de l'accord consommé (None sans accord) : à rendre si le geste ne part pas."""
     if not gestures:
-        return
+        return None
     keys = any(g.rsplit("+", 1)[-1] in ("Enter", "Space") for g in gestures)
     found: tuple[dict, str] | None = None
     for params in targets:
         wait_s = 0.0 if focus_ok else float(params.get("timeoutMs") or 0) / 1000
         for data in read_trigger(read, params, timeout, wait_s):
             if data.get("dialogOpened") or data.get("ambiguous"):
-                return  # le geste lui-même rapportera la boîte de dialogue ou l'ambiguïté, sans rien déclencher
+                return None  # le geste lui-même rapportera la boîte de dialogue ou l'ambiguïté, sans rien déclencher
             if data.get("notFound"):
                 if focus_ok:
                     continue
@@ -359,12 +396,16 @@ def check(
         if found:
             break
     if found is None:
-        return
+        return None
     data, label = found
     gesture = ("key " if gestures[0] not in ("click", "drag") else "") + ",".join(gestures)
     act = describe_action(data, gesture, label, typed)
+    token = str(accord or "").strip().lower()
+    with accords._lock:  # pyright: ignore[reportPrivateUsage]
+        entry = accords._pending.get(token)  # pyright: ignore[reportPrivateUsage]
     if refusal := accords.check(act, confirm, accord):
         raise AccordRequired(refusal)
+    return Hold(accords, token, entry) if entry is not None else None
 
 
 def page_note(accords: garde_fous.Accords, data: Any, source: str) -> str:

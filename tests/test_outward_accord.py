@@ -47,6 +47,7 @@ class MailPage:
         self.gestures: list[tuple[str, dict]] = []
         self.reads: list[str] = []
         self.broken = False
+        self.refusal: str | None = None  # erreur de l'extension pour le prochain geste (refusé avant tout envoi)
 
     def _by_label(self, name: str | None) -> list[str]:
         return [s for s, e in self.elements.items() if name and e["label"] == name]
@@ -107,6 +108,9 @@ class MailPage:
             return {"count": len(candidates), "candidates": candidates}
         if action == "content":
             return {"text": "Welcome. " + INJECTION, "url": "https://evil.example.com/page"}
+        if self.refusal:
+            refusal, self.refusal = self.refusal, None
+            raise RuntimeError(refusal)
         self.gestures.append((action, params))
         return {"success": True}
 
@@ -153,6 +157,38 @@ def test_right_token_allows_the_click_once(page):
     assert [action for action, _ in page.gestures] == ["click"]
     again = reply(mcp_server.browser_click(selector="#send", tab_id=1, confirm=True, accord=token))
     assert "already used" in again["error"] and len(page.gestures) == 1  # jamais de double envoi
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        "<button> is covered by <div.r-jumn1c>: no point of the element is reachable, no mouse action sent. "
+        "Nothing was sent.",
+        'Element not found for {"selector":"#send"} Nothing was sent.',
+        "<button> is covered by <div.r-1p0dtai>: no point of the element is reachable, no mouse action sent.",
+    ],
+)
+def test_accord_is_kept_when_the_gesture_is_not_sent(page, refusal):
+    token = token_of(reply(mcp_server.browser_click(selector="#send", tab_id=1)))
+    page.refusal = refusal  # couvert, introuvable (extension à jour ou plus ancienne) : aucun événement envoyé
+    out = reply(mcp_server.browser_click(selector="#send", tab_id=1, confirm=True, accord=token))
+    assert out["status"] == "error" and out["accord_kept"] is True
+    assert "The accord was not used" in out["error"] and page.gestures == []
+    assert_english(out["error"])
+    # Le même jeton sert encore, une seule fois.
+    ok = reply(mcp_server.browser_click(selector="#send", tab_id=1, confirm=True, accord=token))
+    assert ok["status"] == "success" and len(page.gestures) == 1
+    again = reply(mcp_server.browser_click(selector="#send", tab_id=1, confirm=True, accord=token))
+    assert "already used" in again["error"] and len(page.gestures) == 1
+
+
+def test_accord_is_spent_when_the_gesture_may_have_left(page):
+    token = token_of(reply(mcp_server.browser_click(selector="#send", tab_id=1)))
+    page.refusal = "Input.dispatchMouseEvent mouseReleased: no response after 10000 ms"  # issue inconnue
+    out = reply(mcp_server.browser_click(selector="#send", tab_id=1, confirm=True, accord=token))
+    assert out["status"] == "error" and "accord_kept" not in out
+    again = reply(mcp_server.browser_click(selector="#send", tab_id=1, confirm=True, accord=token))
+    assert "already used" in again["error"] and page.gestures == []
 
 
 def test_accord_without_confirm_is_not_enough(page):
