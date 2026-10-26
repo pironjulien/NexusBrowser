@@ -206,3 +206,20 @@ def test_pack_scope_configures_only_the_listed_ai_apps(home, monkeypatch, capsys
     monkeypatch.setenv("NEXUS_PACK_TARGETS", "codex, chatgpt")
     assert rc.main() == 2  # nom inconnu : refusé, rien configuré
     assert rc.pack_scope("") == set() and rc.pack_scope(None) is None  # vide : aucune IA ; absente : toutes
+
+
+def test_claude_desktop_with_the_mcpb_extension_gets_no_second_server(home):
+    """Extension .mcpb de Claude Desktop installée : elle lance déjà le serveur, aucune entrée n'est ajoutée et celle
+    de l'installeur est retirée (outils en double sinon) ; une entrée écrite par l'utilisateur reste."""
+    desktop = home / "AppData" / "Roaming" / "Claude"
+    rc.claude_desktop(home, PY, SERVER, home / "b")  # dossier absent : rien
+    desktop.mkdir(parents=True)
+    assert rc.claude_desktop(home, PY, SERVER, home / "b")[0].startswith("declared")
+    extension = desktop / "Claude Extensions" / "local.mcpb.julien-piron.nexus-browser"
+    extension.mkdir(parents=True)
+    (extension / "manifest.json").write_text(json.dumps({"name": "nexus-browser"}), encoding="utf-8")
+    result = rc.claude_desktop(home, PY, SERVER, home / "b")[0]
+    assert result == rc.MCPB + " (the installer's own entry removed)" and rc.short(result) == "plugin"
+    config = json.loads((desktop / "claude_desktop_config.json").read_text(encoding="utf-8"))
+    assert "nexus-browser" not in config.get("mcpServers", {})
+    assert rc.claude_desktop(home, PY, SERVER, home / "b") == [rc.MCPB]

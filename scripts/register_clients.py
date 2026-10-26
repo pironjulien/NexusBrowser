@@ -167,10 +167,33 @@ def claude_desktop(home: Path, python: str, server: str, backups: Path) -> list[
         *sorted(path for path in (local / "Claude-Data").glob("*") if path.is_dir()),
     ]
     return [
-        set_json_server(folder / "claude_desktop_config.json", entry(python, server, "Claude"), server, backups)
+        claude_desktop_folder(folder, python, server, backups)
         for folder in folders
         if folder.is_dir() and not any(folder.glob(".user-data-left.*"))
     ]
+
+
+MCPB = "provided by the nexus-browser extension of Claude Desktop (.mcpb)"
+
+
+def mcpb_installed(folder: Path) -> bool:
+    """The nexus-browser .mcpb extension installed in this Claude Desktop (Claude Extensions/<id>/manifest.json)."""
+    for manifest in folder.glob("Claude Extensions/*/manifest.json"):
+        try:
+            if json.loads(manifest.read_text(encoding="utf-8-sig")).get("name") == NAME:
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def claude_desktop_folder(folder: Path, python: str, server: str, backups: Path) -> str:
+    """One Claude Desktop: its .mcpb extension, when installed, already starts the server; an entry would add a
+    second one (tools twice), so ours is removed and none is added."""
+    config = folder / "claude_desktop_config.json"
+    if mcpb_installed(folder):
+        return MCPB + (" (the installer's own entry removed)" if remove_json_server(config, server, backups) else "")
+    return set_json_server(config, entry(python, server, "Claude"), server, backups)
 
 
 TOML_TABLE = re.compile(r"^\[(?P<name>[^\]]+)\]\s*$", re.M)

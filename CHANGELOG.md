@@ -18,6 +18,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   what the model needs. `tools/list`: 68,501 to 64,033 characters (compact JSON), 16,355 to 15,492 tokens
   (o200k_base).
 
+### Fixed
+- Claude Desktop with the `nexus-browser.mcpb` extension installed (`Claude Extensions/<id>/manifest.json`): the
+  installer adds no entry to `claude_desktop_config.json` and removes its own (the extension already starts the
+  server; the tools came twice). An entry written by the user is left alone.
+
 ## [2.26.1] - 2026-10-26
 
 ### Fixed
