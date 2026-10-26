@@ -56,6 +56,7 @@ bridge shared by several agents.
 | `native-host/` | Local bridge (`bridge_server.py`: WebSocket 9224 for the extension, HTTP 9225 for the agents) and native host `com.nexus.browser_auth` |
 | `client/` | MCP server `nexus-browser` (`mcp_server.py`), authenticated transport (`bridge_client.py`), CLI (`browser_cli.py`), shared emergency stop |
 | `skills/`, `plugins/` | Skill and Antigravity plugin; `install.ps1` copies the skill into that plugin only |
+| `benchmarks/` | Reproducible token and success benchmark against Chrome DevTools MCP (`compare.py`, results and method in its README) |
 | `mcpb/` | Claude Desktop extension (`nexus-browser.mcpb`, attached to every release; server from PyPI) |
 | `gemini-extension.json` | Gemini CLI extension: `gemini extensions install https://github.com/pironjulien/NexusBrowser` (server from PyPI and the skill) |
 

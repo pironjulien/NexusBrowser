@@ -1,0 +1,930 @@
+{
+ "meta": {
+  "date": "2026-10-26",
+  "rounds": 5,
+  "tokenizer": "o200k_base",
+  "devtools_version": "1.12.0",
+  "nexus_version": "2.26.2",
+  "tasks": {
+   "read": "https://en.wikipedia.org/wiki/Chromium_(web_browser)",
+   "form": "https://httpbin.org/forms/post",
+   "click": "https://news.ycombinator.com/"
+  }
+ },
+ "summary": [
+  {
+   "engine": "NexusBrowser",
+   "task": "read",
+   "success": "5/5",
+   "tokens_median": 14874,
+   "calls_median": 3,
+   "seconds_median": 0.4
+  },
+  {
+   "engine": "NexusBrowser",
+   "task": "form",
+   "success": "5/5",
+   "tokens_median": 1318,
+   "calls_median": 4,
+   "seconds_median": 1.7
+  },
+  {
+   "engine": "NexusBrowser",
+   "task": "click",
+   "success": "5/5",
+   "tokens_median": 3794,
+   "calls_median": 5,
+   "seconds_median": 2.7
+  },
+  {
+   "engine": "Chrome DevTools MCP 1.12.0",
+   "task": "read",
+   "success": "5/5",
+   "tokens_median": 57542,
+   "calls_median": 2,
+   "seconds_median": 0.7
+  },
+  {
+   "engine": "Chrome DevTools MCP 1.12.0",
+   "task": "form",
+   "success": "5/5",
+   "tokens_median": 380,
+   "calls_median": 3,
+   "seconds_median": 0.9
+  },
+  {
+   "engine": "Chrome DevTools MCP 1.12.0",
+   "task": "click",
+   "success": "5/5",
+   "tokens_median": 10155,
+   "calls_median": 3,
+   "seconds_median": 1.9
+  }
+ ],
+ "runs": {
+  "NexusBrowser": [
+   {
+    "task": "read",
+    "ok": true,
+    "detail": "52260 chars read",
+    "seconds": 0.55,
+    "calls": 3,
+    "chars": 54057,
+    "tokens": 14873,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 478,
+      "tokens": 140
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 66,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_export",
+      "chars": 53513,
+      "tokens": 14715
+     }
+    ],
+    "round": 1
+   },
+   {
+    "task": "form",
+    "ok": true,
+    "detail": "all 7 fields read back",
+    "seconds": 1.81,
+    "calls": 4,
+    "chars": 4107,
+    "tokens": 1318,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 457,
+      "tokens": 135
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_interactive_map",
+      "chars": 2543,
+      "tokens": 833
+     },
+     {
+      "tool": "browser_fill_form",
+      "chars": 1039,
+      "tokens": 332
+     }
+    ],
+    "round": 1
+   },
+   {
+    "task": "click",
+    "ok": true,
+    "detail": "https://news.ycombinator.com/newest",
+    "seconds": 3.01,
+    "calls": 5,
+    "chars": 10634,
+    "tokens": 3794,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 456,
+      "tokens": 137
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_interactive_map",
+      "chars": 9745,
+      "tokens": 3539
+     },
+     {
+      "tool": "browser_click",
+      "chars": 299,
+      "tokens": 82
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 66,
+      "tokens": 18
+     }
+    ],
+    "round": 1
+   },
+   {
+    "task": "read",
+    "ok": true,
+    "detail": "52260 chars read",
+    "seconds": 0.37,
+    "calls": 3,
+    "chars": 54060,
+    "tokens": 14874,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 479,
+      "tokens": 141
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_export",
+      "chars": 53513,
+      "tokens": 14715
+     }
+    ],
+    "round": 2
+   },
+   {
+    "task": "form",
+    "ok": true,
+    "detail": "all 7 fields read back",
+    "seconds": 0.74,
+    "calls": 4,
+    "chars": 4106,
+    "tokens": 1317,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 456,
+      "tokens": 134
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_interactive_map",
+      "chars": 2543,
+      "tokens": 833
+     },
+     {
+      "tool": "browser_fill_form",
+      "chars": 1039,
+      "tokens": 332
+     }
+    ],
+    "round": 2
+   },
+   {
+    "task": "click",
+    "ok": true,
+    "detail": "https://news.ycombinator.com/newest",
+    "seconds": 2.66,
+    "calls": 5,
+    "chars": 10634,
+    "tokens": 3794,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 456,
+      "tokens": 137
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_interactive_map",
+      "chars": 9745,
+      "tokens": 3539
+     },
+     {
+      "tool": "browser_click",
+      "chars": 299,
+      "tokens": 82
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 66,
+      "tokens": 18
+     }
+    ],
+    "round": 2
+   },
+   {
+    "task": "read",
+    "ok": true,
+    "detail": "52260 chars read",
+    "seconds": 0.36,
+    "calls": 3,
+    "chars": 54059,
+    "tokens": 14874,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 478,
+      "tokens": 141
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_export",
+      "chars": 53513,
+      "tokens": 14715
+     }
+    ],
+    "round": 3
+   },
+   {
+    "task": "form",
+    "ok": true,
+    "detail": "all 7 fields read back",
+    "seconds": 1.67,
+    "calls": 4,
+    "chars": 4107,
+    "tokens": 1318,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 457,
+      "tokens": 135
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_interactive_map",
+      "chars": 2543,
+      "tokens": 833
+     },
+     {
+      "tool": "browser_fill_form",
+      "chars": 1039,
+      "tokens": 332
+     }
+    ],
+    "round": 3
+   },
+   {
+    "task": "click",
+    "ok": true,
+    "detail": "https://news.ycombinator.com/newest",
+    "seconds": 2.66,
+    "calls": 5,
+    "chars": 10632,
+    "tokens": 3793,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 454,
+      "tokens": 136
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_interactive_map",
+      "chars": 9745,
+      "tokens": 3539
+     },
+     {
+      "tool": "browser_click",
+      "chars": 299,
+      "tokens": 82
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 66,
+      "tokens": 18
+     }
+    ],
+    "round": 3
+   },
+   {
+    "task": "read",
+    "ok": true,
+    "detail": "52260 chars read",
+    "seconds": 0.31,
+    "calls": 3,
+    "chars": 54060,
+    "tokens": 14874,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 479,
+      "tokens": 141
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_export",
+      "chars": 53513,
+      "tokens": 14715
+     }
+    ],
+    "round": 4
+   },
+   {
+    "task": "form",
+    "ok": true,
+    "detail": "all 7 fields read back",
+    "seconds": 1.73,
+    "calls": 4,
+    "chars": 4107,
+    "tokens": 1318,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 457,
+      "tokens": 135
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_interactive_map",
+      "chars": 2543,
+      "tokens": 833
+     },
+     {
+      "tool": "browser_fill_form",
+      "chars": 1039,
+      "tokens": 332
+     }
+    ],
+    "round": 4
+   },
+   {
+    "task": "click",
+    "ok": true,
+    "detail": "https://news.ycombinator.com/newest",
+    "seconds": 2.68,
+    "calls": 5,
+    "chars": 10633,
+    "tokens": 3793,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 455,
+      "tokens": 136
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_interactive_map",
+      "chars": 9745,
+      "tokens": 3539
+     },
+     {
+      "tool": "browser_click",
+      "chars": 299,
+      "tokens": 82
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 66,
+      "tokens": 18
+     }
+    ],
+    "round": 4
+   },
+   {
+    "task": "read",
+    "ok": true,
+    "detail": "52260 chars read",
+    "seconds": 0.34,
+    "calls": 3,
+    "chars": 54060,
+    "tokens": 14874,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 479,
+      "tokens": 141
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_export",
+      "chars": 53513,
+      "tokens": 14715
+     }
+    ],
+    "round": 5
+   },
+   {
+    "task": "form",
+    "ok": true,
+    "detail": "all 7 fields read back",
+    "seconds": 1.71,
+    "calls": 4,
+    "chars": 4106,
+    "tokens": 1317,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 456,
+      "tokens": 134
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_interactive_map",
+      "chars": 2543,
+      "tokens": 833
+     },
+     {
+      "tool": "browser_fill_form",
+      "chars": 1039,
+      "tokens": 332
+     }
+    ],
+    "round": 5
+   },
+   {
+    "task": "click",
+    "ok": true,
+    "detail": "https://news.ycombinator.com/newest",
+    "seconds": 2.68,
+    "calls": 5,
+    "chars": 10634,
+    "tokens": 3794,
+    "steps": [
+     {
+      "tool": "browser_new_tab",
+      "chars": 456,
+      "tokens": 137
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 68,
+      "tokens": 18
+     },
+     {
+      "tool": "browser_interactive_map",
+      "chars": 9745,
+      "tokens": 3539
+     },
+     {
+      "tool": "browser_click",
+      "chars": 299,
+      "tokens": 82
+     },
+     {
+      "tool": "browser_wait_load",
+      "chars": 66,
+      "tokens": 18
+     }
+    ],
+    "round": 5
+   }
+  ],
+  "Chrome DevTools MCP 1.12.0": [
+   {
+    "task": "read",
+    "ok": true,
+    "detail": "180876 chars read",
+    "seconds": 1.04,
+    "calls": 2,
+    "chars": 181003,
+    "tokens": 58271,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 127,
+      "tokens": 35
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 180876,
+      "tokens": 58236
+     }
+    ],
+    "round": 1
+   },
+   {
+    "task": "form",
+    "ok": true,
+    "detail": "all 7 fields read back",
+    "seconds": 1.1,
+    "calls": 3,
+    "chars": 1184,
+    "tokens": 380,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 68,
+      "tokens": 21
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 1084,
+      "tokens": 354
+     },
+     {
+      "tool": "fill_form",
+      "chars": 32,
+      "tokens": 5
+     }
+    ],
+    "round": 1
+   },
+   {
+    "task": "click",
+    "ok": true,
+    "detail": "https://news.ycombinator.com/newest",
+    "seconds": 2.48,
+    "calls": 3,
+    "chars": 27432,
+    "tokens": 10155,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 81,
+      "tokens": 26
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 27261,
+      "tokens": 10108
+     },
+     {
+      "tool": "click",
+      "chars": 90,
+      "tokens": 21
+     }
+    ],
+    "round": 1
+   },
+   {
+    "task": "read",
+    "ok": true,
+    "detail": "178336 chars read",
+    "seconds": 0.65,
+    "calls": 2,
+    "chars": 178463,
+    "tokens": 57542,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 127,
+      "tokens": 35
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 178336,
+      "tokens": 57507
+     }
+    ],
+    "round": 2
+   },
+   {
+    "task": "form",
+    "ok": true,
+    "detail": "all 7 fields read back",
+    "seconds": 0.86,
+    "calls": 3,
+    "chars": 1184,
+    "tokens": 380,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 68,
+      "tokens": 21
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 1084,
+      "tokens": 354
+     },
+     {
+      "tool": "fill_form",
+      "chars": 32,
+      "tokens": 5
+     }
+    ],
+    "round": 2
+   },
+   {
+    "task": "click",
+    "ok": true,
+    "detail": "https://news.ycombinator.com/newest",
+    "seconds": 1.89,
+    "calls": 3,
+    "chars": 27432,
+    "tokens": 10155,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 81,
+      "tokens": 26
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 27261,
+      "tokens": 10108
+     },
+     {
+      "tool": "click",
+      "chars": 90,
+      "tokens": 21
+     }
+    ],
+    "round": 2
+   },
+   {
+    "task": "read",
+    "ok": true,
+    "detail": "178336 chars read",
+    "seconds": 0.63,
+    "calls": 2,
+    "chars": 178463,
+    "tokens": 57542,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 127,
+      "tokens": 35
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 178336,
+      "tokens": 57507
+     }
+    ],
+    "round": 3
+   },
+   {
+    "task": "form",
+    "ok": true,
+    "detail": "all 7 fields read back",
+    "seconds": 0.9,
+    "calls": 3,
+    "chars": 1184,
+    "tokens": 380,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 68,
+      "tokens": 21
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 1084,
+      "tokens": 354
+     },
+     {
+      "tool": "fill_form",
+      "chars": 32,
+      "tokens": 5
+     }
+    ],
+    "round": 3
+   },
+   {
+    "task": "click",
+    "ok": true,
+    "detail": "https://news.ycombinator.com/newest",
+    "seconds": 1.88,
+    "calls": 3,
+    "chars": 27433,
+    "tokens": 10155,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 82,
+      "tokens": 26
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 27261,
+      "tokens": 10108
+     },
+     {
+      "tool": "click",
+      "chars": 90,
+      "tokens": 21
+     }
+    ],
+    "round": 3
+   },
+   {
+    "task": "read",
+    "ok": true,
+    "detail": "180437 chars read",
+    "seconds": 0.67,
+    "calls": 2,
+    "chars": 180565,
+    "tokens": 57542,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 128,
+      "tokens": 35
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 180437,
+      "tokens": 57507
+     }
+    ],
+    "round": 4
+   },
+   {
+    "task": "form",
+    "ok": true,
+    "detail": "all 7 fields read back",
+    "seconds": 0.92,
+    "calls": 3,
+    "chars": 1211,
+    "tokens": 380,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 69,
+      "tokens": 21
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 1110,
+      "tokens": 354
+     },
+     {
+      "tool": "fill_form",
+      "chars": 32,
+      "tokens": 5
+     }
+    ],
+    "round": 4
+   },
+   {
+    "task": "click",
+    "ok": true,
+    "detail": "https://news.ycombinator.com/newest",
+    "seconds": 1.89,
+    "calls": 3,
+    "chars": 27984,
+    "tokens": 10155,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 82,
+      "tokens": 26
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 27812,
+      "tokens": 10108
+     },
+     {
+      "tool": "click",
+      "chars": 90,
+      "tokens": 21
+     }
+    ],
+    "round": 4
+   },
+   {
+    "task": "read",
+    "ok": true,
+    "detail": "180437 chars read",
+    "seconds": 0.6,
+    "calls": 2,
+    "chars": 180565,
+    "tokens": 57542,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 128,
+      "tokens": 35
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 180437,
+      "tokens": 57507
+     }
+    ],
+    "round": 5
+   },
+   {
+    "task": "form",
+    "ok": true,
+    "detail": "all 7 fields read back",
+    "seconds": 0.88,
+    "calls": 3,
+    "chars": 1211,
+    "tokens": 380,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 69,
+      "tokens": 21
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 1110,
+      "tokens": 354
+     },
+     {
+      "tool": "fill_form",
+      "chars": 32,
+      "tokens": 5
+     }
+    ],
+    "round": 5
+   },
+   {
+    "task": "click",
+    "ok": true,
+    "detail": "https://news.ycombinator.com/newest",
+    "seconds": 1.88,
+    "calls": 3,
+    "chars": 27984,
+    "tokens": 10155,
+    "steps": [
+     {
+      "tool": "new_page",
+      "chars": 82,
+      "tokens": 26
+     },
+     {
+      "tool": "take_snapshot",
+      "chars": 27812,
+      "tokens": 10108
+     },
+     {
+      "tool": "click",
+      "chars": 90,
+      "tokens": 21
+     }
+    ],
+    "round": 5
+   }
+  ]
+ }
+}

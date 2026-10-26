@@ -1,5 +1,5 @@
 {
   "name": "nexus-browser",
-  "version": "2.26.2",
+  "version": "2.26.3",
   "description": "NexusBrowser Chrome bridge shared by Antigravity, Claude and Codex (direct CDP, forms, SoM maps, exports)"
 }

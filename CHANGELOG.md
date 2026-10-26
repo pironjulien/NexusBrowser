@@ -9,6 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the π icon is sent and the
   listing's 128 px icon is replaced by the π one.
 
+## [2.26.3] - 2026-10-26
+
+### Added
+- `benchmarks/`: a reproducible benchmark against Chrome DevTools MCP 1.12.0 (read a page, fill a form, click a
+  link; 5 rounds, tokens of the tool responses). Both succeed 15/15; NexusBrowser uses about 74 % fewer tokens to
+  read and 63 % fewer to click, Chrome DevTools MCP is lighter on the form (380 against 1,318: NexusBrowser reads
+  every field back). Method, results and how to run it isolated in `benchmarks/README.md`.
+- `NEXUS_BROWSER_HTTP_PORT` (client) and `bridge_server.py --port` (bridge): a test bridge on other ports, for
+  isolated runs such as the benchmark. Defaults unchanged (9224/9225).
+
 ## [2.26.2] - 2026-10-26
 
 ### Changed
@@ -1005,7 +1015,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.26.2...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.26.3...HEAD
+[2.26.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.3
 [2.26.2]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.2
 [2.26.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.1
 [2.26.0]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.0

@@ -23,8 +23,10 @@ sys.dont_write_bytecode = True
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 NATIVE_HOST_DIRECTORY = REPOSITORY_ROOT / "native-host"
 BRIDGE_SERVER_PATH = NATIVE_HOST_DIRECTORY / "bridge_server.py"
-API_URL = "http://127.0.0.1:9225/api/command"
-STATUS_URL = "http://127.0.0.1:9225/api/status"
+# Port HTTP du pont : 9225. NEXUS_BROWSER_HTTP_PORT vise un pont de test isolé (banc, essais), jamais l'usage normal.
+HTTP_PORT = int(os.environ.get("NEXUS_BROWSER_HTTP_PORT") or 9225)
+API_URL = f"http://127.0.0.1:{HTTP_PORT}/api/command"
+STATUS_URL = f"http://127.0.0.1:{HTTP_PORT}/api/status"
 
 sys.path.insert(0, str(NATIVE_HOST_DIRECTORY))
 

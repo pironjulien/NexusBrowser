@@ -797,7 +797,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=f"Nexus Browser Bridge v{VERSION}")
     parser.add_argument("--token-file", type=Path, help="Explicit per-user authentication token path")
     parser.add_argument("--log-file", type=Path, help="Rotating operational log path")
+    parser.add_argument("--port", type=int, default=PORT, help="WebSocket port (HTTP: the next one); tests only")
     arguments = parser.parse_args()
+    PORT = arguments.port
     try:
         asyncio.run(main(arguments.token_file, arguments.log_file))
     except KeyboardInterrupt:
