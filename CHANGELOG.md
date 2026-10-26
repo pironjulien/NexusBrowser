@@ -6,8 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Planned
-- Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the π icon is sent and the
-  listing's 128 px icon is replaced by the π one.
+- Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the Nexus family icon is
+  sent and the listing's 128 px icon is replaced by `extension/icons/icon128.png`.
+
+## [2.26.6] - 2026-10-26
+
+### Changed
+- Nexus family icon: the NexusBrowser window pictogram set in the julienpiron.fr medallion (clean silver ring, inner
+  circuits faded), the same on the site and in every Nexus product. 48 px and up (extension icons 48 and 128, popup
+  and pairing logo, `.mcpb` bundle icon) use the medallion `docs/assets/nexusbrowser-mark.svg`; 16 and 32 px keep the
+  pictogram alone (`docs/assets/nexusbrowser-icon.svg`), still readable in the toolbar. `notes/icons.mjs` now renders
+  every icon, the bundle's included.
 
 ## [2.26.5] - 2026-10-26
 

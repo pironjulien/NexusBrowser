@@ -1,6 +1,6 @@
 # Claude Desktop extension (MCPB, server type "uv"): the host installs this exact server version from PyPI with uv.
 [project]
 name = "nexus-browser-mcpb"
-version = "2.26.5"
+version = "2.26.6"
 requires-python = ">=3.14,<3.15"
-dependencies = ["nexus-browser==2.26.5"]
+dependencies = ["nexus-browser==2.26.6"]

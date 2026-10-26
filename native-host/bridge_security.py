@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-VERSION = "2.26.5"
+VERSION = "2.26.6"
 TOKEN_HEADER = "X-Nexus-Browser-Token"
 # Identité du client du pont (serveur MCP d'un agent, CLI, validation réelle) : nom de l'agent et identifiant de SA
 # session (un par processus MCP). Le pont la transmet à l'extension dans le canal signé ; l'extension s'en sert pour
