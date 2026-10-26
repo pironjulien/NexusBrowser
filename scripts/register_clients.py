@@ -268,6 +268,7 @@ def antigravity(home: Path, python: str, server: str, backups: Path) -> str | No
                 return REMOVED if remove_json_server(folder / "mcp_config.json", server, backups) else PLUGIN
         manifest = json.loads((ROOT / "plugins" / NAME / "plugin.json").read_text(encoding="utf-8"))
         write_atomic(plugin / "plugin.json", json.dumps(manifest, indent=2) + "\n")
+        shutil.copyfile(ROOT / "plugins" / NAME / manifest["logo"], plugin / manifest["logo"])  # Nexus family icon
         servers = {"mcpServers": {NAME: entry(python, server, "Antigravity")}}
         write_atomic(plugin_config, json.dumps(servers, indent=2, ensure_ascii=False) + "\n")
         write_atomic(plugin / "skills" / NAME / "SKILL.md", (ROOT / "skills" / NAME / "SKILL.md").read_text("utf-8"))

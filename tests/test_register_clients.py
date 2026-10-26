@@ -71,6 +71,7 @@ def test_antigravity_gets_a_plugin_and_the_global_entry_of_an_earlier_version_go
         "mcpServers": {"nexus-browser": rc.entry(PY, SERVER, "Antigravity")}
     }
     assert json.loads((plugin / "plugin.json").read_text(encoding="utf-8"))["name"] == "nexus-browser"
+    assert (plugin / "logo.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"  # plugin logo (Nexus family icon)
     assert "Julien" not in (plugin / "skills" / "nexus-browser" / "SKILL.md").read_text(encoding="utf-8")
     assert json.loads((folder / "mcp_config.json").read_text(encoding="utf-8")) == {
         "mcpServers": {"other": {"command": "x"}}

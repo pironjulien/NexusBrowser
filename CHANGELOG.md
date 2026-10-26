@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the Nexus family icon is
   sent and the listing's 128 px icon is replaced by `extension/icons/icon128.png`.
 
+## [2.26.8] - 2026-10-27
+
+### Added
+- Antigravity plugin logo: the Nexus family icon (`plugins/nexus-browser/logo.png`, 256 px, `logo` key of
+  `plugin.json`), copied with the plugin by the installer, like the other Nexus products.
+
 ## [2.26.7] - 2026-10-27
 
 ### Changed
