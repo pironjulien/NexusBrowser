@@ -405,7 +405,8 @@ def _answer(text: str, *blocks: Any, output: Any = None) -> CallToolResult:
     failed = payload is not None and payload.get("status") == "error"
     if output is not None and not failed:
         try:
-            output.model_validate(payload)
+            # Strict : la réponse publiée est l'originale, jamais une valeur convertie ("2" n'est pas un nombre).
+            output.model_validate(payload, strict=True)
             return CallToolResult(content=[TextContent(type="text", text=text), *blocks], structured_content=payload)
         except ValidationError as error:
             mismatch = "; ".join(
@@ -1205,7 +1206,7 @@ def browser_network_requests(
     return _call_bridge("network-requests", params)
 
 
-@_tool(PAGE_READ, "Network response body")
+@_tool(PAGE_READ, "Network response body", out.NetworkBodyAnswer)
 def browser_network_response(
     request_id: str,
     *,
@@ -1253,13 +1254,13 @@ def browser_vision_inspect(
     )
 
 
-@_tool(PAGE_READ, "Check a handoff")
+@_tool(PAGE_READ, "Check a handoff", out.HandoffAnswer)
 def browser_check_handoff(tab_id: TabId) -> str:
     """Proactively detects a 2FA screen (SMS, Google Authenticator), a CAPTCHA or Cloudflare Turnstile."""
     return _call_bridge("check-handoff", {"tab_id": tab_id})
 
 
-@_tool(PAGE_READ, "Page content")
+@_tool(PAGE_READ, "Page content", out.ContentAnswer)
 def browser_content(tab_id: TabId, mode: str = "interactive") -> str:
     """Extracts the web page content. Modes: interactive (clickable elements/inputs), text (plain text), html (DOM).
     The value of a password, a one-time code or a bank card is never returned: "[masked value]" appears in its
@@ -1267,7 +1268,7 @@ def browser_content(tab_id: TabId, mode: str = "interactive") -> str:
     return _call_bridge("content", {"mode": mode, "tab_id": tab_id}, note=_page_text(tab_id))
 
 
-@_tool(PAGE_READ, "Accessibility tree")
+@_tool(PAGE_READ, "Accessibility tree", out.AxTreeAnswer)
 def browser_axtree(tab_id: TabId, mode: Literal["full", "snapshot"] = "full", max_lines: int = 400) -> str:
     """Accessibility tree of the page via CDP. The value of a password, a one-time code or a bank card:
     "[masked value]".
@@ -1808,7 +1809,7 @@ def _finish_gsuite_export(max_chars: int) -> Callable[[Any], Any]:
     return finish
 
 
-@_tool(PAGE_READ, "Export page")
+@_tool(PAGE_READ, "Export page", out.ExportAnswer)
 def browser_export(
     tab_id: TabId,
     format: str = "markdown",
@@ -1833,7 +1834,7 @@ def browser_export(
     return _call_bridge("export-content", params, timeout=30.0, note=_page_text(tab_id))
 
 
-@_tool(PAGE_READ, "Export Google Docs, Sheets or Slides")
+@_tool(PAGE_READ, "Export Google Docs, Sheets or Slides", out.GoogleExportAnswer)
 def browser_export_gsuite(
     tab_id: TabId,
     format: str | None = None,
@@ -1859,7 +1860,7 @@ def browser_export_gsuite(
     )
 
 
-@_tool(PAGE_CHANGE, "YouTube transcript")
+@_tool(PAGE_CHANGE, "YouTube transcript", out.TranscriptAnswer)
 def browser_youtube_transcript(
     tab_id: TabId,
     lang: str | None = None,

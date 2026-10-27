@@ -26,6 +26,13 @@ TYPED = {
     "browser_logs",
     "browser_webmcp_tools",
     "browser_wait_for",
+    "browser_content",
+    "browser_axtree",
+    "browser_network_response",
+    "browser_check_handoff",
+    "browser_export",
+    "browser_export_gsuite",
+    "browser_youtube_transcript",
 }
 
 DIALOG = {"tabId": 3, "type": "alert", "message": "Hi", "defaultPrompt": "", "url": "https://example.com/"}
@@ -212,6 +219,115 @@ CASES: dict[str, tuple[dict, object]] = {
         [{"timestamp": 1.5, "method": "Log.entryAdded", "params": {"entry": {"text": "x", "lineNumber": "[masked]"}}}],
     ),
     "browser_wait_for": ({"text": "Welcome", "tab_id": 3}, {"count": 2}),
+    "browser_content": (
+        {"tab_id": 3},
+        {
+            "title": "Login",
+            "url": "https://example.com/login",
+            "elements": [
+                {
+                    "index": 0,
+                    "tag": "input",
+                    "text": "",
+                    "value": "[masked value]",
+                    "type": "password",
+                    "id": None,
+                    "className": "",
+                    "frame": "top",
+                    "rect": {"x": 1, "y": 2, "width": 3, "height": 4},
+                }
+            ],
+            "frames": [{"frame": "https://pay.example (iframe)", "url": "https://pay.example/"}],
+        },
+    ),
+    "browser_axtree": (
+        {"tab_id": 3},
+        {
+            "nodeCount": 240,
+            "nodes": [
+                {"nodeId": "12", "role": "textbox", "name": "Code", "value": "[masked value]", "ignored": False},
+                {"nodeId": "13", "role": "slider", "value": 42, "backendDOMNodeId": 7},
+                {"nodeId": "14", "name": "Footer"},
+            ],
+        },
+    ),
+    "browser_network_response": (
+        {"request_id": "1.2", "tab_id": 3},
+        {
+            "request_id": "1.2",
+            "url": "https://api.example.com/me?token=[masked]",
+            "status": 200,
+            "mimeType": "application/json",
+            "base64Encoded": False,
+            "binary": False,
+            "size": 120,
+            "truncated": False,
+            "body": '{"access_token":"[masked, 40 chars]"}',
+            "masked": 1,
+        },
+    ),
+    "browser_check_handoff": ({"tab_id": 3}, {"handoffRequired": False, "message": "No handoff detected."}),
+    "browser_export": (
+        {"tab_id": 3},
+        {
+            "url": "https://example.com/post",
+            "title": None,
+            "format": "markdown",
+            "content": "# Post",
+            "chars": 6,
+            "total_chars": 6,
+            "truncated": False,
+            "metadata": {"title": "Post", "author": None, "lang": "en"},
+            "root": {"method": "article", "tag": "article", "id": None, "class": None, "blocks": 3},
+            "stats": {"headings": 1, "paragraphs": 0, "words": 1},
+        },
+    ),
+    "browser_youtube_transcript": (
+        {"tab_id": 3},
+        {
+            "video_id": "abc",
+            "url": "https://www.youtube.com/watch?v=abc",
+            "title": "Video",
+            "channel": None,
+            "length_seconds": None,
+            "track": {
+                "lang": "fr",
+                "name": "French",
+                "auto": True,
+                "translatable": True,
+                "translated": False,
+                "translated_to": None,
+                "source_format": "json3",
+            },
+            "available_tracks": [{"lang": "fr", "name": None, "auto": True, "translatable": True}],
+            "segments": 1,
+            "duration_covered_seconds": 2.5,
+            "timed_text": "[00:00] Bonjour",
+            "text": "Bonjour",
+            "truncated": False,
+            "total_chars": {"timed_text": 15, "text": 7},
+            "method": "direct",
+            "player_source": "player",
+            "captions_toggled": False,
+        },
+    ),
+}
+
+# Export Google : la réponse du pont est finie côté Python (texte borné, total_chars, truncated).
+GSUITE = {
+    "kind": "document",
+    "label": "Google Docs",
+    "document_id": "1AbC",
+    "title": "Notes",
+    "format": "md",
+    "extension": "md",
+    "binary": False,
+    "mime": "text/markdown",
+    "bytes": 7,
+    "filename": "Notes.md",
+    "export_url": "https://docs.google.com/document/d/1AbC/export?format=md",
+    "via": "page",
+    "text": "# Notes",
 }
 
 WEBMCP = {
@@ -261,10 +377,26 @@ def test_bridge_answers_and_dialog_interruptions_fit_the_schemas():
     for name, data in samples.items():
         jsonschema.validate({"status": "success", "data": data}, tools[name].output_schema)
     interrupted = {"dialogOpened": True, "dialog": DIALOG, "message": "A dialog interrupted the page."}
-    for name in ("browser_find", "browser_interactive_map"):
+    for mode_answer in ("plain page text", "<html></html>", ""):  # browser_content, modes text et html
+        jsonschema.validate({"status": "success", "data": mode_answer}, tools["browser_content"].output_schema)
+    snapshot = {"url": "", "title": "", "refs": 2, "snapshot": '- button "OK" [#1]'}
+    jsonschema.validate({"status": "success", "data": snapshot}, tools["browser_axtree"].output_schema)
+    binary = {"request_id": "1", "url": "https://x/", "status": 200, "mimeType": "image/png", "base64Encoded": True}
+    binary |= {"binary": True, "size": 10, "body": None, "note": "Binary body: include_binary=True to get it."}
+    jsonschema.validate({"status": "success", "data": binary}, tools["browser_network_response"].output_schema)
+    for name in (
+        "browser_find",
+        "browser_interactive_map",
+        "browser_content",
+        "browser_check_handoff",
+        "browser_export",
+        "browser_youtube_transcript",
+    ):
         jsonschema.validate({"status": "success", "data": interrupted}, tools[name].output_schema)
     for name, data in (("browser_active_tab", USER_TAB), ("browser_webmcp_tools", {"url": "", "supported": False})):
         jsonschema.validate({"status": "success", "data": data, "untrusted_note": "x"}, tools[name].output_schema)
+    gsuite_dialog = {**interrupted, "total_chars": 0, "text": "", "truncated": False}
+    jsonschema.validate({"status": "success", "data": gsuite_dialog}, tools["browser_export_gsuite"].output_schema)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"status": "success", "data": {"count": "two"}}, tools["browser_find"].output_schema)
 
@@ -290,7 +422,11 @@ def test_official_sdk_client_reads_structured_content(bridge, mode):
         async with Client(mcp_server.browser_mcp, mode=mode) as client:
             listed = {tool.name: tool for tool in (await client.list_tools()).tools}
             assert {name for name, tool in listed.items() if tool.output_schema} == TYPED
-            for name, (args, data) in [*CASES.items(), ("browser_webmcp_tools", ({"tab_id": 3}, WEBMCP))]:
+            extra = [
+                ("browser_webmcp_tools", ({"tab_id": 3}, WEBMCP)),
+                ("browser_export_gsuite", ({"tab_id": 3}, GSUITE)),
+            ]
+            for name, (args, data) in [*CASES.items(), *extra]:
                 bridge["answer"] = data
                 result = await client.call_tool(name, args)  # le client valide structuredContent contre le schéma
                 assert not result.is_error, (name, result.content)
@@ -302,6 +438,8 @@ def test_official_sdk_client_reads_structured_content(bridge, mode):
                     assert structured["data"]["count"] == 2
                 elif name == "browser_webmcp_tools":
                     assert structured["data"] == WEBMCP
+                elif name == "browser_export_gsuite":
+                    assert structured["data"] == {**GSUITE, "total_chars": 7, "truncated": False}
                 else:
                     assert structured["data"] == data, name
             # Valeurs secrètes jamais ajoutées : ce que l'extension masque le reste, à l'identique.
@@ -369,3 +507,20 @@ def test_answer_outside_the_schema_is_an_error_that_stops_the_batch(bridge, tmp_
         for line in f.read_text(encoding="utf-8").splitlines()
     ]
     assert lines[-1]["action"] == "logs" and lines[-1]["issue"] != "✓" and lines[-1]["erreur"]
+
+
+def test_validation_is_strict_like_the_published_schema(bridge):
+    """Valeur convertible mais d'un autre type (page hostile : durée "2") : jamais publiée sous un schéma « number »
+    qui ferait rejeter la réponse par le client, mais l'erreur nommée (relevé par Codex le 27/10)."""
+    args, data = CASES["browser_youtube_transcript"]
+    assert isinstance(data, dict)
+    registered = mcp_server.browser_mcp._tool_manager.get_tool("browser_youtube_transcript")  # noqa: SLF001
+    assert registered is not None
+    for field, value in (("duration_covered_seconds", "2"), ("truncated", 0), ("segments", True)):
+        bridge["answer"] = {**data, field: value}
+        answer = registered.fn(**args)
+        payload = json.loads(_text(answer))
+        assert answer.is_error and answer.structured_content is None, field
+        assert field in payload["error"] and payload["data"][field] == value
+    bridge["answer"] = {**data, "duration_covered_seconds": 2}  # un entier reste un nombre JSON
+    assert not registered.fn(**args).is_error

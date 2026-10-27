@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.31.0] - 2026-10-27
+
+### Changed
+- Seven more data tools publish their output schema and answer in `structuredContent`: `browser_content`
+  (elements, or the page's text or HTML as a string), `browser_axtree` (full and snapshot modes),
+  `browser_network_response`, `browser_check_handoff`, `browser_export`, `browser_export_gsuite` and
+  `browser_youtube_transcript`. 19 tools are typed; the others (actions, captures, `browser_eval`,
+  `browser_cdp_send` whose result is free) answer in text only. Same rules as 2.30.0: only `status` and `data`
+  required, unknown keys allowed, masked values unchanged. Checked for real on example.com through the SDK's client.
+
 ## [2.30.0] - 2026-10-27
 
 ### Changed
