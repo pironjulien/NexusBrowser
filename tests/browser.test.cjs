@@ -4890,3 +4890,45 @@ test('axtree snapshot : coupé à max_lines, mode full inchangé (nœuds bruts)'
     assert.equal(full.data.nodes.length, 50);
     assert.equal(full.data.snapshot, undefined);
 });
+
+// Navigation qui QUITTE le Chrome Web Store : jugée sur sa destination (pendingUrl), jamais sur l'ancienne page.
+test('wait_load : départ du Chrome Web Store vers une page autorisée, attendu normalement', async () => {
+    let calls = 0;
+    const h = harness({document: {readyState: 'complete', querySelectorAll: () => []}}, {tabs: {get: async (id) => (++calls < 3
+        ? {id, url: 'https://chromewebstore.google.com/detail/x/abc', pendingUrl: 'https://example.org/', status: 'loading', windowId: 10}
+        : {id, url: 'https://example.org/', status: 'complete', windowId: 10})}});
+    const res = await h.run('wait_load', {tabId: 1, timeoutMs: 5000});
+    assert.equal(res.error, undefined);
+    assert.equal(res.data.readyState, 'complete');
+    assert.ok(calls >= 3, 'attente du chargement, pas de refus');
+});
+
+// Instantané sans aucun contrôle : l'ancienne table de numéros et les racines de marqueurs sont vidées.
+test('axtree snapshot vide : anciens numéros oubliés, click(mark=1) ne vise plus l\'ancien élément', async () => {
+    let ref = null;
+    let nodes = snapshotAx();
+    const h = harness({}, {debuggerSendCommand: async (target, method, params) => {
+        if (method === 'Accessibility.getFullAXTree') return {nodes};
+        if (method === 'DOM.describeNode') return {node: {nodeName: 'BUTTON', attributes: []}};
+        if (method === 'DOM.resolveNode') return {object: {objectId: `obj-${params.backendNodeId}`}};
+        if (method === 'Runtime.callFunctionOn') {
+            const world = ref.worlds.get(params.executionContextId);
+            const byObject = {'obj-11': ref.element};
+            world.window.__nexus_som_elements = new Map(params.arguments.map((a, i) => [i + 1, byObject[a.objectId] || {}]));
+            return {result: {value: params.arguments.length}};
+        }
+        return undefined;
+    }});
+    ref = h;
+    assert.equal((await h.run('axtree', {tabId: 1, mode: 'snapshot'})).data.refs, 3);
+    h.evalInContext('markRoots.set(1, new Map([[1, "old"]]))');
+    nodes = [{nodeId: '1', role: {value: 'RootWebArea'}, name: {value: 'Vide'}, childIds: ['2']},
+        {nodeId: '2', role: {value: 'paragraph'}, childIds: ['2a']},
+        {nodeId: '2a', role: {value: 'StaticText'}, name: {value: 'Rien à cliquer'}}];
+    const empty = await h.run('axtree', {tabId: 1, mode: 'snapshot'});
+    assert.equal(empty.data.refs, 0);
+    assert.equal(h.evalInContext('markRoots.has(1)'), false);
+    const clicked = await h.run('click', {tabId: 1, mark: 1});
+    assert.equal(h.clicks, 0, 'aucun clic sur l\'ancien élément');
+    assert.ok(clicked.error, 'erreur claire : numéro inconnu');
+});

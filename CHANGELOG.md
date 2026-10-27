@@ -9,6 +9,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the Nexus family icon is
   sent and the listing's 128 px icon is replaced by `extension/icons/icon128.png`.
 
+## [2.28.1] - 2026-10-27
+
+### Fixed
+- `install.ps1`: the shared MCP daemon (port 16182) runs on the same venv and locks its native modules, so a package
+  update while it ran left the venv half-installed (27/10: websockets 17.3 without `asyncio/server.py`, bridge down).
+  When `uv sync --dry-run` reports changes, the daemon's supervisor spec is set aside (the supervisor stops it without
+  restarting it), packages are synced, then the spec is restored and the daemon restarts on the new code. Nothing to
+  change: the daemon stays up. Checked for real: package reinstalled, daemon restarted, extension verified.
+- `browser_wait_load`: a navigation that LEAVES the Chrome Web Store for an allowed page was refused as protected,
+  because Chrome still reports the old `url` while `pendingUrl` holds the destination. The page is now judged on its
+  destination (`pendingUrl || url`).
+- `browser_axtree` (`mode="snapshot"`): a snapshot with no numbered control left the previous number table and mark
+  roots in place, so `browser_click(mark=1)` clicked an element of the old page. The table and roots are now always
+  reset, even when the list is empty.
+
 ## [2.28.0] - 2026-10-27
 
 ### Changed

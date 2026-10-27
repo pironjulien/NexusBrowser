@@ -71,8 +71,34 @@ if (-not (Test-Path $pythonExe)) {
     if (Test-Path $systemPython) { & $uv venv --python $systemPython $venv } else { & $uv venv --python 3.14 $venv }
     if ($LASTEXITCODE) { throw 'Creation de l''environnement Python en echec.' }
 }
-& $uv sync --frozen --all-groups --project $PSScriptRoot
-if ($LASTEXITCODE) { throw 'uv sync a echoue.' }
+# Le demon MCP partage (port 16182) tourne sur ce venv et y verrouille les modules natifs (.pyd) : des paquets changes
+# pendant qu'il tourne laissaient le venv a moitie installe (27/10/2026 : websockets 17.3 sans asyncio\server.py, pont
+# muet). Paquets a changer : sa spec est mise de cote (le superviseur l'arrete sans le relancer), puis remise apres la
+# synchro, et il redemarre sur le nouveau code. Rien a changer : le demon reste en place.
+$daemonSpec = Join-Path $HOME '.nexus\daemons\specs\nexus-browser.json'
+$parkedSpec = "$daemonSpec.pause"
+$previousPreference = $ErrorActionPreference; $ErrorActionPreference = 'Continue'  # 5.1 : stderr de uv n'est pas une erreur
+$plan = & $uv sync --frozen --all-groups --project $PSScriptRoot --dry-run 2>&1 | Out-String
+$ErrorActionPreference = $previousPreference
+if ($plan -notmatch 'Would make no changes' -and (Test-Path $daemonSpec) -and
+    (Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue)) {
+    Move-Item -LiteralPath $daemonSpec $parkedSpec -Force
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+    }
+    if (Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue) {
+        Move-Item -LiteralPath $parkedSpec $daemonSpec -Force
+        throw "Le demon MCP Browser ne s'est pas arrete : environnement laisse tel quel."
+    }
+    Write-Journal 'Demon MCP Browser arrete le temps de mettre a jour ses paquets.'
+}
+try {
+    & $uv sync --frozen --all-groups --project $PSScriptRoot
+    if ($LASTEXITCODE) { throw 'uv sync a echoue.' }
+} finally {
+    if (Test-Path -LiteralPath $parkedSpec) { Move-Item -LiteralPath $parkedSpec $daemonSpec -Force }
+}
 
 & (Join-Path $PSScriptRoot 'scripts\installer-hote-natif.ps1')
 

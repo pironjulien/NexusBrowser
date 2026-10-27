@@ -4134,7 +4134,8 @@ async function getAccessibilitySnapshot(tabId, params = {}) {
     const target = await ensureDebugger(tabId);
     const { raw, byId, masked } = await maskedAxNodes(target);
     const { tree, candidates } = snapshotTree(raw, byId, masked);
-    const refs = candidates.length ? await registerSnapshotRefs(target, candidates) : 0;
+    // Toujours enregistré, même vide : la table et les racines de l'instantané précédent ne doivent pas survivre.
+    const refs = await registerSnapshotRefs(target, candidates);
     const maxLines = Math.max(20, Math.min(2000, parseInt(params.maxLines ?? params.max_lines, 10) || SNAPSHOT_MAX_LINES));
     let url = "";
     let title = "";
@@ -6183,8 +6184,9 @@ async function waitForLoad(params = {}) {
             // Un onglet tout juste ouvert (browser_new_tab) est encore sur about:blank, déjà "complete" : tant que
             // Chrome navigue (pendingUrl, status "loading"), ce n'est pas le document attendu.
             const tab = await chrome.tabs.get(tabId);
-            const protectedUrl = [tab?.pendingUrl, tab?.url].find(isChromeProtectedPage);
-            if (protectedUrl) return { error: chromeProtectedMessage(protectedUrl) };
+            // Jugée sur la destination : une navigation qui quitte le Chrome Web Store garde encore son ancienne url.
+            const destination = tab?.pendingUrl || tab?.url;
+            if (isChromeProtectedPage(destination)) return { error: chromeProtectedMessage(destination) };
             if (tab?.pendingUrl || tab?.status === "loading") {
                 await sleepMs(100);
                 continue;
