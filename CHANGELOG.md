@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.31.1] - 2026-10-27
+
+### Security
+- Release files are signed: `nexus-browser.mcpb` and `get.ps1` carry a build provenance attestation (Sigstore,
+  GitHub), and its bundle is attached as `nexus-browser.sigstore.json`. Check a download with
+  `gh attestation verify nexus-browser.mcpb --repo pironjulien/NexusBrowser`. PyPI files were already attested.
+- CodeQL code scanning on the public repository: Python (MCP server, bridge), JavaScript (extension) and the
+  workflows, on every push, pull request and weekly.
+
+### Changed
+- CI: setup-uv 10.3.2, pypi-publish 1.14.3, codeql-action 4.39.1 (pinned by commit), Node 24 LTS for the extension
+  tests.
+
 ## [2.31.0] - 2026-10-27
 
 ### Changed

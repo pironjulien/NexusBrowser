@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
         with:
           enable-cache: false  # release build: no cache shared with other runs (cache poisoning)
       - name: Version matches the release tag, README carries the MCP registry name
@@ -74,7 +74,7 @@ jobs:
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
 
   registry:
     # After the upload: server.json to the official MCP registry (namespace io.github.pironjulien), mcp-publisher
@@ -113,12 +113,14 @@ jobs:
   mcpb:
     # Claude Desktop extension (MCPB, server type "uv": the host installs this exact version from PyPI) and get.ps1 with
     # its SHA-256, attached to the release under fixed names so that releases/latest/download/<name> always points to
-    # them.
+    # them. Both are signed: build provenance (Sigstore, GitHub attestation), its bundle attached as well.
     needs: publish
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -136,15 +138,20 @@ jobs:
           PY
       - name: Pack (validates the manifest)
         run: npx --yes @anthropic-ai/mcpb@2.1.2 pack mcpb nexus-browser.mcpb
-      - name: Attach to the release
+      - name: Installer SHA-256 (the install path without irm | iex)
+        run: sha256sum get.ps1 > get.ps1.sha256
+      - name: Sign the release files (build provenance, Sigstore)
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: |
+            nexus-browser.mcpb
+            get.ps1
+      - name: Attach to the release, with the signature bundle (gh attestation verify <file> --repo <repo>)
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" nexus-browser.mcpb --clobber --repo "$GITHUB_REPOSITORY"
-      - name: Installer and its SHA-256 attached to the release (the install path without irm | iex)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
         run: |
-          sha256sum get.ps1 > get.ps1.sha256
-          gh release upload "$TAG" get.ps1 get.ps1.sha256 --clobber --repo "$GITHUB_REPOSITORY"
+          cp "$BUNDLE" nexus-browser.sigstore.json
+          gh release upload "$TAG" nexus-browser.mcpb get.ps1 get.ps1.sha256 nexus-browser.sigstore.json --clobber             --repo "$GITHUB_REPOSITORY"
