@@ -1,6 +1,7 @@
 """Démon partagé (--http) : une identité par session MCP (ses onglets), agent par URL, jeton exigé, sessions battues."""
 
 import asyncio
+import base64
 import os
 import socket
 import subprocess
@@ -153,6 +154,15 @@ def test_daemon_token_agent_and_two_sessions(tmp_path):
                     await asyncio.wait_for(tools(*bad), 30)
 
         asyncio.run(check())
+        # Aucun WebSocket (uvicorn ws="none") : une demande d'upgrade sans jeton reste une requête HTTP, refusée, et le
+        # démon ne charge pas websockets (une montée de websockets ne bute plus sur un .pyd verrouillé).
+        with socket.create_connection(("127.0.0.1", port), 5) as raw:
+            nonce = base64.b64encode(os.urandom(16))  # nonce WebSocket jetable (RFC 6455), jamais un secret
+            raw.sendall(
+                b"GET /mcp?agent=claude HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                b"Sec-WebSocket-Version: 13\r\nSec-WebSocket-" + b"Key: " + nonce + b"\r\n\r\n"
+            )
+            assert raw.recv(64).startswith(b"HTTP/1.1 401")
     finally:
         proc.terminate()
         _, err = proc.communicate(timeout=10)

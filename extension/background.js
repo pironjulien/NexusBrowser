@@ -918,8 +918,16 @@ async function handleCommand(req) {
     }
     const visible = tabId !== null && ownedBy(tabOwners.get(tabId), client) ? tabId : null;
     // Evaluation may legitimately return an object containing an error field.
-    if (action !== "eval" && result?.data?.error) {
-        return annotatePendingDialogs({ error: result.data.error }, visible);
+    if (action !== "eval" && result?.data?.error) result = { error: result.data.error };
+    // Erreur brute de Chrome sur une page qu'il protège : message clair, quelle que soit la commande.
+    if (typeof result?.error === "string" && CHROME_PROTECTED_RAW.test(result.error)) {
+        let url = null;
+        if (tabId !== null) try { url = (await chrome.tabs.get(tabId))?.url || null; } catch (_) {}
+        result = { error: clearProtectedError(result.error, url) };
+    }
+    // Onglet ouvert ou mené sur une page protégée : dit dès la réponse, avant toute attente ou lecture vouée à l'échec.
+    if ((action === "create_tab" || action === "navigate") && result?.data && isChromeProtectedPage(params.url)) {
+        result = { ...result, data: { ...result.data, protected_page: true, warning: chromeProtectedMessage(params.url) } };
     }
     return annotatePendingDialogs(result, visible);
 }
@@ -3219,6 +3227,38 @@ function isProtectedUrl(url) {
            (url.startsWith("about:") && url !== "about:blank");
 }
 
+// Pages que Chrome interdit à toute extension (aucun script, aucun débogueur) : pages internes et galerie du Chrome
+// Web Store. Reconnues tout de suite : l'attente de chargement tournait jusqu'au délai (30 s constatés le 27/10) avant
+// l'erreur brute de Chrome (« The extensions gallery cannot be scripted »).
+const CHROME_PROTECTED_RAW = /cannot be scripted|cannot access a chrome|cannot access contents of url "(chrome|edge|devtools|chrome-extension)|cannot attach to this target|chrome-extension:\/\/ url of different extension/i;
+
+function isChromeProtectedPage(url) {
+    if (isProtectedUrl(url)) return true;
+    try {
+        const u = new URL(String(url || ""));
+        const host = u.hostname.toLowerCase();
+        return host === "chromewebstore.google.com" || (host === "chrome.google.com" && /^\/webstore(\/|$)/.test(u.pathname));
+    } catch (_) {
+        return false;
+    }
+}
+
+function chromeProtectedMessage(url) {
+    let where = "";
+    try {
+        const u = new URL(String(url));
+        where = ` (${/^https?:$/.test(u.protocol) ? u.origin : `${u.protocol}//${u.host}`})`;
+    } catch (_) {}
+    return `Page protected by Chrome${where}: no extension may read or drive it (Chrome Web Store, chrome:// pages). ` +
+        "Use a desktop screenshot instead (NexusWindows, Chrome window in front with the user's agreement), or the " +
+        "Chrome Web Store API.";
+}
+
+/** Erreur brute de Chrome sur une page protégée : remplacée par le message clair (sinon renvoyée telle quelle). */
+function clearProtectedError(message, url = null) {
+    return CHROME_PROTECTED_RAW.test(String(message || "")) ? chromeProtectedMessage(url) : message;
+}
+
 async function ensureDebugger(tabId) {
     let tab = null;
     try { tab = await chrome.tabs.get(tabId); } catch(e) {}
@@ -3935,18 +3975,14 @@ async function axNodeSensitive(target, backendNodeId) {
     }
 }
 
-async function getAccessibilityTree(params = {}) {
-    let tabId = await resolveTargetTab(params);
-
-    const target = await ensureDebugger(tabId);
+/**
+ * Nœuds AX du cadre principal, et ceux d'un champ sensible (carte, code ; Chrome ne masque que les mots de passe) : sa
+ * valeur et celle de ses nœuds de texte descendants (StaticText, InlineTextBox, qui la répètent comme nom).
+ */
+async function maskedAxNodes(target) {
     await chrome.debugger.sendCommand(target, "Accessibility.enable");
-    const axResult = await chrome.debugger.sendCommand(target, "Accessibility.getFullAXTree", {
-        max_depth: params.maxDepth || 15
-    });
-
-    // Champ sensible (carte, code ; Chrome ne masque que les mots de passe) : sa valeur et celle de ses nœuds de texte
-    // descendants (StaticText, InlineTextBox, qui la répètent comme nom) remplacées par le marqueur.
-    const raw = axResult.nodes || [];
+    const axResult = await chrome.debugger.sendCommand(target, "Accessibility.getFullAXTree", {});
+    const raw = axResult?.nodes || [];
     const byId = new Map(raw.map(n => [n.nodeId, n]));
     const masked = new Set();
     for (const n of raw) {
@@ -3960,6 +3996,158 @@ async function getAccessibilityTree(params = {}) {
             for (const child of byId.get(id)?.childIds || []) stack.push(child);
         }
     }
+    return { raw, byId, masked };
+}
+
+// Instantané compact (façon snapshot ARIA de Playwright MCP) : une ligne par nœud utile, « - rôle "nom" [états] [#N] »,
+// en retrait selon l'arbre. Les numéros [#N] sont des marqueurs : browser_click(mark=N), browser_fill(mark=N)...
+const SNAPSHOT_REF_ROLES = new Set(["button", "link", "textbox", "searchbox", "checkbox", "radio", "combobox",
+    "listbox", "option", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "switch", "slider", "spinbutton",
+    "treeitem", "DisclosureTriangle", "ToggleButton", "PopUpButton", "InputTime", "date", "DateTime", "ColorWell"]);
+// Rôles sans valeur propre : leurs enfants remontent d'un cran (div, span, mise en page, mise en forme du texte).
+const SNAPSHOT_FLAT_ROLES = new Set(["generic", "none", "presentation", "InlineTextBox", "LineBreak", "Ignored", "LabelText",
+    "LayoutTable", "LayoutTableRow", "LayoutTableCell", "Pre", "Abbr", "Ruby", "Mark", "Time", "Section", "ListMarker",
+    "superscript", "subscript", "emphasis", "strong", "code", "insertion", "deletion", "Canvas", "Iframe",
+    "IframePresentational", "SvgRoot", "graphics-document", "graphics-symbol", "graphics-object"]);
+const SNAPSHOT_OPAQUE_ROLES = new Set(["InputTime", "date", "DateTime"]);
+const SNAPSHOT_STATES = ["checked", "pressed", "selected", "expanded", "disabled", "required", "invalid", "readonly"];
+const SNAPSHOT_TEXT_MAX = 100;
+const SNAPSHOT_MAX_LINES = 400;
+
+function snapshotText(value) {
+    const text = String(value ?? "").replace(/\s+/g, " ").trim();
+    return text.length > SNAPSHOT_TEXT_MAX ? text.slice(0, SNAPSHOT_TEXT_MAX - 1) + "…" : text;
+}
+
+function snapshotQuote(text) {
+    return JSON.stringify(String(text));
+}
+
+/** Arbre réduit aux nœuds utiles ; les candidats à un numéro (contrôles actifs) sont listés dans l'ordre du document. */
+function snapshotTree(raw, byId, masked) {
+    const candidates = [];
+    const build = (id, depth, parentName) => {
+        const n = byId.get(id);
+        if (!n || depth > 256) return [];
+        const role = n.role?.value || "";
+        const hide = masked.has(n.nodeId);
+        const childrenOf = (name) => (n.childIds || []).flatMap(child => build(child, depth + 1, name));
+        if (n.ignored || SNAPSHOT_FLAT_ROLES.has(role)) return childrenOf(parentName);
+        if (role === "StaticText") {
+            const text = hide ? LK.MASKED_VALUE : snapshotText(n.name?.value);
+            // Texte déjà dit par le nom du parent (lien, bouton, titre) : pas répété.
+            if (!text || (parentName && parentName.includes(text))) return [];
+            return [{ role: "text", name: text, children: [] }];
+        }
+        const name = role === "RootWebArea" ? "" : snapshotText(hide && role !== "textbox" ? LK.MASKED_VALUE : n.name?.value);
+        const props = Object.fromEntries((n.properties || []).map(p => [p.name, p.value?.value]));
+        const states = [];
+        if (role === "heading" && props.level) states.push(`level=${props.level}`);
+        for (const key of SNAPSHOT_STATES) {
+            const v = props[key];
+            if (v === true || v === "true") states.push(key);
+            else if (v === "mixed") states.push(`${key}=mixed`);
+        }
+        const rawValue = n.value?.value;
+        const value = rawValue === undefined || rawValue === null || rawValue === "" ? ""
+            : (hide ? LK.MASKED_VALUE : snapshotText(rawValue));
+        const node = { role, name, states, value, children: [] };
+        if (SNAPSHOT_REF_ROLES.has(role) && n.backendDOMNodeId && props.disabled !== true) {
+            node.backendNodeId = n.backendDOMNodeId;
+            candidates.push(node);
+        }
+        // Texte des enfants déjà dit par le nom ou la valeur (texte d'un champ = sa valeur) : pas répété.
+        // Parties internes d'un champ date ou heure (heures, minutes, bouton du sélecteur) : le champ suffit.
+        node.children = SNAPSHOT_OPAQUE_ROLES.has(role) ? []
+            : childrenOf([name, value].filter(Boolean).join(" ") || parentName);
+        // Conteneur anonyme sans contenu (groupe vide, liste vide) : omis.
+        if (!name && !value && !node.backendNodeId && !node.children.length && role !== "img" && role !== "separator") return [];
+        return [node];
+    };
+    const root = raw.find(n => n.role?.value === "RootWebArea") || raw[0];
+    return { tree: root ? build(root.nodeId, 0, "") : [], candidates };
+}
+
+function renderSnapshot(tree, maxLines) {
+    const lines = [];
+    let omitted = 0;
+    const walk = (nodes, indent) => {
+        for (const node of nodes) {
+            if (lines.length >= maxLines) { omitted++; walk(node.children, indent); continue; }
+            const pad = "  ".repeat(indent);
+            if (node.role === "text") { lines.push(`${pad}- text: ${snapshotQuote(node.name)}`); continue; }
+            // Nœud anonyme dont le seul contenu est un texte : sur une ligne (« - paragraph: "..." »).
+            const only = !node.name && !node.value && node.children.length === 1 && node.children[0].role === "text"
+                ? node.children[0] : null;
+            let line = `${pad}- ${node.role === "RootWebArea" ? "document" : node.role}`;
+            if (node.name) line += ` ${snapshotQuote(node.name)}`;
+            for (const s of node.states) line += ` [${s}]`;
+            if (node.ref) line += ` [#${node.ref}]`;
+            if (node.value) line += `: ${snapshotQuote(node.value)}`;
+            else if (only) line += `: ${snapshotQuote(only.name)}`;
+            lines.push(line);
+            if (!only) walk(node.children, indent + 1);
+        }
+    };
+    walk(tree, 0);
+    if (omitted) lines.push(`- … ${omitted} more nodes (snapshot cut at ${maxLines} lines: max_lines)`);
+    return lines.join("\n");
+}
+
+/**
+ * Numéros des contrôles de l'instantané : chaque nœud DOM est résolu dans le monde isolé de l'extension et rangé dans
+ * __nexus_som_elements (la table de browser_interactive_map), donc visé par tous les gestes par mark.
+ */
+async function registerSnapshotRefs(target, candidates) {
+    const root = rootOf(target);
+    for (let attempt = 0; ; attempt++) {
+        try {
+            const contextId = await rootContextId(root, attempt > 0);
+            const handles = [];
+            for (const node of candidates) {
+                try {
+                    const res = await chrome.debugger.sendCommand(target, "DOM.resolveNode", {
+                        backendNodeId: node.backendNodeId, executionContextId: contextId
+                    });
+                    if (res?.object?.objectId) handles.push({ node, objectId: res.object.objectId });
+                } catch (_) {}
+            }
+            await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
+                executionContextId: contextId,
+                functionDeclaration: "function(...els) { if (!(window.__nexus_som_elements instanceof Map)) " +
+                    "window.__nexus_som_elements = new Map(); window.__nexus_som_elements.clear(); " +
+                    "els.forEach((el, i) => window.__nexus_som_elements.set(i + 1, el)); return els.length; }",
+                arguments: handles.map(h => ({ objectId: h.objectId })),
+                returnByValue: true
+            });
+            handles.forEach((h, i) => { h.node.ref = i + 1; });
+            markRoots.delete(target.tabId);
+            return handles.length;
+        } catch (error) {
+            if (attempt === 0 && isContextLost(error)) continue;
+            throw error;
+        }
+    }
+}
+
+async function getAccessibilitySnapshot(tabId, params = {}) {
+    const target = await ensureDebugger(tabId);
+    const { raw, byId, masked } = await maskedAxNodes(target);
+    const { tree, candidates } = snapshotTree(raw, byId, masked);
+    const refs = candidates.length ? await registerSnapshotRefs(target, candidates) : 0;
+    const maxLines = Math.max(20, Math.min(2000, parseInt(params.maxLines ?? params.max_lines, 10) || SNAPSHOT_MAX_LINES));
+    let url = "";
+    let title = "";
+    try { ({ url = "", title = "" } = await chrome.tabs.get(tabId)); } catch (_) {}
+    return { data: { url, title, refs, snapshot: renderSnapshot(tree, maxLines) } };
+}
+
+async function getAccessibilityTree(params = {}) {
+    let tabId = await resolveTargetTab(params);
+    if (String(params.mode || "full") === "snapshot") return await getAccessibilitySnapshot(tabId, params);
+
+    const target = await ensureDebugger(tabId);
+    const { raw, masked } = await maskedAxNodes(target);
     const nodes = raw.map(n => {
         const hide = masked.has(n.nodeId);
         const isText = hide && n.role?.value !== "textbox";
@@ -5995,6 +6183,8 @@ async function waitForLoad(params = {}) {
             // Un onglet tout juste ouvert (browser_new_tab) est encore sur about:blank, déjà "complete" : tant que
             // Chrome navigue (pendingUrl, status "loading"), ce n'est pas le document attendu.
             const tab = await chrome.tabs.get(tabId);
+            const protectedUrl = [tab?.pendingUrl, tab?.url].find(isChromeProtectedPage);
+            if (protectedUrl) return { error: chromeProtectedMessage(protectedUrl) };
             if (tab?.pendingUrl || tab?.status === "loading") {
                 await sleepMs(100);
                 continue;
@@ -6007,7 +6197,13 @@ async function waitForLoad(params = {}) {
                 return { data: { readyState: "complete", waitedMs: Date.now() - startTime } };
             }
         } catch (e) {
-            // Execution context destroyed during rapid navigation; continue polling until new context settles
+            // Execution context destroyed during rapid navigation; continue polling until new context settles.
+            // Page protected by Chrome reached by a redirect: said at once, never waited for until the timeout.
+            if (CHROME_PROTECTED_RAW.test(String(e?.message || ""))) {
+                let url = null;
+                try { url = (await chrome.tabs.get(tabId))?.url || null; } catch (_) {}
+                return { error: chromeProtectedMessage(url) };
+            }
         }
         await sleepMs(100);
     }

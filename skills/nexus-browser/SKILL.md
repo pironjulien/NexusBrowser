@@ -22,8 +22,13 @@ the bridge, not by the agent.
 
 ## Read cheaply
 - `browser_interactive_map(tab_id)`: visible interactive elements with `mark` numbers (far fewer tokens than HTML).
-- `browser_export(tab_id)`: main content as Markdown. Avoid `browser_content(mode="html")` and `browser_axtree` on
-  heavy pages.
+- `browser_axtree(tab_id, mode="snapshot")`: the whole page as compact lines (`- button "Send" [#4]`), like
+  Playwright MCP's snapshot; each `[#N]` is a mark for `browser_click(mark=N)`, `browser_fill(mark=N)`... Lighter
+  than the map for forms, heavier for a long page.
+- `browser_export(tab_id)`: main content as Markdown. Avoid `browser_content(mode="html")` and the raw
+  `browser_axtree` (default `mode="full"`) on heavy pages.
+- Chrome Web Store and `chrome://` pages are protected by Chrome: no extension can read them (`protected_page`);
+  use a desktop screenshot instead.
 - Images only on request: `browser_screenshot(tab_id, inline=True)` attaches the view (WebP, at most 1568 px);
   `region=[x1, y1, x2, y2]`, in pixels of the last whole-view image, zooms on an area to read small text. A view
   unchanged since the last image sent says `unchanged` and attaches nothing (`force=True` resends it).

@@ -1,4 +1,4 @@
-"""Token and reliability benchmark: NexusBrowser against Chrome DevTools MCP on three real tasks.
+"""Token and reliability benchmark: NexusBrowser against Chrome DevTools MCP and Playwright MCP on three real tasks.
 
 Each engine runs the same tasks the way an agent would use its tools (observe, then act), on public pages:
 
@@ -14,11 +14,13 @@ A task succeeds only when that check passes. No model is called: the "agent" is 
 numbers measure the tools, not a model's choices.
 
 Engines differ by design: NexusBrowser drives the user's real Chrome in a background tab (its extension and bridge
-must be installed); Chrome DevTools MCP starts its own isolated headless Chrome. Claude in Chrome cannot be driven
-from a plain MCP client and BrowserOS is a browser of its own to install: both left out (see benchmarks/README.md).
+must be installed); Chrome DevTools MCP and Playwright MCP each start their own isolated headless Chrome. NexusBrowser
+runs twice: observing with its interactive map (default) and with its compact accessibility snapshot
+(browser_axtree(mode="snapshot")). Claude in Chrome cannot be driven from a plain MCP client and BrowserOS is a browser
+of its own to install: both left out (see benchmarks/README.md).
 
 Usage (from the repository root, Windows, Node.js for npx):
-    uv run --no-project --with "mcp==2.3.0" --with "tiktoken==0.12.0" benchmarks/compare.py --rounds 5 --out benchmarks/results
+    uv run --no-project --with "mcp==2.3.0" --with "tiktoken==0.14.0" benchmarks/compare.py --rounds 5 --out benchmarks/results
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from mcp.client.stdio import stdio_client
 
 ROOT = Path(__file__).resolve().parents[1]
 DEVTOOLS_VERSION = "1.12.0"
+PLAYWRIGHT_VERSION = "0.0.83"
 ENCODING = tiktoken.get_encoding("o200k_base")
 
 ARTICLE = "https://en.wikipedia.org/wiki/Chromium_(web_browser)"
@@ -163,6 +166,41 @@ class Nexus(Engine):
         await self.call(meter, "browser_wait_load", {"tab_id": handle})
 
 
+class NexusSnapshot(Nexus):
+    """NexusBrowser observing with its compact accessibility snapshot ([#N] references used as marks)."""
+
+    name = "NexusBrowser (snapshot)"
+
+    async def refs(self, meter: Meter, handle: int) -> str:
+        arguments = {"tab_id": handle, "mode": "snapshot"}
+        return self.data(await self.call(meter, "browser_axtree", arguments))["snapshot"]
+
+    @staticmethod
+    def ref(snapshot: str, role: str, name: str) -> int:
+        match = re.search(rf'- {role} "{re.escape(name)}:?"[^\n]*? \[#(\d+)\]', snapshot)
+        if not match:
+            raise RuntimeError(f"no {role} {name!r} in the snapshot")
+        return int(match.group(1))
+
+    async def fill_form(self, meter: Meter, handle: int) -> None:
+        snap = await self.refs(meter, handle)
+        fields = [
+            {"mark": self.ref(snap, "textbox", "Customer name"), "value": FORM_VALUES["custname"]},
+            {"mark": self.ref(snap, "textbox", "Telephone"), "value": FORM_VALUES["custtel"]},
+            {"mark": self.ref(snap, "textbox", "E-mail address"), "value": FORM_VALUES["custemail"]},
+            {"mark": self.ref(snap, "radio", "Medium"), "checked": True},
+            {"mark": self.ref(snap, "checkbox", "Extra Cheese"), "checked": True},
+            {"mark": self.ref(snap, "InputTime", "Preferred delivery time"), "value": FORM_VALUES["delivery"]},
+            {"mark": self.ref(snap, "textbox", "Delivery instructions"), "value": FORM_VALUES["comments"]},
+        ]
+        self.data(await self.call(meter, "browser_fill_form", {"tab_id": handle, "fields": fields}))
+
+    async def click_new(self, meter: Meter, handle: int) -> None:
+        target = self.ref(await self.refs(meter, handle), "link", "new")
+        self.data(await self.call(meter, "browser_click", {"tab_id": handle, "mark": target}))
+        await self.call(meter, "browser_wait_load", {"tab_id": handle})
+
+
 class DevTools(Engine):
     name = f"Chrome DevTools MCP {DEVTOOLS_VERSION}"
 
@@ -210,6 +248,61 @@ class DevTools(Engine):
     async def click_new(self, meter: Meter, handle: int) -> None:
         snap = await self.snapshot(meter, handle)
         await self.call(meter, "click", {"pageId": handle, "uid": self.uid(snap, "link", "new")})
+
+
+class Playwright(Engine):
+    """Playwright MCP: one page, navigated per task; its snapshot (YAML with [ref=eN]) read with browser_snapshot
+    (since 0.0.8x, the snapshot that follows an action is saved to a file, not returned)."""
+
+    name = f"Playwright MCP {PLAYWRIGHT_VERSION}"
+
+    async def open(self, meter: Meter, url: str) -> int:
+        await self.call(meter, "browser_navigate", {"url": url})
+        return 0
+
+    async def close(self, handle: int) -> None:
+        await self.call(None, "browser_navigate", {"url": "about:blank"})
+
+    async def check(self, handle: int, script: str) -> str:
+        response = await self.call(None, "browser_evaluate", {"function": f"() => {script}"})
+        match = re.search(r"### Result\s*(.*?)\s*(?:###|$)", response, re.S)
+        value = json.loads(match.group(1)) if match else response
+        return value if isinstance(value, str) else json.dumps(value)
+
+    async def snapshot(self, meter: Meter) -> str:
+        return await self.call(meter, "browser_snapshot", {})
+
+    async def read(self, meter: Meter, handle: int) -> str:
+        return await self.snapshot(meter)
+
+    @staticmethod
+    def ref(snapshot: str, role: str, name: str) -> str:
+        match = re.search(rf'{role} "{re.escape(name)}:?"[^\n]*?\[ref=(\w+)\]', snapshot)
+        if not match:
+            raise RuntimeError(f"no {role} {name!r} in the snapshot")
+        return match.group(1)
+
+    async def fill_form(self, meter: Meter, handle: int) -> None:
+        snap = await self.snapshot(meter)
+
+        def field(role: str, name: str, value: str) -> dict:
+            kind = role if role in ("radio", "checkbox") else "textbox"
+            return {"target": self.ref(snap, role, name), "name": name, "type": kind, "value": value}
+
+        fields = [
+            field("textbox", "Customer name", FORM_VALUES["custname"]),
+            field("textbox", "Telephone", FORM_VALUES["custtel"]),
+            field("textbox", "E-mail address", FORM_VALUES["custemail"]),
+            field("radio", "Medium", "true"),
+            field("checkbox", "Extra Cheese", "true"),
+            field("textbox", "Preferred delivery time", FORM_VALUES["delivery"]),
+            field("textbox", "Delivery instructions", FORM_VALUES["comments"]),
+        ]
+        await self.call(meter, "browser_fill_form", {"fields": fields})
+
+    async def click_new(self, meter: Meter, handle: int) -> None:
+        target = self.ref(await self.snapshot(meter), "link", "new")
+        await self.call(meter, "browser_click", {"target": target, "element": "new link"})
 
 
 async def task(engine: Engine, name: str) -> dict:
@@ -265,10 +358,21 @@ def servers(nexus_command: list[str]) -> dict[str, tuple[type[Engine], StdioServ
         "--no-usage-statistics",
         "--no-performance-crux",
     ]
+    playwright = [
+        "--yes",
+        f"@playwright/mcp@{PLAYWRIGHT_VERSION}",
+        "--isolated",
+        "--headless",
+        "--output-dir",
+        str(Path(os.environ.get("TEMP", ".")) / "nexus-bench-playwright"),
+    ]
     env = {**os.environ, "NEXUS_BROWSER_AGENT": "Bench"}
+    nexus = StdioServerParameters(command=nexus_command[0], args=nexus_command[1:], env=env)
     return {
-        "nexus": (Nexus, StdioServerParameters(command=nexus_command[0], args=nexus_command[1:], env=env)),
+        "nexus": (Nexus, nexus),
+        "nexus-snapshot": (NexusSnapshot, nexus),
         "devtools": (DevTools, StdioServerParameters(command=npx, args=devtools, env=dict(os.environ))),
+        "playwright": (Playwright, StdioServerParameters(command=npx, args=playwright, env=dict(os.environ))),
     }
 
 
@@ -331,7 +435,7 @@ def markdown(rows: list[dict], meta: dict) -> str:
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--rounds", type=int, default=5)
-    parser.add_argument("--engines", default="nexus,devtools")
+    parser.add_argument("--engines", default="nexus,nexus-snapshot,devtools,playwright")
     parser.add_argument(
         "--nexus",
         default=f"{sys.executable} -B {ROOT / 'client' / 'mcp_server.py'}",
@@ -351,6 +455,7 @@ async def main() -> int:
         "rounds": args.rounds,
         "tokenizer": "o200k_base",
         "devtools_version": DEVTOOLS_VERSION,
+        "playwright_version": PLAYWRIGHT_VERSION,
         "nexus_version": (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
         "tasks": {"read": ARTICLE, "form": FORM, "click": NEWS},
     }

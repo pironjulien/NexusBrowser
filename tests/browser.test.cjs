@@ -1588,7 +1588,7 @@ test('onglet protégé sans injection possible : erreur claire, aucune action', 
         scriptingError: 'Cannot access a chrome:// URL'
     });
     const res = await h.run('click', {tabId: 1, selector: 'button'});
-    assert.match(res.error, /Debugger unavailable .*Protected internal URL.*JavaScript injection refused/);
+    assert.match(res.error, /^Page protected by Chrome \(chrome:\/\/settings\): .*desktop screenshot/);
     assert.equal(h.clicks, 0);
 });
 
@@ -4778,4 +4778,115 @@ test('appairage : seule pair.html peut demander la reconnexion ; ni un script de
     assert.equal(await h.sendMessage(message, {id: 'autre', url: `chrome-extension://${EXT_ID}/pair.html`}), undefined);
     assert.equal((await h.sendMessage(message, {id: EXT_ID, url: `chrome-extension://${EXT_ID}/pair.html`, tab: {id: 2}})).ok, true);
     assert.equal(h.evalInContext('__asked'), 1);
+});
+
+// Pages protégées par Chrome (galerie du Chrome Web Store, chrome://) : dites tout de suite, jamais 30 s d'attente.
+test('wait_load : page du Chrome Web Store reconnue tout de suite, message clair au lieu de l\'attente', async () => {
+    const h = harness({}, {tabs: {get: async (id) => ({id, url: 'https://chromewebstore.google.com/detail/x/abc', status: 'complete', windowId: 10})}});
+    const started = Date.now();
+    const res = await h.run('wait_load', {tabId: 1, timeoutMs: 30000});
+    assert.ok(Date.now() - started < 1000, 'aucune attente jusqu\'au délai');
+    assert.match(res.error, /^Page protected by Chrome \(https:\/\/chromewebstore\.google\.com\)/);
+    assert.match(res.error, /desktop screenshot/);
+});
+
+test('wait_load : ancienne galerie (chrome.google.com/webstore) encore en chargement, refusée sans attendre', async () => {
+    const h = harness({}, {tabs: {get: async (id) => ({id, url: 'about:blank', pendingUrl: 'https://chrome.google.com/webstore/category/extensions', status: 'loading', windowId: 10})}});
+    const res = await h.run('wait_load', {tabId: 1, timeoutMs: 30000});
+    assert.match(res.error, /Page protected by Chrome/);
+});
+
+test('page protégée : erreur brute de Chrome traduite, quelle que soit la commande ; chrome.google.com hors galerie libre', async () => {
+    const h = harness({}, {
+        tabs: {get: async (id) => ({id, url: 'https://chromewebstore.google.com/', status: 'complete', windowId: 10})},
+        attachError: 'Cannot access a chrome:// URL', scriptingError: 'The extensions gallery cannot be scripted.'
+    });
+    const res = await h.run('content', {tabId: 1});
+    assert.match(res.error, /^Page protected by Chrome/);
+    assert.doesNotMatch(res.error, /cannot be scripted/);
+    assert.equal(h.ctx.isChromeProtectedPage('https://chrome.google.com/intl/fr/chrome/'), false);
+    assert.equal(h.ctx.isChromeProtectedPage('https://chrome.google.com/webstore'), true);
+    assert.equal(h.ctx.isChromeProtectedPage('chrome://settings'), true);
+    assert.equal(h.ctx.isChromeProtectedPage('https://example.invalid/'), false);
+});
+
+test('new_tab et navigate vers le Chrome Web Store : avertissement dès la réponse', async () => {
+    const h = harness();
+    const opened = await h.run('create_tab', {url: 'https://chromewebstore.google.com/detail/x/abc', group: ''});
+    assert.equal(opened.data.protected_page, true);
+    assert.match(opened.data.warning, /Page protected by Chrome/);
+    const nav = await h.run('navigate', {tabId: 1, url: 'https://chromewebstore.google.com/'});
+    assert.equal(nav.data.protected_page, true);
+    const plainNav = await h.run('navigate', {tabId: 1, url: 'https://example.invalid/'});
+    assert.equal(plainNav.data.protected_page, undefined);
+});
+
+// Instantané d'accessibilité compact (axtree mode snapshot) : références [#N] utilisables par les gestes par mark.
+function snapshotAx() {
+    return [
+        {nodeId: '1', role: {value: 'RootWebArea'}, name: {value: 'Commande'}, childIds: ['2', '3', '4', '9']},
+        {nodeId: '2', role: {value: 'heading'}, name: {value: 'Votre commande'}, properties: [{name: 'level', value: {value: 2}}], childIds: ['2a']},
+        {nodeId: '2a', role: {value: 'StaticText'}, name: {value: 'Votre commande'}},
+        {nodeId: '3', role: {value: 'generic'}, childIds: ['5', '6', '7']},
+        {nodeId: '4', ignored: true, role: {value: 'none'}, childIds: ['8']},
+        {nodeId: '5', role: {value: 'textbox'}, name: {value: 'Carte'}, value: {value: '4970101234567890'}, backendDOMNodeId: 11, childIds: ['5a']},
+        {nodeId: '5a', role: {value: 'StaticText'}, name: {value: '4970101234567890'}},
+        {nodeId: '6', role: {value: 'button'}, name: {value: 'Valider'}, backendDOMNodeId: 12, childIds: ['6a']},
+        {nodeId: '6a', role: {value: 'StaticText'}, name: {value: 'Valider'}},
+        {nodeId: '7', role: {value: 'button'}, name: {value: 'Annuler'}, backendDOMNodeId: 13, properties: [{name: 'disabled', value: {value: true}}]},
+        {nodeId: '8', role: {value: 'paragraph'}, childIds: ['8a']},
+        {nodeId: '8a', role: {value: 'StaticText'}, name: {value: 'Livraison   offerte'}},
+        {nodeId: '9', role: {value: 'checkbox'}, name: {value: 'CGV'}, backendDOMNodeId: 14, properties: [{name: 'checked', value: {value: 'true'}}]}
+    ];
+}
+
+test('axtree snapshot : lignes compactes façon Playwright, carte masquée, références [#N] cliquables par mark', async () => {
+    let ref = null;
+    const dom = {11: {nodeName: 'INPUT', attributes: ['autocomplete', 'cc-number']}, 12: {nodeName: 'BUTTON', attributes: []}, 14: {nodeName: 'INPUT', attributes: ['type', 'checkbox']}};
+    const h = harness({}, {debuggerSendCommand: async (target, method, params) => {
+        if (method === 'Accessibility.getFullAXTree') return {nodes: snapshotAx()};
+        if (method === 'DOM.describeNode') return {node: dom[params.backendNodeId] || {nodeName: 'DIV', attributes: []}};
+        if (method === 'DOM.resolveNode') return {object: {objectId: `obj-${params.backendNodeId}`}};
+        if (method === 'Runtime.callFunctionOn') {
+            const world = ref.worlds.get(params.executionContextId);
+            assert.ok(world, 'monde isolé de l\'extension, jamais celui de la page');
+            const byObject = {'obj-12': ref.element};
+            world.window.__nexus_som_elements = new Map(params.arguments.map((a, i) => [i + 1, byObject[a.objectId] || {}]));
+            return {result: {value: params.arguments.length}};
+        }
+        return undefined;
+    }});
+    ref = h;
+    const res = await h.run('axtree', {tabId: 1, mode: 'snapshot'});
+    assert.equal(res.error, undefined);
+    assert.equal(res.data.refs, 3);  // carte, Valider, CGV ; Annuler désactivé : pas de numéro
+    assert.equal(res.data.snapshot, [
+        '- document',
+        '  - heading "Votre commande" [level=2]',
+        '  - textbox "Carte" [#1]: "[masked value]"',
+        '  - button "Valider" [#2]',
+        '  - button "Annuler" [disabled]',
+        '  - paragraph: "Livraison offerte"',
+        '  - checkbox "CGV" [checked] [#3]'
+    ].join('\n'));
+    assert.ok(!JSON.stringify(res).includes('4970101234567890'));
+    const resolved = h.calls.filter(c => c.method === 'DOM.resolveNode').map(c => c.params.backendNodeId);
+    assert.deepEqual(plain(resolved), [11, 12, 14]);
+    await h.run('click', {tabId: 1, mark: 2});
+    assert.equal(h.clicks, 1);
+});
+
+test('axtree snapshot : coupé à max_lines, mode full inchangé (nœuds bruts)', async () => {
+    const many = [{nodeId: 'r', role: {value: 'RootWebArea'}, childIds: Array.from({length: 50}, (_, i) => `l${i}`)},
+        ...Array.from({length: 50}, (_, i) => ({nodeId: `l${i}`, role: {value: 'link'}, name: {value: `Lien ${i}`}}))];
+    const h = harness({}, {debuggerSendCommand: async (target, method) => {
+        if (method === 'Accessibility.getFullAXTree') return {nodes: many};
+        return undefined;
+    }});
+    const snap = (await h.run('axtree', {tabId: 1, mode: 'snapshot', maxLines: 20})).data.snapshot.split('\n');
+    assert.equal(snap.length, 21);
+    assert.equal(snap.at(-1), '- … 31 more nodes (snapshot cut at 20 lines: max_lines)');
+    const full = await h.run('axtree', {tabId: 1});
+    assert.equal(full.data.nodes.length, 50);
+    assert.equal(full.data.snapshot, undefined);
 });

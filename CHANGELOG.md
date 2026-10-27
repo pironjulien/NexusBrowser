@@ -9,6 +9,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the Nexus family icon is
   sent and the listing's 128 px icon is replaced by `extension/icons/icon128.png`.
 
+## [2.27.0] - 2026-10-27
+
+### Added
+- Compact accessibility snapshot, like Playwright MCP's ARIA snapshot: `browser_axtree(tab_id, mode="snapshot")`
+  returns the whole page as indented lines (`- role "name" [states] [#N]: value`), layout wrappers flattened and text
+  already given by a name not repeated. Every enabled control gets a reference `[#N]`, registered in the extension's
+  isolated world as a mark: `browser_click(mark=N)`, `browser_fill(mark=N)`, `browser_fill_form`... use it directly.
+  Card numbers and codes are masked as in the full tree; `max_lines` caps the output (400 by default). Main frame
+  only; `mode="full"` (default) still returns the raw AX nodes.
+- Benchmark: Playwright MCP 0.0.83 next to Chrome DevTools MCP 1.12.0, and NexusBrowser observing with the snapshot
+  as well as with the interactive map. Results for 2.27.0 in `benchmarks/README.md` (5 rounds, every engine 5/5): the
+  snapshot brings the form task from 1,312 to 799 tokens, level with Playwright MCP; Chrome DevTools MCP stays the
+  lightest there (380).
+
+### Changed
+- Pages protected by Chrome (Chrome Web Store gallery, `chrome://` and other internal pages) are recognised at once:
+  `browser_wait_load` answers immediately instead of waiting until its timeout (30 s seen), `browser_new_tab` and
+  `browser_navigate` flag them (`protected_page`, `warning`), and Chrome's raw errors ("The extensions gallery cannot
+  be scripted", "Cannot access a chrome:// URL") become one clear message pointing to a desktop screenshot.
+- Dependencies: websockets 17.3 (allowed `<18`) and, for the benchmark, tiktoken 0.14.0 (replaces Dependabot PRs).
+- The extension's only non-local CSP entry, `connect-src https://mail.google.com`, is now explained in the README: it
+  serves the optional Gmail unread counter (off by default); a test keeps the CSP to the bridge and that one feed.
+
+### Security
+- The shared HTTP daemon no longer accepts WebSocket upgrades (uvicorn `ws="none"`): such a request reached the MCP
+  app without the token check (the app had no WebSocket route), and the daemon kept websockets' compiled module
+  loaded, which made `uv sync` fail ("access denied") when websockets was upgraded.
+
 ## [2.26.8] - 2026-10-27
 
 ### Added

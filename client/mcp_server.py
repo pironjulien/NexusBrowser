@@ -185,7 +185,11 @@ def _serve_http(port: int) -> None:
 
     async def serve() -> None:
         asyncio.get_running_loop().set_exception_handler(quiet_resets)
-        await uvicorn.Server(uvicorn.Config(guarded, host="127.0.0.1", port=port, log_level="warning")).serve()
+        # ws="none" : MCP n'emploie pas WebSocket. Une demande d'upgrade reste une requête HTTP (jeton exigé), et le
+        # démon ne charge pas websockets, dont le .pyd verrouillé faisait échouer `uv sync` à sa montée de version.
+        await uvicorn.Server(
+            uvicorn.Config(guarded, host="127.0.0.1", port=port, log_level="warning", ws="none")
+        ).serve()
 
     bridge_client.start_session_heartbeats(live)
     asyncio.run(serve())
@@ -647,7 +651,8 @@ def browser_reload(tab_id: TabId, bypass_cache: bool = False) -> str:
 @browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "Navigate"))
 def browser_navigate(url: str, tab_id: TabId) -> str:
     """Navigates tab tab_id to the URL (http, https, data: or about:blank; never file:// or chrome://).
-    url="back" or "forward": previous or next page of this tab's history (the browser's back and forward buttons)."""
+    url="back" or "forward": previous or next page of this tab's history (the browser's back and forward buttons).
+    Chrome Web Store pages are protected by Chrome (no extension may read them): protected_page=true at once."""
     if url in ("back", "forward"):
         return _call_bridge("navigate", {"history": url, "tab_id": tab_id})
     return _call_bridge("navigate", {"url": url, "tab_id": tab_id})
@@ -1188,10 +1193,19 @@ def browser_content(tab_id: TabId, mode: str = "interactive") -> str:
 
 
 @browser_mcp.tool(annotations=_titled(PAGE_READ, "Accessibility tree"))
-def browser_axtree(tab_id: TabId) -> str:
-    """Extracts the page's full semantic accessibility tree (AXTree) via CDP. The value of a password, a one-time code
-    or a bank card: "[masked value]"."""
-    return _call_bridge("axtree", {"tab_id": tab_id}, note=_page_text(tab_id))
+def browser_axtree(tab_id: TabId, mode: Literal["full", "snapshot"] = "full", max_lines: int = 400) -> str:
+    """Accessibility tree of the page via CDP. The value of a password, a one-time code or a bank card:
+    "[masked value]".
+
+    mode="snapshot" (recommended, like Playwright MCP's ARIA snapshot): the whole page as compact indented lines,
+    `- role "name" [states] [#N]: value`; every enabled control gets a reference [#N] to pass as mark=N to
+    browser_click, browser_fill, browser_hover, browser_select_option... (valid until the next snapshot, interactive
+    map or vision_inspect of this tab). Main frame only (cross-origin iframes: browser_interactive_map or
+    browser_find). max_lines caps the lines (20 to 2000). mode="full": raw AX nodes (first 100)."""
+    params: dict = {"tab_id": tab_id, "mode": mode}
+    if mode == "snapshot":
+        params["maxLines"] = max_lines
+    return _call_bridge("axtree", params, note=_page_text(tab_id))
 
 
 @browser_mcp.tool(annotations=_titled(PAGE_READ, "Console logs"))

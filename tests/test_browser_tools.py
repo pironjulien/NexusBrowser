@@ -247,3 +247,13 @@ def test_new_tab_groups_under_the_agent_name(monkeypatch):
         "create-tab",
         {"url": "https://example.com", "background": True, "active": False, "group": "Claude"},
     )
+
+
+def test_axtree_snapshot_mode_reaches_the_extension(sent):
+    """Instantané compact (façon Playwright MCP) : mode et plafond de lignes transmis ; mode full inchangé."""
+    mcp_server.browser_axtree(tab_id=3, mode="snapshot", max_lines=120)
+    mcp_server.browser_axtree(tab_id=3)
+    assert [(action, params) for action, params, _ in sent] == [
+        ("axtree", {"tab_id": 3, "mode": "snapshot", "maxLines": 120}),
+        ("axtree", {"tab_id": 3, "mode": "full"}),
+    ]

@@ -54,3 +54,21 @@ def test_variant_without_the_gmail_counter(tmp_path):
         assert "compteur-gmail" not in popup and "<label" not in popup and 'id="bridge"' in popup
         assert b"const COMPTEUR_GMAIL_DISPONIBLE = false;" in b.read("background.js")
         assert b"const COMPTEUR_GMAIL_DISPONIBLE = true;" in a.read("background.js")
+
+
+def test_csp_reaches_only_the_bridge_and_the_documented_gmail_feed():
+    """connect-src : le pont local, et une seule adresse distante, le flux Gmail du compteur facultatif, justifiée dans
+    le README et dans store/SINGLE_PURPOSE.md (aucune entrée distante sans raison écrite)."""
+    manifest = json.loads((ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
+    policy = manifest["content_security_policy"]["extension_pages"]
+    connect = re.search(r"connect-src ([^;]+);", policy)
+    assert connect
+    remote = [
+        s
+        for s in connect.group(1).split()
+        if s != "'self'" and not re.match(r"(ws|http)://(127\.0\.0\.1|localhost):\*$", s)
+    ]
+    assert remote == ["https://mail.google.com"]
+    for doc in ("README.md", "store/SINGLE_PURPOSE.md"):
+        assert "https://mail.google.com" in (ROOT / doc).read_text(encoding="utf-8"), doc
+    assert "FLUX_GMAIL" in (ROOT / "extension" / "background.js").read_text(encoding="utf-8")

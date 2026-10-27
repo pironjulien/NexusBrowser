@@ -56,7 +56,7 @@ bridge shared by several agents.
 | `native-host/` | Local bridge (`bridge_server.py`: WebSocket 9224 for the extension, HTTP 9225 for the agents) and native host `com.nexus.browser_auth` |
 | `client/` | MCP server `nexus-browser` (`mcp_server.py`), authenticated transport (`bridge_client.py`), CLI (`browser_cli.py`), shared emergency stop |
 | `skills/`, `plugins/` | Skill and Antigravity plugin; `install.ps1` copies the skill into that plugin only |
-| `benchmarks/` | Reproducible token and success benchmark against Chrome DevTools MCP (`compare.py`, results and method in its README) |
+| `benchmarks/` | Reproducible token and success benchmark against Chrome DevTools MCP and Playwright MCP (`compare.py`, results and method in its README) |
 | `mcpb/` | Claude Desktop extension (`nexus-browser.mcpb`, attached to every release; server from PyPI) |
 | `gemini-extension.json` | Gemini CLI extension: `gemini extensions install https://github.com/pironjulien/NexusBrowser` (server from PyPI and the skill) |
 
@@ -68,7 +68,7 @@ bridge shared by several agents.
 | --- | --- |
 | Tabs | `browser_list_tabs`, `browser_active_tab` (read only), `browser_new_tab`, `browser_select_tab`, `browser_adopt_tab`, `browser_release_tab`, `browser_group_tabs`, `browser_close_tab`, `browser_reload`, `browser_navigate` (URL, back, forward), `browser_wait_load`, `browser_wait_for` (text or element appears or disappears) |
 | Input (trusted CDP events) | `browser_click` (by locator, mark, selector or text), `browser_hover`, `browser_fill`, `browser_fill_form`, `browser_select_option`, `browser_check`, `browser_press_key`, `browser_type_keys`, `browser_drag_and_drop`, `browser_scroll`, `browser_upload`, `browser_handle_dialog` |
-| Finding elements | `browser_find` (Playwright-style locators: role, label, text, placeholder, test id, in every frame), `browser_interactive_map`, `browser_vision_inspect` (Set-of-Mark badges, clicked with `browser_click(mark=N)`), `browser_axtree`, `browser_content`, `browser_check_handoff` (2FA, CAPTCHA) |
+| Finding elements | `browser_find` (Playwright-style locators: role, label, text, placeholder, test id, in every frame), `browser_interactive_map`, `browser_vision_inspect` (Set-of-Mark badges, clicked with `browser_click(mark=N)`), `browser_axtree` (`mode="snapshot"`: compact accessibility snapshot with `[#N]` references used as marks, like Playwright MCP), `browser_content`, `browser_check_handoff` (2FA, CAPTCHA) |
 | Network and downloads | `browser_network_record`, `browser_network_stop`, `browser_network_requests`, `browser_network_response`, `browser_wait_network_idle`, `browser_download_status`, `browser_wait_download`, `browser_get_cookies` |
 | Output | `browser_screenshot` (view, full page or element), `browser_pdf`, `browser_export` (main content as Markdown, text or HTML), `browser_export_gsuite` (Google Docs, Sheets, Slides through Google's export URLs), `browser_youtube_transcript`, `browser_logs` |
 | Site-provided tools (WebMCP) | `browser_webmcp_tools`, `browser_webmcp_call` (tools a page exposes through `document.modelContext`) |
@@ -295,7 +295,9 @@ to the author or to any third party.
   Gmail's official unread feed once a minute in your own session (like a "Gmail checker" extension) and the bridge
   writes only the number to `~/.nexus/nexus-browser/compteurs.json`, one entry per Chrome profile under a random
   identifier: no sender, subject or content. Unticked, that profile's entry is removed (the file is deleted when none
-  is left).
+  is left). This feed is the only non-local address in the extension's content security policy
+  (`connect-src https://mail.google.com`, needed for the service worker to fetch it); the Chrome Web Store variant
+  without the counter (`scripts/store_package.py --without-gmail-counter`) drops it.
 - **Journal**, under `%LOCALAPPDATA%\NexusJournal\browser\<agent>\<YYYY-MM>.jsonl` (or `NEXUS_JOURNAL_HOME`), shared
   format of the Nexus tools: one line per tool call with the calling AI, the action, the outcome, the duration, the
   technique, the registrable domain of the tab (`google.com`, never the address) and an error category from a fixed
