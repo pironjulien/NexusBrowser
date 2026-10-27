@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.31.4] - 2026-10-27
+
+### Security
+- Shared guardrail policy (NexusWindows): the lowercase Cyrillic and Greek look-alike letters (в к м н т β η) are
+  read as Latin again, so `Coмmander` or `Posтer` still asks for the user's accord (a common-policy change had dropped
+  them; 2.31.3 was not affected). Format characters and look-alikes now count only for detection: the text shown and
+  the accord fingerprints are unchanged.
+
 ## [2.31.3] - 2026-10-27
 
 ### Added
@@ -17,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Security
 - Shared guardrail policy (from NexusWindows): format characters (zero-width space, direction marks, soft hyphen)
   are removed and common Cyrillic and Greek look-alike letters are read as Latin before matching, so an outward
-  word written `Env​oyer` or with a Cyrillic `Е` no longer escapes the accord check.
+  word written `Env\u200boyer` or with a Cyrillic `Е` no longer escapes the accord check.
 - The public `main` branch requires a pull request with an approved review and green checks (tests, Linux startup,
   CodeQL) for anyone but the repository admin; a workflow token can no longer write to it.
 

@@ -82,24 +82,38 @@ def _validate(data: Any, target: Path) -> None:
 
 
 CURRENCIES = str.maketrans({"€": " eur ", "$": " usd ", "£": " gbp ", "¥": " jpy "})
-# Sosies cyrilliques et grecs les plus courants (minuscules, après casefold) ramenés au latin : « Еnvoyer » écrit avec
-# un Е cyrillique se lit « Envoyer » et doit être reconnu (fuzzing des garde-fous, 27/10).
+# Sosies cyrilliques et grecs les plus courants ramenés au latin, POUR LA DÉTECTION SEULEMENT (jamais pour comparer
+# une identité : UTS #39, la détection de sosies n'est pas une normalisation) : « Еnvoyer » écrit avec un Е cyrillique
+# se lit « Envoyer ». Majuscules avant casefold (Ν grec se lit N, sa minuscule ν se lit v), minuscules après.
+# fmt: off
+CONFUSABLES_UPPER = str.maketrans({
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "У": "Y",
+    "Х": "X", "І": "I", "Ј": "J", "Ѕ": "S", "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K",
+    "Μ": "M", "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
+})
 CONFUSABLES = str.maketrans({
     "а": "a", "в": "b", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o", "р": "p", "с": "c", "т": "t", "у": "y",
-    "х": "x", "і": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "ԛ": "q", "ԝ": "w", "һ": "h", "ӏ": "l",
-    "α": "a", "β": "b", "ε": "e", "η": "n", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p", "τ": "t", "υ": "u",
-    "χ": "x", "ω": "w",
+    "х": "x", "і": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "ԛ": "q", "ԝ": "w", "һ": "h", "ӏ": "l", "α": "a", "β": "b",
+    "ε": "e", "η": "n", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p", "τ": "t", "υ": "u", "χ": "x", "ω": "w",
 })
+# fmt: on
+
+
+def _invisible(ch: str) -> bool:
+    """Marque (catégorie M entière : sélecteurs de variante U+FE0F, U+034F, que combining() manque) ou format (Cf)."""
+    category = unicodedata.category(ch)
+    return category[0] == "M" or category == "Cf"
 
 
 def plain(text: Any) -> str:
     """Texte comparable : sans accents ni casse, apostrophes et ponctuation ramenées à des espaces ; symboles de devise
     écrits en toutes lettres (« 4,99 € » → « 4 99 eur ») pour que les motifs reconnaissent un bouton prix. Caractères
     de format (zéro largeur, marques de sens, trait d'union conditionnel : catégorie Cf) RETIRÉS, jamais changés en
-    espace : « Env\u200boyer » s'affiche « Envoyer » et ne doit pas échapper aux motifs ; sosies ramenés au latin."""
+    espace : « Env\u200boyer » s'affiche « Envoyer » et ne doit pas échapper aux motifs ; sosies ramenés au latin.
+    Pour la détection des gestes à confirmer seulement, jamais pour comparer des titres ou des textes lus."""
     decomposed = unicodedata.normalize("NFKD", str(text or "")).translate(CURRENCIES)
-    visible = "".join(ch for ch in decomposed if not unicodedata.combining(ch) and unicodedata.category(ch) != "Cf")
-    bare = visible.casefold().translate(CONFUSABLES)
+    visible = "".join(ch for ch in decomposed if not _invisible(ch))
+    bare = visible.translate(CONFUSABLES_UPPER).casefold().translate(CONFUSABLES)
     return " ".join(re.sub(r"[^0-9a-z]+", " ", bare).split())
 
 
