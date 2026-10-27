@@ -17,6 +17,8 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+import anyio.from_thread  # dépendance du SDK MCP
+
 # Aucun __pycache__ à côté des sources (OneDrive), quel que soit le lanceur.
 sys.dont_write_bytecode = True
 
@@ -354,6 +356,23 @@ EXTENSION_NOT_CONNECTED = (
 )
 
 
+CANCELLED_NOT_SENT = "Call cancelled by the client while waiting for the extension: the command was not sent."
+
+
+def check_cancelled() -> None:
+    """Appel MCP annulé pendant une attente (le SDK exécute l'outil dans un fil anyio que l'annulation n'interrompt
+    pas) : ConnectionError, et la commande n'est jamais renvoyée ensuite (relevé par Codex le 27/10). Hors d'un tel fil
+    (scripts, tests), rien."""
+    try:
+        anyio.from_thread.check_cancelled()
+    except RuntimeError:
+        return  # pas dans un fil de travail anyio
+    except BaseException as error:
+        if type(error).__name__ in ("CancelledError", "Cancelled"):
+            raise ConnectionError(CANCELLED_NOT_SENT) from None
+        raise
+
+
 def ensure_chrome_running(timeout: float = 6.0) -> bool:
     """Ensure Chrome is started and the extension has established its bridge connection."""
     ensure_bridge_running()
@@ -363,6 +382,7 @@ def ensure_chrome_running(timeout: float = 6.0) -> bool:
 
     deadline = time.time() + timeout
     while time.time() < deadline:
+        check_cancelled()
         if ping_bridge():
             return True
         time.sleep(0.25)
@@ -406,6 +426,9 @@ def call_bridge(action: str, params: dict[str, Any] | None = None, timeout: floa
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", **headers},
     )
+    # Juste avant tout envoi (premier essai après le démarrage du pont, ou renvoi après une attente) : un appel annulé
+    # entre-temps n'est jamais envoyé.
+    check_cancelled()
     try:
         with urllib.request.urlopen(request, timeout=timeout + 2) as response:
             data = json.loads(response.read().decode("utf-8"))

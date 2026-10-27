@@ -210,6 +210,80 @@ def test_extension_not_connected_is_reported_clearly(monkeypatch):
         bridge_client.call_bridge("click", {}, 1.0)
 
 
+def test_cancelled_call_is_never_resent_after_the_wait(monkeypatch):
+    """Appel MCP annulé pendant l'attente de l'extension (outil dans un fil anyio, que l'annulation n'interrompt pas) :
+    l'action n'est jamais renvoyée, même si l'extension revient juste après (relevé par Codex le 27/10)."""
+    import anyio
+    import anyio.to_thread
+
+    body = json.dumps({"success": False, "error": "No Chrome browser extension connected to the NexusBrowser bridge."})
+    posts: list[str] = []
+    back: dict[str, float | None] = {"at": None}
+
+    def urlopen(request, timeout=None):
+        posts.append(json.loads(request.data)["action"])
+        raise urllib.error.HTTPError(bridge_client.API_URL, 503, "unavailable", Message(), io.BytesIO(body.encode()))
+
+    monkeypatch.setattr(bridge_client.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(bridge_client, "ensure_bridge_running", lambda: True)
+    monkeypatch.setattr(bridge_client, "is_chrome_running", lambda: True)
+    monkeypatch.setattr(bridge_client, "ping_bridge", lambda: (at := back["at"]) is not None and time.time() >= at)
+    outcome: list[BaseException] = []
+
+    def click() -> None:
+        try:
+            bridge_client.call_bridge("click", {"tab_id": 1}, 1.0)
+        except BaseException as error:  # noqa: BLE001 - relevée par le test
+            outcome.append(error)
+
+    async def main() -> None:
+        with anyio.move_on_after(0.3):  # annulation du client MCP pendant l'attente
+            back["at"] = time.time() + 0.35  # l'extension revient juste après l'annulation
+            await anyio.to_thread.run_sync(click)
+
+    anyio.run(main)
+    assert posts == ["click"]  # une seule remise, refusée : jamais renvoyée
+    assert isinstance(outcome[0], ConnectionError) and str(outcome[0]) == bridge_client.CANCELLED_NOT_SENT
+    bridge_client.check_cancelled()  # hors d'un fil anyio : rien
+
+
+def test_cancelled_call_is_not_sent_after_the_bridge_starts(monkeypatch):
+    """Jeton absent (pont pas encore démarré) : appel annulé pendant le démarrage, rien n'est envoyé ensuite."""
+    import anyio
+    import anyio.to_thread
+
+    posts: list[str] = []
+    token = {"ready": False}
+
+    def headers() -> dict:
+        if not token["ready"]:
+            raise FileNotFoundError("bridge-token")
+        return {}
+
+    def start() -> bool:
+        time.sleep(0.5)  # démarrage du pont, pendant lequel le client annule
+        token["ready"] = True
+        return True
+
+    monkeypatch.setattr(bridge_client, "authentication_headers", headers)
+    monkeypatch.setattr(bridge_client, "ensure_bridge_running", start)
+    monkeypatch.setattr(bridge_client.urllib.request, "urlopen", lambda request, timeout=None: posts.append("sent"))
+    outcome: list[BaseException] = []
+
+    def click() -> None:
+        try:
+            bridge_client.call_bridge("click", {"tab_id": 1}, 1.0)
+        except BaseException as error:  # noqa: BLE001 - relevée par le test
+            outcome.append(error)
+
+    async def main() -> None:
+        with anyio.move_on_after(0.2):
+            await anyio.to_thread.run_sync(click)
+
+    anyio.run(main)
+    assert posts == [] and str(outcome[0]) == bridge_client.CANCELLED_NOT_SENT
+
+
 PNG = "data:image/png;base64," + base64.b64encode(b"png-bytes").decode()
 
 

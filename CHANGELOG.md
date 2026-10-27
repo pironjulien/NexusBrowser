@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.31.2] - 2026-10-27
+
+### Fixed
+- A call cancelled by the AI app while the server waited for the extension to reconnect could still send its action
+  once the extension came back (the SDK runs tools in a worker thread that cancellation does not interrupt). The wait
+  now checks for cancellation, before every resend too: a cancelled command is never sent.
+
 ## [2.31.1] - 2026-10-27
 
 ### Security
