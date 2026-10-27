@@ -3,8 +3,24 @@
   "name": "io.github.pironjulien/nexus-browser",
   "title": "NexusBrowser",
   "description": "Your real Chrome, driven in background tabs. Needs the NexusBrowser bridge and extension.",
-  "version": "2.27.0",
+  "version": "2.28.0",
   "websiteUrl": "https://julienpiron.fr/nexusbrowser/",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/plugins/nexus-browser/logo.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "256x256"
+      ]
+    },
+    {
+      "src": "https://julienpiron.fr/nexusbrowser/assets/nexusbrowser-mark.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": [
+        "any"
+      ]
+    }
+  ],
   "repository": {
     "url": "https://github.com/pironjulien/NexusBrowser",
     "source": "github"
@@ -14,7 +30,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "nexus-browser",
-      "version": "2.27.0",
+      "version": "2.28.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

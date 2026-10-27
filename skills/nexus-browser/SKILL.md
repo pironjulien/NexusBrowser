@@ -29,7 +29,7 @@ the bridge, not by the agent.
   `browser_axtree` (default `mode="full"`) on heavy pages.
 - Chrome Web Store and `chrome://` pages are protected by Chrome: no extension can read them (`protected_page`);
   use a desktop screenshot instead.
-- Images only on request: `browser_screenshot(tab_id, inline=True)` attaches the view (WebP, at most 1568 px);
+- Images only on request: `browser_screenshot(tab_id, inline=True)` attaches the view (WebP, at most 2000 px);
   `region=[x1, y1, x2, y2]`, in pixels of the last whole-view image, zooms on an area to read small text. A view
   unchanged since the last image sent says `unchanged` and attaches nothing (`force=True` resends it).
   `browser_vision_inspect(tab_id, inline=True)` draws numbered markers with their `image_box`.

@@ -1,8 +1,9 @@
 """
-Image envoyée à une IA (règle commune des produits Nexus) : côté long ≤ 1568 px et ≤ 1,15 Mpx (limite standard de
-Claude, acceptée telle quelle par GPT-5.x et Gemini 3 : le modèle ne la réduit pas lui-même, les coordonnées lues sur
-l'image restent exactes), WebP sans perte ; au-delà de 200 Ko, WebP qualité 85 ; jamais plus de 500 Ko (au-delà,
-Antigravity répond 400 et la conversation casse). Le fichier écrit sur disque, lui, garde la pleine résolution.
+Image envoyée à une IA (règle commune des produits Nexus, NexusShared/images.md, 27/10) : côté long ≤ 2000 px et
+≤ 2,56 Mpx (Claude Code réduit lui-même au-delà de 2000 px ; 2 500 tuiles GPT en detail high ; Gemini 3 compte un nombre
+fixe de jetons par image), donc aucune IA ne la réduit et les coordonnées lues sur l'image restent exactes. WebP sans
+perte tant qu'il tient 500 Ko, sinon qualité 90, 80… ; jamais plus de 500 Ko (plafond gardé pour Antigravity). Le
+fichier écrit sur disque, lui, garde la pleine résolution.
 """
 
 from __future__ import annotations
@@ -13,13 +14,12 @@ from typing import Any
 
 from PIL import Image
 
-MAX_SIDE = 1568
-MAX_PIXELS = 1_150_000
-LOSSLESS_MAX_BYTES = 200_000
+MAX_SIDE = 2000
+MAX_PIXELS = 2_560_000
 MAX_BYTES = 500_000
-LOSSY_QUALITY = 85
-# Au-delà de 500 Ko en qualité 85 : qualités plus basses, puis réduction de la taille (×0,8 à chaque tour).
-FALLBACK_QUALITIES = (70, 55, 40)
+LOSSY_QUALITY = 90
+# Au-delà de 500 Ko en qualité 90 : qualités plus basses, puis réduction de la taille (×0,8 à chaque tour).
+FALLBACK_QUALITIES = (80, 70, 55, 40)
 SHRINK = 0.8
 # Image source décodée en mémoire : au-delà (un élément géant capturé en entier), refus clair avant tout décodage ;
 # le fichier sur disque reste possible (aucun décodage côté serveur).
@@ -76,7 +76,7 @@ def for_model(data: bytes) -> tuple[bytes, dict[str, Any]]:
     if scale < 1:
         image = image.resize(_scaled(source_width, source_height, scale), Image.Resampling.LANCZOS)
     encoded, encoding = _webp(image, None), "lossless"
-    if len(encoded) > LOSSLESS_MAX_BYTES:
+    if len(encoded) > MAX_BYTES:
         encoded, encoding = _webp(image, LOSSY_QUALITY), f"quality {LOSSY_QUALITY}"
     for quality in FALLBACK_QUALITIES:
         if len(encoded) <= MAX_BYTES:

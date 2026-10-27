@@ -9,6 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the Nexus family icon is
   sent and the listing's 128 px icon is replaced by `extension/icons/icon128.png`.
 
+## [2.28.0] - 2026-10-27
+
+### Changed
+- `browser_screenshot` / `browser_vision_inspect` with `inline=True`: images sent to the AI follow the common Nexus
+  image rule of 27/10: long side up to 2000 px and 2.56 MP (was 1568 px and 1.15 MP), lossless WebP while it fits
+  500 KB (was 200 KB, so a real screen went lossy), then quality 90, 80, 70…; never over 500 KB. Small text is read
+  better (98.8 % of characters instead of 92 % in our benchmark).
+
+### Added
+- `server.json`: `icons` (Nexus family medallion, PNG and SVG) so the MCP Registry and its clients show the
+  product icon.
+
 ## [2.27.0] - 2026-10-27
 
 ### Added

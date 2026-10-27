@@ -1165,8 +1165,8 @@ def browser_vision_inspect(
 
     Returns the list of elements with box_2d [ymin, xmin, ymax, xmax] on a [0-1000] scale.
     The capture is written by default to ~/.nexus/nexus-browser/screenshots/ (full-resolution PNG, path returned in
-    output_path). inline=True attaches it to the response as an image instead: WebP, long side at most 1568 px and
-    1.15 megapixels, at most 500 KB; data.image gives its size and css_per_image_px to read a position on it, and
+    output_path). inline=True attaches it to the response as an image instead: WebP, long side at most 2000 px and
+    2.56 megapixels, at most 500 KB; data.image gives its size and css_per_image_px to read a position on it, and
     each marker its image_box [x1, y1, x2, y2] in pixels of that image (the badge numbers are drawn on it). Same view
     as the last image sent for this tab: no image again ("unchanged"), unless force=True.
     Do not open a raw PNG capture larger than 500 KB with an image reading tool (rejected with HTTP 400).
@@ -1236,7 +1236,7 @@ def browser_screenshot(
     - output_path: absolute PNG path (optional, otherwise the local cache)
     - full_page=True: the whole scrollable page, beyond the visible area (height capped at 16384 px; fullPage.truncated
       says so). Ignored when an element is targeted.
-    - inline=True: attaches the image to the response (no file): WebP, long side at most 1568 px and 1.15
+    - inline=True: attaches the image to the response (no file): WebP, long side at most 2000 px and 2.56
       megapixels, at most 500 KB, so every model reads it as sent. data.image: width, height, scale and
       css_per_image_px, css_origin to turn a position on the image into page CSS pixels. Same target as the last
       image sent for this tab and nothing changed: no image again ("unchanged"), unless force=True.

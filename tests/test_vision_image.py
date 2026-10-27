@@ -1,5 +1,5 @@
-"""Image envoyée à une IA (règle commune des produits Nexus) : côté long ≤ 1568 px et ≤ 1,15 Mpx, WebP sans perte,
-qualité 85 au-delà de 200 Ko, jamais plus de 500 Ko ; vrai bloc image MCP (pas un texte base64) ; échelle rendue pour
+"""Image envoyée à une IA (règle commune des produits Nexus, 27/10) : côté long ≤ 2000 px et ≤ 2,56 Mpx, WebP sans
+perte tant qu'il tient 500 Ko, puis qualité 90, 80…, jamais plus de 500 Ko ; vrai bloc image MCP (pas un texte base64) ; échelle rendue pour
 relire une position sur l'image en pixels CSS. Le fichier écrit sur disque garde la pleine résolution."""
 
 import asyncio
@@ -52,30 +52,30 @@ def _decoded(data: bytes) -> Image.Image:
 
 @pytest.mark.parametrize(
     ("width", "height"),
-    [(2560, 1440), (1920, 1080), (1568, 400), (3000, 600), (800, 4000), (1000, 1000), (600, 400)],
+    [(2560, 1440), (1920, 1080), (2000, 400), (3000, 600), (800, 4000), (2400, 2400), (1000, 1000), (600, 400)],
 )
 def test_size_limits(width, height):
     webp, info = vision_image.for_model(_png(width, height))
     sent = _decoded(webp)
     assert sent.format == "WEBP" and sent.size == (info["width"], info["height"])
-    assert max(sent.size) <= 1568 and sent.width * sent.height <= 1_150_000
+    assert max(sent.size) <= 2000 and sent.width * sent.height <= 2_560_000
     assert (info["source_width"], info["source_height"]) == (width, height)
     # Même facteur sur les deux axes, à moins d'un pixel près (tailles arrondies vers le bas).
     assert abs(sent.width - width * info["scale"]) < 1.01
     assert abs(sent.height - height * info["scale"]) < 1.01
-    if width <= 1568 and height <= 1568 and width * height <= 1_150_000:
+    if width <= 2000 and height <= 2000 and width * height <= 2_560_000:
         assert sent.size == (width, height) and info["scale"] == 1  # jamais agrandie ni réduite sans raison
 
 
 def test_lossless_then_quality_85_then_hard_cap():
     page, page_info = vision_image.for_model(_png(1920, 1080))
-    assert page_info["encoding"] == "lossless" and len(page) <= 200_000
+    assert page_info["encoding"] == "lossless" and len(page) <= 500_000
     photo, photo_info = vision_image.for_model(_png(1400, 800, noise=True))
     assert photo_info["encoding"] != "lossless" and len(photo) <= 500_000
     assert photo_info["bytes"] == len(photo)
 
 
-def test_lossless_is_pixel_exact_below_200_kb():
+def test_lossless_is_pixel_exact_below_500_kb():
     source = _png(900, 500)
     webp, info = vision_image.for_model(source)
     assert info["encoding"] == "lossless"
@@ -121,11 +121,11 @@ def test_inline_capture_is_an_mcp_webp_image_with_scale(monkeypatch, tmp_path, t
     sent = _decoded(base64.b64decode(images[0].data))
     data = json.loads(texts[0].text)["data"]
     assert key not in data and "base64" not in texts[0].text  # plus jamais l'image en texte
-    assert data["image"]["width"] == sent.width == 1429 and max(sent.size) <= 1568
-    # 2560 px de capture = 1280 px CSS (DPR 2) ; facteur nominal, le même sur X et Y : ≈ 1280 / 1429 px CSS par
+    assert data["image"]["width"] == sent.width == 2000 and max(sent.size) <= 2000  # 1429 px avant le 27/10
+    # 2560 px de capture = 1280 px CSS (DPR 2) ; facteur nominal, le même sur X et Y : ≈ 1280 / 2000 px CSS par
     # pixel d'image, à moins d'un pixel d'image près sur toute la largeur.
     assert data["image"]["css_per_image_px"] == pytest.approx(1 / (2 * data["image"]["scale"]), rel=1e-5)
-    assert abs(1429 * data["image"]["css_per_image_px"] - 1280) < data["image"]["css_per_image_px"]
+    assert abs(2000 * data["image"]["css_per_image_px"] - 1280) < data["image"]["css_per_image_px"]
     assert data["image"]["css_origin"] == {"x": 0, "y": 0}
     assert list(tmp_path.iterdir()) == []  # rien sur disque
     # Sessions ouvertes avant la 2.21 (ancien schéma {"result": texte} en cache) : la réponse leur reste valide.
@@ -140,11 +140,11 @@ def test_inline_capture_is_an_mcp_webp_image_with_scale(monkeypatch, tmp_path, t
 
 def test_inline_element_capture_maps_through_its_clip(monkeypatch):
     clip = {"x": 100, "y": 2000, "width": 900, "height": 300, "scale": 1}
-    _bridge(monkeypatch, "dataUrl", _png(1800, 600), clip=clip)
+    _bridge(monkeypatch, "dataUrl", _png(2400, 800), clip=clip)
     blocks = _blocks(_call("browser_screenshot", {"tab_id": 1, "selector": "#card", "inline": True}))
     image = json.loads(next(b for b in blocks if isinstance(b, TextContent)).text)["data"]["image"]
-    assert image["width"] == 1568
-    assert image["css_per_image_px"] == pytest.approx(900 / 1568, rel=1e-4)
+    assert image["width"] == 2000
+    assert image["css_per_image_px"] == pytest.approx(900 / 2000, rel=1e-4)
     assert image["css_origin"] == {"x": 100, "y": 2000}
 
 
@@ -267,7 +267,7 @@ def test_unchanged_is_per_session(monkeypatch):
 
 
 def test_region_zooms_in_pixels_of_the_last_view_image(monkeypatch):
-    # Vue 2560 × 1440 px de capture à DPR 1,25 (2048 × 1152 CSS) envoyée en 1429 × 804 ; zone [100, 50, 300, 150]
+    # Vue 2560 × 1440 px de capture à DPR 1,25 (2048 × 1152 CSS) envoyée en 2000 × 1125 ; zone [100, 50, 300, 150]
     # de cette image = 200 × 100 px d'image = 358,4 × 179,2 px CSS, agrandie dans les plafonds (au plus ×4).
     calls = _bridge(monkeypatch, "dataUrl", _png(2560, 1440), devicePixelRatio=1.25)
     view = _json(mcp_server.browser_screenshot(tab_id=1, inline=True))["data"]["image"]
@@ -281,7 +281,7 @@ def test_region_zooms_in_pixels_of_the_last_view_image(monkeypatch):
     sent = zoom_calls[0][1]
     assert sent["region"] == pytest.approx(clip) and 1 < sent["scale"] <= 4 and "selector" not in sent
     image = data["image"]
-    assert max(image["width"], image["height"]) <= 1568 and image["width"] * image["height"] <= 1_150_000
+    assert max(image["width"], image["height"]) <= 2000 and image["width"] * image["height"] <= 2_560_000
     assert image["css_origin"] == {"x": pytest.approx(clip["x"], abs=0.01), "y": pytest.approx(clip["y"], abs=0.01)}
     # Un pixel de la zone agrandie vaut bien moins qu'un pixel CSS (lecture d'un petit texte).
     assert image["css_per_image_px"] < factor / 2
@@ -295,7 +295,7 @@ def test_region_params_fit_the_limits_and_need_a_view(monkeypatch):
     region, scale = params["region"], params["scale"]
     assert region == {"x": 125.0, "y": 62.5, "width": 250.0, "height": 125.0}
     out_w, out_h = region["width"] * 1.25 * scale, region["height"] * 1.25 * scale
-    assert max(out_w, out_h) <= 1568.5 and out_w * out_h <= 1_150_000 * 1.001 and scale <= 4
+    assert max(out_w, out_h) <= 2000.5 and out_w * out_h <= 2_560_000 * 1.001 and scale <= 4
     for bad in ([0, 0, 0, 10], [1, 2, 3], "x", [0, 0, True, 5]):
         with pytest.raises(ValueError):
             mcp_server._region_params(9, bad, None, None, False)
@@ -329,7 +329,7 @@ def test_small_change_on_a_large_view_is_never_unchanged():
 
 
 def test_resized_view_is_never_unchanged_and_region_uses_the_last_sent_image(monkeypatch):
-    # Relevé par Codex le 24/10 : vue blanche 800×600 puis 1600×1200 (même empreinte) ; la 2e doit être jointe, et
+    # Relevé par Codex le 24/10 : vue blanche 800×600 puis 3200×2400 (même empreinte) ; la 2e doit être jointe, et
     # region se lit dans ses pixels à elle.
     def blank(width, height):
         out = io.BytesIO()
@@ -338,7 +338,7 @@ def test_resized_view_is_never_unchanged_and_region_uses_the_last_sent_image(mon
 
     _bridge(monkeypatch, "dataUrl", blank(800, 600), devicePixelRatio=1)
     first = mcp_server.browser_screenshot(tab_id=1, inline=True)
-    _bridge(monkeypatch, "dataUrl", blank(1600, 1200), devicePixelRatio=1)
+    _bridge(monkeypatch, "dataUrl", blank(3200, 2400), devicePixelRatio=1)
     second = mcp_server.browser_screenshot(tab_id=1, inline=True)
     assert any(isinstance(b, ImageContent) for b in first.content)
     assert any(isinstance(b, ImageContent) for b in second.content)  # géométrie changée : jamais « inchangée »
@@ -361,4 +361,5 @@ def test_device_pixel_ratio_change_is_a_new_view(monkeypatch):
     second = mcp_server.browser_screenshot(tab_id=1, inline=True)
     assert any(isinstance(b, ImageContent) for b in second.content)
     params = mcp_server._region_params(1, [0, 0, 400, 40], None, None, False)
-    assert params["region"]["width"] * 1 * params["scale"] == pytest.approx(1568, rel=0.01)
+    # 1600×900 tient la règle : envoyée telle quelle, 400 px CSS de zone agrandis ×4 (le plafond du zoom).
+    assert params["region"]["width"] == pytest.approx(400) and params["scale"] == pytest.approx(4)
