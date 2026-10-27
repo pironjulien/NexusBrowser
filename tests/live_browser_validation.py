@@ -1515,7 +1515,8 @@ def run_full_validation() -> dict[str, bool]:
         )
         # 2.8 : valeurs des mots de passe et des cartes jamais renvoyées (lectures, relecture de la saisie) ; eval
         # garde son accès complet à la page ; Page.reload ne peut plus injecter de script.
-        secrets_live = ("MotDePasse-Live-1", "4970101234567890", "NouveauSecret-Live-2")
+        # Valeurs factices saisies dans la page d'essai, qui ne doivent jamais revenir dans une lecture.
+        typed_live = ("MotDePasse-Live-1", "4970101234567890", "NouveauSecret-Live-2")
         reads = {
             "content": mcp.browser_content(tab_id=tab_id),
             "html": mcp.browser_content(tab_id=tab_id, mode="html"),
@@ -1534,7 +1535,7 @@ def run_full_validation() -> dict[str, bool]:
                 break
         reads["vision"] = response_text(mcp.browser_vision_inspect(tab_id=tab_id))
         # Nombre de valeurs secrètes retrouvées par lecture, jamais les valeurs elles-mêmes (journal de la validation).
-        leaked = {name: sum(x in raw for x in secrets_live) for name, raw in reads.items()}
+        leaked = {name: sum(x in raw for x in typed_live) for name, raw in reads.items()}
         check(
             "secrets_valeurs_masquees_en_lecture",
             not any(leaked.values())
@@ -1559,8 +1560,8 @@ def run_full_validation() -> dict[str, bool]:
         axtree = mcp.browser_axtree(tab_id=tab_id)
         check(
             "secrets_axtree_sans_mot_de_passe",
-            parse_response(axtree).get("status") == "success" and not any(x in axtree for x in secrets_live),
-            f"{sum(x in axtree for x in secrets_live)} valeur(s) secrète(s) retrouvée(s)",
+            parse_response(axtree).get("status") == "success" and not any(x in axtree for x in typed_live),
+            f"{sum(x in axtree for x in typed_live)} valeur(s) secrète(s) retrouvée(s)",
         )
         capture_masking_checks(check, tab_id, value_of)
         reload_refused = _error(
@@ -1766,8 +1767,8 @@ def capture_masking_checks(check, tab_id: int, value_of) -> None:
             time.sleep(0.1)
         raise AssertionError(f"Cadre A non réglé ({expected})")
 
-    frame_secrets = ("6011000990139424", "3530111333300000")
-    set_frame_card(frame_secrets[0], "cardNumber")
+    frame_cards = ("6011000990139424", "3530111333300000")  # numéros de test publics des réseaux de cartes
+    set_frame_card(frame_cards[0], "cardNumber")
     reads = {
         "content": mcp.browser_content(tab_id=tab_id),
         "find": mcp.browser_find({"label": "Carte du cadre A"}, tab_id=tab_id),
@@ -1775,17 +1776,17 @@ def capture_masking_checks(check, tab_id: int, value_of) -> None:
     found = _data(reads["find"])
     check(
         "cadre_autre_origine_lecture_masquee",
-        not [x for raw in reads.values() for x in frame_secrets if x in raw]
+        not [x for raw in reads.values() for x in frame_cards if x in raw]
         and "[masked value]" in reads["find"]
         and found.get("count") == 1,
-        {"fuites": {k: [x for x in frame_secrets if x in v] for k, v in reads.items()}, "find": found},
+        {"fuites": {k: sum(x in v for x in frame_cards) for k, v in reads.items()}, "find": found},
     )
     a = _shot(tab_id, "#frame-a")
-    set_frame_card(frame_secrets[1], "cardNumber")
+    set_frame_card(frame_cards[1], "cardNumber")
     b = _shot(tab_id, "#frame-a")
-    set_frame_card(frame_secrets[1], "note")
+    set_frame_card(frame_cards[1], "note")
     control = _shot(tab_id, "#frame-a")
-    set_frame_card(frame_secrets[0], "cardNumber")
+    set_frame_card(frame_cards[0], "cardNumber")
     check(
         "cadre_autre_origine_capture_en_disques",
         a == b and control != b,
