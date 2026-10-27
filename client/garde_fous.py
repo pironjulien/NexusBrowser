@@ -82,13 +82,24 @@ def _validate(data: Any, target: Path) -> None:
 
 
 CURRENCIES = str.maketrans({"€": " eur ", "$": " usd ", "£": " gbp ", "¥": " jpy "})
+# Sosies cyrilliques et grecs les plus courants (minuscules, après casefold) ramenés au latin : « Еnvoyer » écrit avec
+# un Е cyrillique se lit « Envoyer » et doit être reconnu (fuzzing des garde-fous, 27/10).
+CONFUSABLES = str.maketrans({
+    "а": "a", "в": "b", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o", "р": "p", "с": "c", "т": "t", "у": "y",
+    "х": "x", "і": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "ԛ": "q", "ԝ": "w", "һ": "h", "ӏ": "l",
+    "α": "a", "β": "b", "ε": "e", "η": "n", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p", "τ": "t", "υ": "u",
+    "χ": "x", "ω": "w",
+})
 
 
 def plain(text: Any) -> str:
     """Texte comparable : sans accents ni casse, apostrophes et ponctuation ramenées à des espaces ; symboles de devise
-    écrits en toutes lettres (« 4,99 € » → « 4 99 eur ») pour que les motifs reconnaissent un bouton prix."""
+    écrits en toutes lettres (« 4,99 € » → « 4 99 eur ») pour que les motifs reconnaissent un bouton prix. Caractères
+    de format (zéro largeur, marques de sens, trait d'union conditionnel : catégorie Cf) RETIRÉS, jamais changés en
+    espace : « Env\u200boyer » s'affiche « Envoyer » et ne doit pas échapper aux motifs ; sosies ramenés au latin."""
     decomposed = unicodedata.normalize("NFKD", str(text or "")).translate(CURRENCIES)
-    bare = "".join(ch for ch in decomposed if not unicodedata.combining(ch)).casefold()
+    visible = "".join(ch for ch in decomposed if not unicodedata.combining(ch) and unicodedata.category(ch) != "Cf")
+    bare = visible.casefold().translate(CONFUSABLES)
     return " ".join(re.sub(r"[^0-9a-z]+", " ", bare).split())
 
 

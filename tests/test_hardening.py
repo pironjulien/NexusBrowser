@@ -228,12 +228,12 @@ def test_cancelled_call_is_never_resent_after_the_wait(monkeypatch):
     monkeypatch.setattr(bridge_client, "ensure_bridge_running", lambda: True)
     monkeypatch.setattr(bridge_client, "is_chrome_running", lambda: True)
     monkeypatch.setattr(bridge_client, "ping_bridge", lambda: (at := back["at"]) is not None and time.time() >= at)
-    outcome: list[BaseException] = []
+    outcome: list[Exception] = []
 
     def click() -> None:
         try:
             bridge_client.call_bridge("click", {"tab_id": 1}, 1.0)
-        except BaseException as error:  # noqa: BLE001 - relevée par le test
+        except Exception as error:  # noqa: BLE001 - relevée par le test
             outcome.append(error)
 
     async def main() -> None:
@@ -268,12 +268,12 @@ def test_cancelled_call_is_not_sent_after_the_bridge_starts(monkeypatch):
     monkeypatch.setattr(bridge_client, "authentication_headers", headers)
     monkeypatch.setattr(bridge_client, "ensure_bridge_running", start)
     monkeypatch.setattr(bridge_client.urllib.request, "urlopen", lambda request, timeout=None: posts.append("sent"))
-    outcome: list[BaseException] = []
+    outcome: list[Exception] = []
 
     def click() -> None:
         try:
             bridge_client.call_bridge("click", {"tab_id": 1}, 1.0)
-        except BaseException as error:  # noqa: BLE001 - relevée par le test
+        except Exception as error:  # noqa: BLE001 - relevée par le test
             outcome.append(error)
 
     async def main() -> None:

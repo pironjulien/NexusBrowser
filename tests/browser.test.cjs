@@ -4522,7 +4522,10 @@ test("fenêtre de l'icône : lecture seule (état du pont, groupes des agents) s
     const dir = path.join(__dirname, '../extension');
     const html = fs.readFileSync(path.join(dir, 'popup.html'), 'utf8');
     const js = fs.readFileSync(path.join(dir, 'popup.js'), 'utf8');
-    assert.ok(!/<script>|on[a-z]+=|style=/.test(html));
+    // Scripts externes seulement : chaque balise <script> (toute casse) porte un src, aucun attribut on*= ni style=.
+    const scriptTags = html.toLowerCase().split('<script').slice(1).map((rest) => rest.slice(0, rest.indexOf('>') + 1));
+    assert.ok(scriptTags.length > 0 && scriptTags.every((tag) => /\ssrc=/.test(tag)), scriptTags.join(' '));
+    assert.ok(!/on[a-z]+=|style=/i.test(html));
     assert.ok(!/executeAction|panelStop|innerHTML|fetch\(|WebSocket|debugger|scripting|tabs\.(update|remove|create)/.test(js));
     const sent = [];
     const elements = {};
@@ -4754,7 +4757,8 @@ test('appairage : sans hôte natif, le service worker se connecte en « paired �
     const sockets = controlledSockets();
     const h = harness({}, {WebSocket: sockets.ControlledWebSocket, runtime: {id: EXT_ID, lastError: undefined}});
     try {
-        h.evalInContext(`AgyPairing.load = async () => AgyPairing.secretKey(${JSON.stringify(pairedKey)}); connectBridgeWS();`);
+        // Clé passée en argument à une fonction du service worker, jamais recopiée dans du code évalué.
+        h.evalInContext('(key) => { AgyPairing.load = async () => AgyPairing.secretKey(key); connectBridgeWS(); }')(pairedKey);
         await until(() => sockets.instances.length > 0, 'connexion');
         const ws = sockets.instances.at(-1);
         ws.open();

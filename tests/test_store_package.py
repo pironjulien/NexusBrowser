@@ -6,12 +6,20 @@ import json
 import re
 import zipfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = importlib.util.spec_from_file_location("store_package", ROOT / "scripts" / "store_package.py")
 assert SPEC and SPEC.loader
 store = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(store)
+
+
+def remote_hosts(policy: str) -> list[str]:
+    """Hôtes distants (https) autorisés par la directive connect-src d'une CSP."""
+    connect = re.search(r"connect-src ([^;]+)", policy)
+    sources = connect.group(1).split() if connect else []
+    return [urlparse(s).hostname or "" for s in sources if s.startswith("https://")]
 
 
 def test_zip_is_the_extension_without_key(tmp_path, monkeypatch):
@@ -48,8 +56,10 @@ def test_variant_without_the_gmail_counter(tmp_path):
         changed = sorted(name for name in a.namelist() if a.read(name) != b.read(name))
         assert changed == ["background.js", "manifest.json", "popup.html"]
         csp = json.loads(b.read("manifest.json"))["content_security_policy"]["extension_pages"]
-        assert "mail.google.com" not in csp and "ws://127.0.0.1:*" in csp
-        assert "mail.google.com" in json.loads(a.read("manifest.json"))["content_security_policy"]["extension_pages"]
+        assert remote_hosts(csp) == [] and "ws://127.0.0.1:*" in csp
+        assert remote_hosts(json.loads(a.read("manifest.json"))["content_security_policy"]["extension_pages"]) == [
+            "mail.google.com"
+        ]
         popup = b.read("popup.html").decode("utf-8")
         assert "compteur-gmail" not in popup and "<label" not in popup and 'id="bridge"' in popup
         assert b"const COMPTEUR_GMAIL_DISPONIBLE = false;" in b.read("background.js")
@@ -70,5 +80,6 @@ def test_csp_reaches_only_the_bridge_and_the_documented_gmail_feed():
     ]
     assert remote == ["https://mail.google.com"]
     for doc in ("README.md", "store/SINGLE_PURPOSE.md"):
-        assert "https://mail.google.com" in (ROOT / doc).read_text(encoding="utf-8"), doc
+        urls = re.findall(r"https://[^\s)`'\"<>]+", (ROOT / doc).read_text(encoding="utf-8"))
+        assert any(urlparse(url).hostname == "mail.google.com" for url in urls), doc
     assert "FLUX_GMAIL" in (ROOT / "extension" / "background.js").read_text(encoding="utf-8")

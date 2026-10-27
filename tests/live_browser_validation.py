@@ -781,7 +781,7 @@ def run_live_validation():
             try:
                 mcp.browser_close_tab(tab_id=test_tab_id)
             except Exception:
-                pass
+                pass  # nettoyage au mieux : l'onglet a pu déjà être fermé, le résultat est donné plus bas
         server.shutdown()
         server.server_close()
 
@@ -1170,7 +1170,7 @@ class FullFixture:
         try:  # localhost peut se résoudre d'abord en ::1 : même port, boucle locale IPv6 seulement
             self.servers.append(V6Server(("::1", self.frame_port), Handler))
         except OSError:
-            pass
+            pass  # IPv6 indisponible sur ce poste : la boucle locale IPv4 suffit
         for server in self.servers:
             threading.Thread(target=server.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.main_port}/full"
@@ -1530,7 +1530,8 @@ def run_full_validation() -> dict[str, bool]:
             if value_of(in_view) is True:
                 break
         reads["vision"] = response_text(mcp.browser_vision_inspect(tab_id=tab_id))
-        leaked = {name: [x for x in secrets_live if x in raw] for name, raw in reads.items()}
+        # Nombre de valeurs secrètes retrouvées par lecture, jamais les valeurs elles-mêmes (journal de la validation).
+        leaked = {name: sum(x in raw for x in secrets_live) for name, raw in reads.items()}
         check(
             "secrets_valeurs_masquees_en_lecture",
             not any(leaked.values())
@@ -1555,8 +1556,8 @@ def run_full_validation() -> dict[str, bool]:
         axtree = mcp.browser_axtree(tab_id=tab_id)
         check(
             "secrets_axtree_sans_mot_de_passe",
-            parse_response(axtree).get("status") == "success" and not [x for x in secrets_live if x in axtree],
-            [x for x in secrets_live if x in axtree] or "aucune valeur",
+            parse_response(axtree).get("status") == "success" and not any(x in axtree for x in secrets_live),
+            f"{sum(x in axtree for x in secrets_live)} valeur(s) secrète(s) retrouvée(s)",
         )
         capture_masking_checks(check, tab_id, value_of)
         reload_refused = _error(

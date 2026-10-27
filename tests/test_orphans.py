@@ -22,9 +22,16 @@ sys.path.insert(0, str(REPO_ROOT / "client"))
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 import bridge_client  # noqa: E402
-import bridge_security  # noqa: E402
 import bridge_server  # noqa: E402
-from bridge_security import AGENT_HEADER, CLIENT_HEADER, PID_HEADER, TOKEN_HEADER, token_path  # noqa: E402
+from bridge_security import (  # noqa: E402
+    AGENT_HEADER,
+    CLIENT_HEADER,
+    PID_HEADER,
+    TOKEN_HEADER,
+    check_pid,
+    process_running,
+    token_path,
+)
 from test_bridge_auth import ORIGIN, Extension  # noqa: E402
 
 from client import bridge_client as package_client  # noqa: E402
@@ -114,11 +121,11 @@ def with_extension(scenario) -> list[dict]:
 
 
 def test_process_liveness_is_proven_never_guessed():
-    assert bridge_security.process_running(os.getpid())
-    assert not bridge_security.process_running(dead_pid())
-    assert bridge_security.check_pid("1234") == 1234
+    assert process_running(os.getpid())
+    assert not process_running(dead_pid())
+    assert check_pid("1234") == 1234
     for bad in (None, "", "0", "-5", "12a", "99999999999", 12):
-        assert bridge_security.check_pid(bad) is None, bad
+        assert check_pid(bad) is None, bad
 
 
 def test_restarted_mcp_server_learns_its_dead_session_never_a_live_one_nor_another_agent():

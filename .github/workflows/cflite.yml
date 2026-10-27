@@ -1,0 +1,41 @@
+# ClusterFuzzLite (https://google.github.io/clusterfuzzlite/): the Atheris fuzzers of fuzz/ (code that reads what a web
+# page or an agent sends: WebMCP schemas, page text, addresses, upload paths), each checking a safety property.
+# Short run on every push and pull request, longer weekly run. Actions and base image pinned by digest.
+name: ClusterFuzzLite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "41 3 * * 3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    # Public repository only (Linux minutes are free there): the private development copy skips it.
+    if: github.repository == 'pironjulien/NexusBrowser'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Build the fuzzers
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1  # v1
+        with:
+          language: python
+          sanitizer: address
+      - name: Run the fuzzers
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1  # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: ${{ github.event_name == 'schedule' && 1800 || 240 }}
+          mode: ${{ github.event_name == 'pull_request' && 'code-change' || 'batch' }}
+          sanitizer: address
+          output-sarif: false

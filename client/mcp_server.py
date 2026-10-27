@@ -39,7 +39,6 @@ from pydantic import Field, ValidationError  # noqa: E402
 try:
     from . import bridge_client, emergency_stop, garde_fous, journal, outward_gate, vision_image, webmcp
     from . import output_models as out
-    from .bridge_client import call_bridge, is_read_only_action, set_identity, start_heartbeat
 except ImportError:
     import bridge_client
     import emergency_stop
@@ -49,8 +48,9 @@ except ImportError:
     import outward_gate
     import vision_image
     import webmcp
-    from bridge_client import call_bridge, is_read_only_action, set_identity, start_heartbeat
 
+# Nom repris au niveau du module : les tests remplacent mcp_server.call_bridge.
+call_bridge = bridge_client.call_bridge
 
 VERSION = (Path(__file__).resolve().parent.parent / "VERSION").read_text(encoding="utf-8").strip()
 # Réponses en JSON compact : l'indentation coûtait 30 à 40 % de tokens à l'agent, sans rien lui apprendre.
@@ -110,7 +110,7 @@ ACCORDS = garde_fous.Accords()
 AGENT_NAME = os.environ.get("NEXUS_BROWSER_AGENT", "").strip() or "Nexus"
 # Identité de session neuve à chaque processus : deux conversations du même agent ne partagent pas leurs onglets.
 # Liée à CE processus (annoncé au pont) : quand il disparaît, ses onglets deviennent orphelins pour le même agent.
-CLIENT_IDENTITY = set_identity(AGENT_NAME)
+CLIENT_IDENTITY = bridge_client.set_identity(AGENT_NAME)
 
 
 def _agent_name() -> str:
@@ -278,7 +278,7 @@ def cleanup_screenshot_cache(directory: Path) -> None:
             if index >= SCREENSHOT_CACHE_MAX_FILES or now - file.stat().st_mtime > SCREENSHOT_CACHE_MAX_AGE_S:
                 file.unlink()
         except OSError:
-            pass
+            pass  # capture déjà effacée ou encore ouverte : reprise au prochain ménage
 
 
 def _screenshot_dir() -> Path:
@@ -335,7 +335,7 @@ def _call_bridge(
     note: Callable[[Any], str] | None = None,
 ) -> str:
     try:
-        if not is_read_only_action(action):
+        if not bridge_client.is_read_only_action(action):
             # Arrêt d'urgence de Julien : les lectures restent permises, aucune action dans son Chrome.
             emergency_stop.check()
         if wait_ms is not None:
@@ -1986,5 +1986,5 @@ if __name__ == "__main__":
         _serve_http(int(sys.argv[i + 1]) if len(sys.argv) > i + 1 else 16182)
     else:
         # Signe de vie de cette session (ses onglets restent protégés) ; le premier reprend les orphelins de l'agent.
-        start_heartbeat()
+        bridge_client.start_heartbeat()
         browser_mcp.run(transport="stdio")

@@ -81,7 +81,8 @@ async def handshake(websocket, key: str, auth: str, role: str, extension_id: str
     assert challenge["server_proof"] == server_proof(*args)  # le pont prouve d'abord qu'il connaît la clé
     await websocket.send(json.dumps({"type": "auth_proof", "client_proof": proof or client_proof(*args)}))
     channel = Channel(session_key(*args), "c2s", "s2c")
-    assert json.loads(channel.open(json.loads(await websocket.recv()))) == {"type": "auth_ok"}
+    answer = json.loads(channel.open(json.loads(await websocket.recv())))
+    assert answer == {"type": "auth_ok"}
     return client_nonce, server_nonce, channel
 
 

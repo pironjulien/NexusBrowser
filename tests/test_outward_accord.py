@@ -162,8 +162,10 @@ def test_right_token_allows_the_click_once(page):
 @pytest.mark.parametrize(
     "refusal",
     [
-        "<button> is covered by <div.r-jumn1c>: no point of the element is reachable, no mouse action sent. "
-        "Nothing was sent.",
+        (
+            "<button> is covered by <div.r-jumn1c>: no point of the element is reachable, no mouse action sent. "
+            "Nothing was sent."
+        ),
         'Element not found for {"selector":"#send"} Nothing was sent.',
         "<button> is covered by <div.r-1p0dtai>: no point of the element is reachable, no mouse action sent.",
     ],
@@ -268,7 +270,7 @@ def test_concurrent_paths_cannot_skip_the_accord(page):
 def test_page_text_is_flagged_and_cannot_authorize(page):
     read = reply(mcp_server.browser_content(tab_id=1, mode="text"))
     assert read["status"] == "success" and "looks like instructions aimed at an AI" in read["untrusted_note"]
-    assert "evil.example.com" in read["untrusted_note"]
+    assert "The text read (https://evil.example.com/page) looks like" in read["untrusted_note"]  # provenance donnée
     assert_english(read["untrusted_note"])
     out = reply(mcp_server.browser_click(selector="#send", tab_id=1, confirm=True, accord="deadbeef"))
     assert "accord unknown or already used" in out["error"] and page.gestures == []

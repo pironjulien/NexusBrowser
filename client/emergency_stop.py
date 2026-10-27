@@ -18,13 +18,13 @@ temporaire et n'écrivent jamais le vrai ~/.nexus/stop, qui figerait les autres 
 from __future__ import annotations
 
 import ctypes
+import ctypes.wintypes
 import json
 import os
 import re
 import sys
 import threading
 import time
-from ctypes import wintypes
 from pathlib import Path
 
 HOLD_S = 120.0
@@ -186,6 +186,7 @@ def _loop() -> None:
         _tried.set()
         return
     user32 = ctypes.WinDLL("user32", use_last_error=True)
+    wintypes = ctypes.wintypes
     user32.RegisterHotKey.argtypes = (wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT)
     user32.RegisterHotKey.restype = wintypes.BOOL
     user32.GetMessageW.argtypes = (ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT)

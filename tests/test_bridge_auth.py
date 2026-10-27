@@ -107,7 +107,8 @@ class Extension:
         self.proof = proof or client_proof(*args)
         await self.websocket.send(json.dumps({"type": "auth_proof", "client_proof": self.proof}))
         self.channel = Channel(session_key(*args), "c2s", "s2c")
-        assert json.loads(self.channel.open(json.loads(await self.websocket.recv()))) == {"type": "auth_ok"}
+        answer = json.loads(self.channel.open(json.loads(await self.websocket.recv())))
+        assert answer == {"type": "auth_ok"}
 
     async def receive(self) -> dict:
         assert self.channel is not None

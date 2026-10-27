@@ -21,8 +21,14 @@ sys.path.insert(0, str(REPO_ROOT / "client"))
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 import bridge_client  # noqa: E402
-import bridge_security  # noqa: E402
-from bridge_security import AGENT_HEADER, CLIENT_HEADER, TOKEN_HEADER, token_path  # noqa: E402
+from bridge_security import (  # noqa: E402
+    AGENT_HEADER,
+    CLIENT_HEADER,
+    TOKEN_HEADER,
+    check_identity,
+    token_path,
+    upload_refusal,
+)
 from test_bridge_auth import ORIGIN, Extension  # noqa: E402
 
 from client import bridge_client as package_client  # noqa: E402
@@ -219,21 +225,18 @@ def test_upload_refused_by_the_bridge_itself_for_every_spelling(fake_home):
         # Un client HTTP qui contourne bridge_client est arrêté au pont (aucune extension n'est même consultée).
         status, payload = command("upload", {"files": [path], "tab_id": 1}, AGENT_A)
         assert status == 403 and "Upload refused" in payload["error"], path
-        refusal = bridge_security.upload_refusal([str(home / "Docs" / "ok.pdf"), path])
+        refusal = upload_refusal([str(home / "Docs" / "ok.pdf"), path])
         assert refusal and "Upload refused" in refusal, path
-    assert bridge_security.upload_refusal([str(home / "Docs" / "ok.pdf")]) is None
+    assert upload_refusal([str(home / "Docs" / "ok.pdf")]) is None
     status, payload = command("upload", {"files": [str(home / "Docs" / "ok.pdf")], "tab_id": 1}, AGENT_A)
     assert status == 400 and "No Chrome browser extension connected" in payload["error"]  # passé au contrôle
-    assert bridge_security.upload_refusal([]) and bridge_security.upload_refusal("C:/x")  # liste invalide
+    assert upload_refusal([]) and upload_refusal("C:/x")  # liste invalide
 
 
 def test_default_cli_identity_is_accepted_by_the_bridge():
     """L'identité par défaut de la CLI doit passer le contrôle du pont (« cli » faisait 3 caractères : refusée)."""
-    import bridge_client
-    import bridge_security
-
     default = bridge_client.identity()
-    assert bridge_security.check_identity(default["agent"], default["id"]) is not None
+    assert check_identity(default["agent"], default["id"]) is not None
 
 
 def test_adopt_tab_user_asked(monkeypatch):

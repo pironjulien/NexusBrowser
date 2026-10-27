@@ -1,6 +1,6 @@
 [project]
 name = "nexus-browser"
-version = "2.31.2"
+version = "2.31.3"
 description = "Your real Chrome, driven by Claude, Codex and Antigravity in background tabs: the nexus-browser MCP server (needs the NexusBrowser bridge and extension)"
 authors = [{ name = "Julien Piron" }]
 license = "MIT"
@@ -72,13 +72,19 @@ target-version = "py311"
 select = ["E", "F", "W", "I", "UP"]
 ignore = ["E501"]
 
+[tool.ruff.format]
+# Copie à l'identique de NexusHarness/NexusWindows/commun (tests/test_outward_accord.py) : mise en forme de l'original.
+exclude = ["client/garde_fous.py"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 # Aucun .pytest_cache dans le dépôt (OneDrive), même lancé sans test.ps1.
 addopts = "-p no:cacheprovider"
 
 [tool.pyright]
-include = ["client", "native-host", "tests"]
+include = ["client", "native-host", "tests", "fuzz/targets.py"]
+# Fuzzers Atheris : atheris n'existe que dans l'image ClusterFuzzLite (stubs incomplets ici).
+exclude = ["fuzz/fuzz_*.py"]
 pythonVersion = "3.11"
 # Modules chargés par chemin (sys.path) : le client et l'hôte natif.
-extraPaths = ["client", "native-host", "."]
+extraPaths = ["client", "native-host", ".", "fuzz"]

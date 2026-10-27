@@ -61,7 +61,7 @@ def main() -> int:
                 print(json.dumps({"connected": True, "verified": True, "reloaded": True}))
                 return 0
         except (OSError, RuntimeError):
-            pass
+            pass  # pont ou extension pas encore revenus : nouvel essai jusqu'à l'échéance
     print(json.dumps({"connected": True, "verified": False, "error": "extension-refresh-unconfirmed"}))
     return 1
 

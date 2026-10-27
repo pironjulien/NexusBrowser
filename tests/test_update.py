@@ -70,13 +70,15 @@ def test_restart_after_update_is_done():
 def test_start_only_on_a_public_install_and_only_when_newer(monkeypatch):
     runs = []
     bridge_update.write_status({"latest": "2.26.0"})
-    assert bridge_update.start("2.25.0", run=lambda: runs.append(1))[0] == 409  # clone de développement
+    code, _ = bridge_update.start("2.25.0", run=lambda: runs.append(1))
+    assert code == 409  # clone de développement
     monkeypatch.setattr(bridge_update, "public_install", lambda root=None: True)
     code, status = bridge_update.start("2.26.0", run=lambda: runs.append(1))
     assert code == 200 and status["state"] == "idle" and not runs
     code, status = bridge_update.start("2.25.0", run=lambda: runs.append(1))
     assert code == 202 and status["state"] == "updating" and runs == [1]
-    assert bridge_update.start("2.25.0", run=lambda: runs.append(1))[0] == 202 and runs == [1]  # déjà en cours
+    code, _ = bridge_update.start("2.25.0", run=lambda: runs.append(1))
+    assert code == 202 and runs == [1]  # déjà en cours
 
     def refused():
         raise OSError("task missing")

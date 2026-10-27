@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -162,7 +163,11 @@ def test_get_reads_the_latest_tag_without_the_github_api(tmp_path):
     GitHub sans jeton plafonne à 60 requêtes par heure et par IP (« API rate limit exceeded » sur une IP partagée ou en
     CI). L'API ne reste qu'en secours. Éprouvé pour de vrai sous Windows PowerShell 5.1 et PowerShell 7."""
     text = (REPO_ROOT / "get.ps1").read_text(encoding="ascii")
-    api_lines = [line for line in text.splitlines() if "api.github.com" in line]
+    api_lines = [
+        line
+        for line in text.splitlines()
+        if any(urlparse(url).hostname == "api.github.com" for url in re.findall(r"https://[^\s'\"]+", line))
+    ]
     assert len(api_lines) == 1 and "Invoke-RestMethod" in api_lines[0], api_lines  # le seul appel : le secours
     assert "$tag = Get-LatestTag" in text and "release.tag_name" not in text
     # Lancé par -File depuis un fichier : jamais de téléchargement passé en ligne de commande (-Command), que

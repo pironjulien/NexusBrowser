@@ -75,7 +75,7 @@ def gate(args, targets, gestures, *, focus_ok=False, typed="", timeout=20.0):
     try:
         outward_gate.check(
             accords(),
-            lambda action, params, wait: execute_command(action, params, wait),
+            execute_command,
             bound,
             gestures,
             timeout=timeout,

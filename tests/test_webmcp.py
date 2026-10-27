@@ -399,7 +399,7 @@ def test_outward_tool_needs_accord_for_exact_call(page: WebMCPPage, tool: str, r
     assert refused["status"] == "error" and refused["accord_required"] is True
     message = refused["error"]
     assert reason in message
-    assert tool in message and "https://shop.example" in message
+    assert f"{tool} at https://shop.example" in message  # outil et origine exacts
     assert "bob@example.com" in message  # destinataire montré
     assert "Secret!1" not in message and "[masked value]" in message
     assert_english(message)

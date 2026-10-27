@@ -350,7 +350,7 @@ def ecrire_compteurs(data: dict) -> None:
                 if (maintenant - datetime.fromisoformat(entree["at"])).total_seconds() < 86_400:
                     garde[cle] = entree
             except (KeyError, TypeError, ValueError):
-                pass
+                pass  # entrée sans date lisible : écartée
         sources = garde
         if source != "defaut":
             # Profil passé de l'extension 2.23.1 (sans identifiant, « defaut ») à la 2.23.2 : l'ancienne entrée du même
@@ -693,7 +693,7 @@ async def handle_http(reader, writer):
             writer.close()
             await writer.wait_closed()
         except Exception:
-            pass
+            pass  # connexion déjà rompue : l'échec d'origine est journalisé juste au-dessus
 
 
 async def send_json_response(writer, status: int, payload: dict, extra_headers: dict[str, str] | None = None) -> None:
@@ -725,13 +725,13 @@ async def send_json_response(writer, status: int, payload: dict, extra_headers: 
         writer.write(response)
         await writer.drain()
     except (OSError, ConnectionError):
-        pass
+        pass  # client parti avant la réponse : plus personne à qui répondre
     finally:
         try:
             writer.close()
             await writer.wait_closed()
         except Exception:
-            pass
+            pass  # connexion déjà rompue : rien de plus à fermer
 
 
 async def watch_updates() -> None:

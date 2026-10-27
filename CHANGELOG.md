@@ -5,6 +5,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.31.3] - 2026-10-27
+
+### Added
+- Fuzzing: ClusterFuzzLite runs Atheris fuzzers (`fuzz/`) on every push and pull request, and longer every week, on
+  the code that reads what a web page or an agent sends, each with a safety property: WebMCP schemas and calls
+  (bounded check, refusal only as "nothing was called"), page text (instruction and outward-word detection),
+  addresses and error messages (only a domain or a fixed category reaches the shared journal), upload paths (anything
+  under a secrets folder is refused). The same targets also run offline in `test.ps1` on seeds and random bytes.
+
+### Security
+- Shared guardrail policy (from NexusWindows): format characters (zero-width space, direction marks, soft hyphen)
+  are removed and common Cyrillic and Greek look-alike letters are read as Latin before matching, so an outward
+  word written `Env​oyer` or with a Cyrillic `Е` no longer escapes the accord check.
+- The public `main` branch requires a pull request with an approved review and green checks (tests, Linux startup,
+  CodeQL) for anyone but the repository admin; a workflow token can no longer write to it.
+
 ## [2.31.2] - 2026-10-27
 
 ### Fixed
