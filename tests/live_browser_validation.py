@@ -309,9 +309,9 @@ def get_free_port() -> int:
 
 
 def response_text(raw: Any) -> str:
-    """Texte d'une réponse d'outil : chaîne, ou CallToolResult des outils de capture (structured_content)."""
-    structured = getattr(raw, "structured_content", None)
-    return structured["result"] if isinstance(structured, dict) else raw
+    """Texte d'une réponse d'outil : chaîne, ou CallToolResult des outils de capture et du lot (premier bloc texte)."""
+    content = getattr(raw, "content", None)
+    return content[0].text if content else raw
 
 
 def parse_response(raw_json_or_dict: Any) -> dict:

@@ -27,7 +27,7 @@ def bridge(monkeypatch):
         if action == "find":
             counts = state["counts"]
             return {"count": counts.pop(0) if len(counts) > 1 else counts[0]}
-        return {"ok": True}
+        return [] if action == "list-tabs" else {"ok": True}  # list-tabs : une liste, comme l'extension
 
     monkeypatch.setattr(mcp_server, "call_bridge", fake)
     monkeypatch.setattr(mcp_server, "WAIT_FOR_POLL_S", 0.01)
@@ -48,9 +48,7 @@ def test_navigate_back_and_forward(bridge):
 def test_full_page_screenshot_flag_and_element_wins(bridge):
     mcp_server.browser_screenshot(tab_id=3, full_page=True, output_path="C:/x/page.png")
     mcp_server.browser_screenshot(tab_id=3, full_page=True, mark=4, inline=True)
-    refused = json.loads(
-        mcp_server.browser_screenshot(tab_id=3, full_page=True, inline=True).structured_content["result"]
-    )
+    refused = json.loads(mcp_server.browser_screenshot(tab_id=3, full_page=True, inline=True).content[0].text)
     assert bridge["calls"][0] == ("screenshot", {"output": "C:/x/page.png", "tab_id": 3, "fullPage": True})
     assert bridge["calls"][1] == ("screenshot", {"tab_id": 3, "selector": "#4"})  # jointe : aucun fichier
     assert refused["status"] == "error" and "inline" in refused["error"] and len(bridge["calls"]) == 2
@@ -83,9 +81,11 @@ def test_wait_for_needs_a_target_and_a_tab(bridge):
 
 
 def _batch_json(result) -> dict:
-    """Réponse d'un lot : toujours texte + structured_content {"result": texte} (anciens clients compris)."""
-    assert isinstance(result.structured_content, dict) and isinstance(result.structured_content["result"], str)
-    return json.loads(result.structured_content["result"])
+    """Réponse d'un lot : JSON en texte, aucun schéma de sortie (ni structured_content), isError sur un arrêt."""
+    assert result.structured_content is None
+    payload = json.loads(result.content[0].text)
+    assert result.is_error == (payload["status"] == "error")
+    return payload
 
 
 def test_batch_runs_steps_in_order_with_default_tab(bridge):

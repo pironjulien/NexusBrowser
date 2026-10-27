@@ -224,7 +224,7 @@ def capture_dir(tmp_path, monkeypatch):
 )
 def test_browser_captures_are_written_to_disk_by_default(monkeypatch, capture_dir, tool, key):
     monkeypatch.setattr(mcp_server, "call_bridge", lambda action, params, timeout=20.0: {key: PNG, "markers": []})
-    result = json.loads(getattr(mcp_server, tool)(tab_id=1).structured_content["result"])
+    result = json.loads(getattr(mcp_server, tool)(tab_id=1).content[0].text)
     assert result["status"] == "success"
     assert key not in result["data"]
     written = Path(result["data"]["output_path"])

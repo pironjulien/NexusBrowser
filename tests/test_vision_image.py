@@ -94,8 +94,8 @@ def _bridge(monkeypatch, key, png, **extra):
 
 
 def _json(result):
-    """Toute réponse des outils de capture porte structured_content={"result": texte} (anciens clients)."""
-    return json.loads(result.structured_content["result"])
+    """Réponse des outils de capture : JSON dans le premier bloc texte (images ensuite)."""
+    return json.loads(result.content[0].text)
 
 
 def _call(tool, arguments):
@@ -128,13 +128,6 @@ def test_inline_capture_is_an_mcp_webp_image_with_scale(monkeypatch, tmp_path, t
     assert abs(2000 * data["image"]["css_per_image_px"] - 1280) < data["image"]["css_per_image_px"]
     assert data["image"]["css_origin"] == {"x": 0, "y": 0}
     assert list(tmp_path.iterdir()) == []  # rien sur disque
-    # Sessions ouvertes avant la 2.21 (ancien schéma {"result": texte} en cache) : la réponse leur reste valide.
-    result = (
-        mcp_server.browser_screenshot(tab_id=1, inline=True, force=True)
-        if tool == "browser_screenshot"
-        else (mcp_server.browser_vision_inspect(tab_id=1, inline=True, force=True))
-    )
-    assert result.structured_content == {"result": texts[0].text}
     assert "output" not in calls[0][1]
 
 
@@ -175,9 +168,8 @@ def test_giant_capture_is_refused_cleanly(monkeypatch):
     assert result["status"] == "error" and "too large to attach" in result["error"]
 
 
-def test_every_answer_of_the_capture_tools_keeps_the_old_result_schema(monkeypatch, tmp_path):
-    # Relevé par Codex le 24/10 : une session ouverte avant la 2.21 a l'ancien schéma {"result": texte} en cache et
-    # rejette toute réponse sans structured_content (fichier, refus, erreur), pas seulement l'image jointe.
+def test_every_answer_of_the_capture_tools_is_text_without_a_fake_schema(monkeypatch, tmp_path):
+    # 2.30 : plus de structured_content {"result": texte} (doublon du texte, faux schéma) ; échec = isError.
     _bridge(monkeypatch, "dataUrl", _png(300, 200), markers=[])
     answers = [
         mcp_server.browser_screenshot(tab_id=1, output_path=str(tmp_path / "a.png")),
@@ -187,10 +179,11 @@ def test_every_answer_of_the_capture_tools_keeps_the_old_result_schema(monkeypat
         mcp_server.browser_vision_inspect(tab_id=1, output_path=str(tmp_path / "b.png")),
         mcp_server.browser_vision_inspect(tab_id=1, inline=True),
     ]
+    failed = [answer.is_error for answer in answers]
+    assert failed[:4] == [False, False, True, True]  # refus et onglet invalide : isError
     for answer in answers:
-        assert set(answer.structured_content) == {"result"} and isinstance(answer.structured_content["result"], str)
-        assert answer.content[0].text == answer.structured_content["result"]
-        json.loads(answer.structured_content["result"])
+        assert answer.structured_content is None
+        assert json.loads(answer.content[0].text)["status"] == ("error" if answer.is_error else "success")
 
 
 def test_clip_with_page_zoom_maps_back_to_page_css_pixels(monkeypatch):

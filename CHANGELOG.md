@@ -5,6 +5,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.30.0] - 2026-10-27
+
+### Changed
+- Typed tool outputs. The data tools publish their real output schema (`outputSchema`) and return their answer as
+  `structuredContent`, an object clients and scripts read directly: `browser_list_tabs`, `browser_active_tab`,
+  `browser_new_tab`, `browser_find`, `browser_network_requests`, `browser_download_status`, `browser_wait_download`,
+  `browser_get_cookies`, `browser_interactive_map`, `browser_logs`, `browser_webmcp_tools`, `browser_wait_for`. Until
+  now 46 of the 49 tools declared a false schema (`{result: string}`) and sent their JSON twice, once as text and once
+  as that escaped string. The schema is the usual envelope (`status`, `data`, optional `untrusted_note` / `warning`):
+  only `status` and `data` are required and unknown keys are allowed, so an older or newer extension never gets a real
+  answer rejected. Masked values stay masked: the structured answer is exactly the text answer.
+- Action and capture tools no longer declare any output schema and no longer echo their text in
+  `structuredContent`: text (and images) only.
+- A failed call (bridge error, invalid argument, accord refusal, stopped batch) is now an MCP tool error (`isError`),
+  its JSON reason unchanged in the text. A bridge answer that does not fit a tool's schema is reported the same way,
+  with the answer kept and the mismatch named, instead of the SDK's generic error.
+- A client that kept the tool list of an earlier version (from before this server restarted) must list the tools
+  again: reconnecting does it, and the list is announced fresh for one minute.
+
+### Added
+- `tests/test_output_schemas.py`: schemas checked against the bridge's real answer shapes (dialog interruptions and
+  optional fields included), and a run through the SDK's official client (`mcp.client.client.Client`, `auto` and
+  `legacy` modes), which validates every `structuredContent` against the announced schema.
+
 ## [2.29.0] - 2026-10-27
 
 ### Added

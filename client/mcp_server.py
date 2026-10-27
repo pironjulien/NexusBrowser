@@ -12,6 +12,8 @@ autres agents compris). Ici, tab_id est un paramètre OBLIGATOIRE de chaque comm
 
 import asyncio
 import base64
+import functools
+import inspect
 import json
 import os
 import re
@@ -32,16 +34,18 @@ from mcp.server.caching import CacheHint  # noqa: E402
 from mcp.server.mcpserver import Image, MCPServer  # noqa: E402
 from mcp.types import CallToolResult, Icon, TextContent, ToolAnnotations  # noqa: E402
 from PIL import Image as PILImage  # noqa: E402
-from pydantic import Field  # noqa: E402
+from pydantic import Field, ValidationError  # noqa: E402
 
 try:
     from . import bridge_client, emergency_stop, garde_fous, journal, outward_gate, vision_image, webmcp
+    from . import output_models as out
     from .bridge_client import call_bridge, is_read_only_action, set_identity, start_heartbeat
 except ImportError:
     import bridge_client
     import emergency_stop
     import garde_fous
     import journal
+    import output_models as out
     import outward_gate
     import vision_image
     import webmcp
@@ -382,11 +386,65 @@ def _positive(value: Any) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 else None
 
 
-def _compat(text: str, *blocks: Any) -> CallToolResult:
-    """Réponse des deux outils de capture, quelle qu'elle soit (fichier, image jointe, refus, erreur) : texte puis
-    blocs, et structured_content reprenant le texte. Une session ouverte avant la 2.21 garde en cache l'ancien
-    schéma de sortie ({"result": texte}) et rejetterait sinon toute réponse de ces outils."""
-    return CallToolResult(content=[TextContent(type="text", text=text), *blocks], structured_content={"result": text})
+def _payload(text: str) -> dict | None:
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _answer(text: str, *blocks: Any, output: Any = None) -> CallToolResult:
+    """Réponse MCP d'un outil : le JSON compact en texte (lu par le modèle), puis les blocs joints (images). Échec
+    (status=error, refus d'accord compris) : isError, sans données structurées. Outil typé (output, modèle de sa
+    réponse) : en cas de succès, la même réponse en structuredContent, objet conforme au schéma de sortie publié, jamais
+    du texte emballé. Réponse du pont hors de ce schéma (extension d'une autre version) : une erreur nommant l'écart,
+    données gardées, plutôt que l'erreur générique du SDK qui perdrait la réponse ; status=error dans le texte même,
+    pour que le lot s'arrête et que le journal la compte en échec (relevé par Codex le 27/10)."""
+    payload = _payload(text)
+    failed = payload is not None and payload.get("status") == "error"
+    if output is not None and not failed:
+        try:
+            output.model_validate(payload)
+            return CallToolResult(content=[TextContent(type="text", text=text), *blocks], structured_content=payload)
+        except ValidationError as error:
+            mismatch = "; ".join(
+                f"{'.'.join(str(part) for part in issue['loc'])}: {issue['msg']}" for issue in error.errors()[:3]
+            )
+            payload = {
+                "status": "error",
+                "error": f"Answer outside the tool's output schema ({mismatch}): is the extension up to date?",
+                "data": (payload or {}).get("data"),
+            }
+            text, failed = json.dumps(payload, ensure_ascii=False, separators=COMPACT), True
+    return CallToolResult(content=[TextContent(type="text", text=text), *blocks], is_error=failed)
+
+
+_ToolFunction = Callable[..., Any]
+
+
+def _tool(hints: ToolAnnotations, title: str, output: Any = None) -> Callable[[_ToolFunction], _ToolFunction]:
+    """Inscrit un outil auprès du SDK. output : modèle de la réponse d'un outil de données (outputSchema publié,
+    structuredContent validé par le SDK) ; None pour un outil d'action ou de capture (texte et images, aucun schéma de
+    sortie). La fonction du module reste celle de l'outil (réponse JSON en texte) : seule la version inscrite rend un
+    CallToolResult."""
+
+    def register(function: _ToolFunction) -> _ToolFunction:
+        @functools.wraps(function)
+        def call(*args: Any, **kwargs: Any) -> Any:
+            result = function(*args, **kwargs)
+            return _answer(result, output=output) if isinstance(result, str) else result
+
+        if output is not None:
+            # Schéma de sortie tiré du modèle : Annotated[CallToolResult, Modèle] (SDK 2.3, validation à chaque succès).
+            signature = inspect.signature(function)
+            call.__signature__ = signature.replace(  # type: ignore[attr-defined]
+                return_annotation=Annotated[CallToolResult, output]
+            )
+        browser_mcp.tool(annotations=_titled(hints, title), structured_output=output is not None)(call)
+        return function
+
+    return register
 
 
 # Mémoire des images jointes, par session MCP et par onglet (démon partagé : jamais celle d'une autre session) :
@@ -419,7 +477,7 @@ def _inline_capture(action: str, params: dict, target: str = "view", force: bool
         data = call_bridge(action, params, 20.0)
         if isinstance(data, dict) and data.get("dialogOpened"):  # boîte ouverte par la page : jamais acceptée ici
             error = str(data.get("message") or "A dialog interrupted the page.")
-            return _compat(json.dumps({"status": "error", "error": error, "dialogOpened": True, "data": data}))
+            return _answer(json.dumps({"status": "error", "error": error, "dialogOpened": True, "data": data}))
         if not isinstance(data, dict) or not isinstance(data.get(key), str):
             raise RuntimeError(f"Unexpected capture answer: {json.dumps(data, ensure_ascii=False)[:300]}")
         encoded = data.pop(key).split(",", 1)[-1]
@@ -491,14 +549,14 @@ def _inline_capture(action: str, params: dict, target: str = "view", force: bool
                 "Image unchanged since the last one sent for this tab and target: not attached again "
                 "(force=True to resend it)."
             )
-            return _compat(json.dumps({"status": "success", "data": data}, ensure_ascii=False, separators=COMPACT))
+            return _answer(json.dumps({"status": "success", "data": data}, ensure_ascii=False, separators=COMPACT))
         _remember(_SENT_PRINTS, print_key, (geometry, current))
         if factor and not clip:  # vue entière jointe : son échelle sert à region (pixels de cette image)
             _remember(_VIEW_SCALES, (_session_key(), tab), {"css_per_image_px": factor, "dpr": ratio or 1.0})
     except (OSError, RuntimeError, ValueError, KeyError, IndexError) as error:
-        return _compat(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False))
+        return _answer(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False))
     text = json.dumps({"status": "success", "data": data}, ensure_ascii=False, separators=COMPACT)
-    return _compat(text, Image(data=webp, format="webp").to_image_content())
+    return _answer(text, Image(data=webp, format="webp").to_image_content())
 
 
 def _page_text(tab_id: Any) -> Callable[[Any], str]:
@@ -565,7 +623,7 @@ def _gated(
     return result
 
 
-@browser_mcp.tool(annotations=_titled(LOCAL_READ, "List tabs"))
+@_tool(LOCAL_READ, "List tabs", out.TabsAnswer)
 def browser_list_tabs() -> str:
     """Lists the tabs open in Chrome (id, title, URL) and, for each, the agent driving it (owner), whether it belongs
     to THIS session (mine) and its state: "mine" (this session), "orphan" (orphaned by my agent: dead session, take it
@@ -576,7 +634,7 @@ def browser_list_tabs() -> str:
     return _call_bridge("list-tabs")
 
 
-@browser_mcp.tool(annotations=_titled(LOCAL_READ, "Active tab"))
+@_tool(LOCAL_READ, "Active tab", out.ActiveTabAnswer)
 def browser_active_tab() -> str:
     """Identity of the user's active tab, read-only: id and domain only (url = origin, title null, redacted=true)
     unless the tab is mine. It stays the user's (to act on it at the user's explicit request: browser_adopt_tab, after
@@ -584,13 +642,13 @@ def browser_active_tab() -> str:
     return _call_bridge("active-tab")
 
 
-@browser_mcp.tool(annotations=_titled(TAB_CHANGE, "Select tab"))
+@_tool(TAB_CHANGE, "Select tab")
 def browser_select_tab(tab_id: TabId) -> str:
     """Activates and brings to the front this session's tab (steals the user's focus: only at the user's request)."""
     return _call_bridge("select-tab", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "New background tab"))
+@_tool(PAGE_CHANGE, "New background tab", out.NewTabAnswer)
 def browser_new_tab(
     url: str | None = None,
     background: bool = True,
@@ -614,7 +672,7 @@ def browser_new_tab(
     return _call_bridge("create-tab", params)
 
 
-@browser_mcp.tool(annotations=_titled(TAB_CHANGE, "Adopt a user tab"))
+@_tool(TAB_CHANGE, "Adopt a user tab")
 def browser_adopt_tab(
     tab_id: int,
     user_asked: bool = False,
@@ -629,14 +687,14 @@ def browser_adopt_tab(
     return _call_bridge("adopt-tab", params)
 
 
-@browser_mcp.tool(annotations=_titled(TAB_CHANGE, "Release an adopted tab"))
+@_tool(TAB_CHANGE, "Release an adopted tab")
 def browser_release_tab(tab_id: TabId) -> str:
     """Gives the tab back to the user without closing it (ownership removed, debugger detached). For an adopted tab,
     or an orphan tab of my agent."""
     return _call_bridge("release-tab", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(TAB_CHANGE, "Group tabs"))
+@_tool(TAB_CHANGE, "Group tabs")
 def browser_group_tabs(
     tab_ids: list[int],
     title: str | None = None,
@@ -653,19 +711,19 @@ def browser_group_tabs(
     return _call_bridge("group-tabs", params)
 
 
-@browser_mcp.tool(annotations=_titled(TAB_CLOSE, "Close tab"))
+@_tool(TAB_CLOSE, "Close tab")
 def browser_close_tab(tab_id: TabId) -> str:
     """Closes tab tab_id of this session (or an orphan tab of my agent)."""
     return _call_bridge("close-tab", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "Reload page"))
+@_tool(PAGE_CHANGE, "Reload page")
 def browser_reload(tab_id: TabId, bypass_cache: bool = False) -> str:
     """Reloads the page of tab tab_id."""
     return _call_bridge("reload", {"tab_id": tab_id, "bypassCache": bypass_cache})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "Navigate"))
+@_tool(PAGE_CHANGE, "Navigate")
 def browser_navigate(url: str, tab_id: TabId) -> str:
     """Navigates tab tab_id to the URL (http, https, data: or about:blank; never file:// or chrome://).
     url="back" or "forward": previous or next page of this tab's history (the browser's back and forward buttons).
@@ -675,14 +733,14 @@ def browser_navigate(url: str, tab_id: TabId) -> str:
     return _call_bridge("navigate", {"url": url, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Wait for page load"))
+@_tool(PAGE_READ, "Wait for page load")
 def browser_wait_load(tab_id: TabId, timeout_ms: int = 10000) -> str:
     """Waits until the document is settled and complete (document.readyState === 'complete').
     timeout_ms: at most 115000 (bridge limit); the response is awaited for timeout_ms + 5 s."""
     return _call_bridge("wait-load", {"timeout": timeout_ms, "tab_id": tab_id}, wait_ms=timeout_ms)
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "Hover"))
+@_tool(PAGE_CHANGE, "Hover")
 def browser_hover(
     selector: str | None = None,
     text: str | None = None,
@@ -714,7 +772,7 @@ def browser_hover(
     return _call_bridge("hover", params, wait_ms=timeout_ms)
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Click"))
+@_tool(PAGE_ACTION, "Click")
 def browser_click(
     selector: str | None = None,
     text: str | None = None,
@@ -770,7 +828,7 @@ def browser_click(
     return _gated("click", params, [target], gestures, confirm, accord, wait_ms=timeout_ms)
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Fill a field"))
+@_tool(PAGE_ACTION, "Fill a field")
 def browser_fill(
     selector: str | None = None,
     value: str = "",
@@ -829,7 +887,7 @@ def browser_fill(
     )
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Select an option"))
+@_tool(PAGE_ACTION, "Select an option")
 def browser_select_option(
     selector: str | None = None,
     text: str | None = None,
@@ -847,7 +905,7 @@ def browser_select_option(
     return _call_bridge("select-option", params)
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Check or uncheck"))
+@_tool(PAGE_ACTION, "Check or uncheck")
 def browser_check(
     locator: dict | None = None,
     checked: bool = True,
@@ -962,7 +1020,7 @@ def _form_failed(
     )
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Fill a whole form"))
+@_tool(PAGE_ACTION, "Fill a whole form")
 def browser_fill_form(fields: list[dict], *, tab_id: TabId) -> str:
     """Fills several fields in ONE call, in order, with the same gestures as browser_fill, browser_select_option and
     browser_check (trusted typing), then READS BACK the whole form without any gesture. Each field: "mark" (number
@@ -1018,7 +1076,7 @@ def browser_fill_form(fields: list[dict], *, tab_id: TabId) -> str:
     return json.dumps({"status": "success", "data": {"fields": results, "all_verified": True}}, ensure_ascii=False)
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Find elements"))
+@_tool(PAGE_READ, "Find elements", out.FindAnswer)
 def browser_find(locator: dict, limit: int = 20, *, tab_id: TabId) -> str:
     """Lists, without acting, the elements matching a locator (see browser_click) in all frames.
 
@@ -1029,7 +1087,7 @@ def browser_find(locator: dict, limit: int = 20, *, tab_id: TabId) -> str:
     return _call_bridge("find", {"locator": _locator(locator), "limit": limit, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Press a key"))
+@_tool(PAGE_ACTION, "Press a key")
 def browser_press_key(key: str, *, tab_id: TabId, confirm: Confirm = False, accord: Accord = "") -> str:
     """Presses a real key or shortcut via CDP on the focused element: Enter, Escape, Tab, Backspace, ArrowDown, F5,
     or a combination "Control+A", "Shift+Tab", "Control+Shift+K" (key, code, windowsVirtualKeyCode, modifiers).
@@ -1041,7 +1099,7 @@ def browser_press_key(key: str, *, tab_id: TabId, confirm: Confirm = False, acco
     )
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Type text"))
+@_tool(PAGE_ACTION, "Type text")
 def browser_type_keys(
     text: str,
     *,
@@ -1069,7 +1127,7 @@ def browser_type_keys(
     return _gated("type-keys", params, [target], gestures, confirm, accord, focus_ok=not target, typed=text)
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Answer a dialog"))
+@_tool(PAGE_ACTION, "Answer a dialog")
 def browser_handle_dialog(accept: bool, prompt_text: str | None = None, *, tab_id: TabId) -> str:
     """Answers the JavaScript dialog (alert, confirm, prompt, beforeunload) open in tab tab_id (never another tab's
     dialog).
@@ -1082,13 +1140,13 @@ def browser_handle_dialog(accept: bool, prompt_text: str | None = None, *, tab_i
     return _call_bridge("handle-dialog", {"accept": accept, "promptText": prompt_text or "", "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(LOCAL_READ, "Download status"))
+@_tool(LOCAL_READ, "Download status", out.DownloadsAnswer)
 def browser_download_status(limit: int = 5) -> str:
     """Lists recent Chrome downloads (name, state, bytes received, danger) to track a downloaded file."""
     return _call_bridge("download-status", {"limit": limit})
 
 
-@browser_mcp.tool(annotations=_titled(LOCAL_READ, "Wait for a download"))
+@_tool(LOCAL_READ, "Wait for a download", out.WaitDownloadAnswer)
 def browser_wait_download(tab_id: TabId, timeout_ms: int = 30000, since_ms: int | None = None) -> str:
     """Waits for a download started in the tab (link click...) to finish and returns its path, size (bytes) and type
     (mime). Candidates: downloads started since the agent's last action on the tab (or since_ms, a timestamp in
@@ -1100,7 +1158,7 @@ def browser_wait_download(tab_id: TabId, timeout_ms: int = 30000, since_ms: int 
     return _call_bridge("wait-download", params, wait_ms=timeout_ms)
 
 
-@browser_mcp.tool(annotations=_titled(TAB_CHANGE, "Record network"))
+@_tool(TAB_CHANGE, "Record network")
 def browser_network_record(tab_id: TabId, duration_s: int = 120) -> str:
     """Starts (or extends) the tab's network recording for duration_s seconds (at most 600): the debugger stays
     attached until then, even without commands. Stop earlier with browser_network_stop. Without a requested
@@ -1108,13 +1166,13 @@ def browser_network_record(tab_id: TabId, duration_s: int = 120) -> str:
     return _call_bridge("network-record", {"tab_id": tab_id, "durationS": duration_s})
 
 
-@browser_mcp.tool(annotations=_titled(TAB_CHANGE, "Stop network recording"))
+@_tool(TAB_CHANGE, "Stop network recording")
 def browser_network_stop(tab_id: TabId) -> str:
     """Stops network recording and detaches the debugger from the tab (the log already captured stays readable)."""
     return _call_bridge("network-stop", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "List network requests"))
+@_tool(PAGE_READ, "List network requests", out.NetworkAnswer)
 def browser_network_requests(
     tab_id: TabId,
     filter: str | None = None,
@@ -1147,7 +1205,7 @@ def browser_network_requests(
     return _call_bridge("network-requests", params)
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Network response body"))
+@_tool(PAGE_READ, "Network response body")
 def browser_network_response(
     request_id: str,
     *,
@@ -1164,7 +1222,7 @@ def browser_network_response(
     return _call_bridge("network-response", params, note=_page_text(tab_id))
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Upload a file"))
+@_tool(PAGE_ACTION, "Upload a file")
 def browser_upload(files: list[str], selector: str | None = None, *, tab_id: TabId) -> str:
     """Uploads one or more files (e.g. .aab, .apk, .zip) without opening or blocking on the native Windows file
     dialog. Refused (by the bridge itself) for any file in a secrets folder: ~/.nexus, ~/.nexusagy, ~/.ssh, ~/.codex,
@@ -1173,7 +1231,7 @@ def browser_upload(files: list[str], selector: str | None = None, *, tab_id: Tab
     return _call_bridge("upload", {"files": files, "selector": selector, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Marked screenshot"), structured_output=False)
+@_tool(PAGE_READ, "Marked screenshot")
 def browser_vision_inspect(
     tab_id: TabId, output_path: str | None = None, inline: bool = False, force: bool = False
 ) -> Any:
@@ -1190,18 +1248,18 @@ def browser_vision_inspect(
     """
     if inline:
         return _inline_capture("vision-inspect", {"tab_id": tab_id}, target="vision", force=force)
-    return _compat(
+    return _answer(
         _call_bridge("vision-inspect", {"output": output_path or _default_capture_path("vision"), "tab_id": tab_id})
     )
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Check a handoff"))
+@_tool(PAGE_READ, "Check a handoff")
 def browser_check_handoff(tab_id: TabId) -> str:
     """Proactively detects a 2FA screen (SMS, Google Authenticator), a CAPTCHA or Cloudflare Turnstile."""
     return _call_bridge("check-handoff", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Page content"))
+@_tool(PAGE_READ, "Page content")
 def browser_content(tab_id: TabId, mode: str = "interactive") -> str:
     """Extracts the web page content. Modes: interactive (clickable elements/inputs), text (plain text), html (DOM).
     The value of a password, a one-time code or a bank card is never returned: "[masked value]" appears in its
@@ -1209,7 +1267,7 @@ def browser_content(tab_id: TabId, mode: str = "interactive") -> str:
     return _call_bridge("content", {"mode": mode, "tab_id": tab_id}, note=_page_text(tab_id))
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Accessibility tree"))
+@_tool(PAGE_READ, "Accessibility tree")
 def browser_axtree(tab_id: TabId, mode: Literal["full", "snapshot"] = "full", max_lines: int = 400) -> str:
     """Accessibility tree of the page via CDP. The value of a password, a one-time code or a bank card:
     "[masked value]".
@@ -1225,13 +1283,13 @@ def browser_axtree(tab_id: TabId, mode: Literal["full", "snapshot"] = "full", ma
     return _call_bridge("axtree", params, note=_page_text(tab_id))
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Console logs"))
+@_tool(PAGE_READ, "Console logs", out.LogsAnswer)
 def browser_logs(tab_id: TabId) -> str:
     """Returns the stream of errors and messages from the tab's DevTools console."""
     return _call_bridge("logs", {"tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Screenshot"), structured_output=False)
+@_tool(PAGE_READ, "Screenshot")
 def browser_screenshot(
     tab_id: TabId,
     output_path: str | None = None,
@@ -1262,7 +1320,7 @@ def browser_screenshot(
       without sending the whole view in large.
     """
     if inline and full_page and mark is None and not selector:
-        return _compat(
+        return _answer(
             json.dumps(
                 {
                     "status": "error",
@@ -1276,7 +1334,7 @@ def browser_screenshot(
         try:
             params.update(_region_params(tab_id, region, selector, mark, full_page))
         except ValueError as error:
-            return _compat(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False))
+            return _answer(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False))
     elif mark is not None:
         params["selector"] = f"#{mark}"
     elif selector:
@@ -1286,7 +1344,7 @@ def browser_screenshot(
     if inline:
         target = json.dumps([params.get(k) for k in ("selector", "fullPage", "region", "scale")])
         return _inline_capture("screenshot", params, target=target, force=force)
-    return _compat(_call_bridge("screenshot", {**params, "output": output_path or _default_capture_path("browser")}))
+    return _answer(_call_bridge("screenshot", {**params, "output": output_path or _default_capture_path("browser")}))
 
 
 def _region_params(tab_id: Any, region: Any, selector: Any, mark: Any, full_page: bool) -> dict:
@@ -1314,13 +1372,13 @@ def _region_params(tab_id: Any, region: Any, selector: Any, mark: Any, full_page
     }
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Save page as PDF"))
+@_tool(PAGE_READ, "Save page as PDF")
 def browser_pdf(output_path: str, *, tab_id: TabId) -> str:
     """Generates a high-fidelity vector A4 PDF export of the tab's page."""
     return _call_bridge("pdf", {"output": output_path, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Run JavaScript"))
+@_tool(PAGE_ACTION, "Run JavaScript")
 def browser_eval(script: str, *, tab_id: TabId) -> str:
     """Runs a JavaScript expression in the PAGE WORLD (its variables and functions, like the DevTools console) and
     returns the result. The only tool that runs code there: the page can see and tamper with what happens in it. The
@@ -1336,14 +1394,14 @@ def browser_eval(script: str, *, tab_id: TabId) -> str:
     return _call_bridge("eval", {"script": script, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "Scroll"))
+@_tool(PAGE_CHANGE, "Scroll")
 def browser_scroll(direction: str = "down", y: int = 400, *, tab_id: TabId) -> str:
     """Scrolls the web page by y pixels down (down) or up (up). A background tab renders while scrolled: lazy and
     infinite lists (X, Reddit, YouTube...) keep loading."""
     return _call_bridge("scroll", {"direction": direction, "y": y, "tab_id": tab_id})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Wait for network idle"))
+@_tool(PAGE_READ, "Wait for network idle")
 def browser_wait_network_idle(tab_id: TabId, idle_ms: int = 300, timeout_ms: int = 8000) -> str:
     """Waits until network traffic settles (0 active Fetch/XHR request for idle_ms).
 
@@ -1358,7 +1416,7 @@ def browser_wait_network_idle(tab_id: TabId, idle_ms: int = 300, timeout_ms: int
 WAIT_FOR_POLL_S = 0.25
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Wait for text or element"))
+@_tool(PAGE_READ, "Wait for text or element", out.WaitForAnswer)
 def browser_wait_for(
     text: str | None = None,
     locator: dict | None = None,
@@ -1407,7 +1465,7 @@ def browser_wait_for(
 BATCH_MAX_STEPS = 30
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Run several actions"))
+@_tool(PAGE_ACTION, "Run several actions")
 def browser_batch(steps: list[dict], tab_id: TabId | None = None) -> Any:
     """Runs several NexusBrowser tools in order in ONE call (fewer round trips), and stops at the first error.
 
@@ -1423,11 +1481,10 @@ def browser_batch(steps: list[dict], tab_id: TabId | None = None) -> Any:
     batch_started = time.monotonic()
 
     def answer(payload: dict) -> Any:
-        # Toujours le même contrat (texte + structured_content {"result": texte}) : un client qui garde l'ancien schéma
-        # de sortie accepte toute réponse du lot. Une image jointe par une étape l'est aussi au lot : sinon son
+        # Une image jointe par une étape l'est aussi au lot : sinon son
         # empreinte, retenue comme envoyée, ferait répondre « inchangée » à la capture suivante sans que l'IA l'ait
         # jamais vue (relevés par Codex le 24/10).
-        return _compat(json.dumps(payload, ensure_ascii=False, separators=COMPACT), *images)
+        return _answer(json.dumps(payload, ensure_ascii=False, separators=COMPACT), *images)
 
     if not isinstance(steps, list) or not steps:
         return answer({"status": "error", "error": "steps must be a non-empty list"})
@@ -1458,8 +1515,8 @@ def browser_batch(steps: list[dict], tab_id: TabId | None = None) -> Any:
         try:
             model = tool.fn_metadata.arg_model.model_validate(args)
             output = tool.fn(**{field: getattr(model, field) for field in type(model).model_fields})
-            # Les outils de capture rendent un CallToolResult (image jointe) : leur texte est dans structured_content.
-            result = _answer_of(output) if not isinstance(output, str) else json.loads(output)
+            # Version inscrite de l'outil : un CallToolResult, réponse JSON dans son premier bloc texte.
+            result = _answer_of(output)
             if result is None:
                 raise ValueError("unreadable step answer")
             images.extend(
@@ -1476,7 +1533,7 @@ def browser_batch(steps: list[dict], tab_id: TabId | None = None) -> Any:
     return answer({"status": "success", "steps": results})
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Read cookies"))
+@_tool(PAGE_READ, "Read cookies", out.CookiesAnswer)
 def browser_get_cookies(tab_id: TabId, urls: list[str] | None = None, include_values: bool = False) -> str:
     """Lists the cookies of the tab (or of urls) via CDP Network.getCookies: name, domain, path, expiry, httpOnly,
     secure, sameSite. Never their values by default (session secrets).
@@ -1492,7 +1549,7 @@ def browser_get_cookies(tab_id: TabId, urls: list[str] | None = None, include_va
     return _call_bridge("get-cookies", params)
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Send a CDP command"))
+@_tool(PAGE_ACTION, "Send a CDP command")
 def browser_cdp_send(
     method: str, params: dict | None = None, *, tab_id: TabId, world: Literal["isolated", "page"] = "isolated"
 ) -> str:
@@ -1517,7 +1574,7 @@ def browser_cdp_send(
     return _call_bridge("cdp-send", payload)
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "List WebMCP tools"))
+@_tool(PAGE_READ, "List WebMCP tools", out.WebMcpToolsAnswer)
 def browser_webmcp_tools(tab_id: TabId) -> str:
     """Lists the WebMCP tools the PAGE ITSELF exposes to agents (document.modelContext, native in Chrome 149+ on sites
     enrolled in the WebMCP origin trial): name, title, description, inputSchema, annotations (readOnlyHint,
@@ -1537,7 +1594,7 @@ def browser_webmcp_tools(tab_id: TabId) -> str:
         return json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False)
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Call a WebMCP tool"))
+@_tool(PAGE_ACTION, "Call a WebMCP tool")
 def browser_webmcp_call(
     tool: str,
     input: dict | None = None,
@@ -1596,7 +1653,7 @@ def _webmcp_envelope(data: dict) -> dict[str, Any]:
     return {"status": "success", "data": data}
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Interactive elements map"))
+@_tool(PAGE_READ, "Interactive elements map", out.MapAnswer)
 def browser_interactive_map(tab_id: TabId, viewport_only: bool = True, max_elements: int = 60) -> str:
     """Extracts a condensed map of the visible interactive elements ([#1] button, [#2] input...).
 
@@ -1610,7 +1667,7 @@ def browser_interactive_map(tab_id: TabId, viewport_only: bool = True, max_eleme
     )
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_ACTION, "Drag and drop"))
+@_tool(PAGE_ACTION, "Drag and drop")
 def browser_drag_and_drop(
     from_selector: str | None = None,
     to_selector: str | None = None,
@@ -1751,7 +1808,7 @@ def _finish_gsuite_export(max_chars: int) -> Callable[[Any], Any]:
     return finish
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Export page"))
+@_tool(PAGE_READ, "Export page")
 def browser_export(
     tab_id: TabId,
     format: str = "markdown",
@@ -1776,7 +1833,7 @@ def browser_export(
     return _call_bridge("export-content", params, timeout=30.0, note=_page_text(tab_id))
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_READ, "Export Google Docs, Sheets or Slides"))
+@_tool(PAGE_READ, "Export Google Docs, Sheets or Slides")
 def browser_export_gsuite(
     tab_id: TabId,
     format: str | None = None,
@@ -1802,7 +1859,7 @@ def browser_export_gsuite(
     )
 
 
-@browser_mcp.tool(annotations=_titled(PAGE_CHANGE, "YouTube transcript"))
+@_tool(PAGE_CHANGE, "YouTube transcript")
 def browser_youtube_transcript(
     tab_id: TabId,
     lang: str | None = None,
@@ -1844,20 +1901,13 @@ FREE_DATA_TOOLS = frozenset({"browser_eval", "browser_cdp_send", "browser_webmcp
 
 def _answer_of(result: Any) -> dict | None:
     """Réponse JSON d'un outil (texte ou CallToolResult), ou None."""
-    try:
-        text = result if isinstance(result, str) else None  # réponse d'une étape de lot (outil appelé directement)
-        structured = getattr(result, "structured_content", None)
-        if isinstance(structured, dict) and isinstance(structured.get("result"), str):
-            text = structured["result"]
-        elif text is None:
-            for block in getattr(result, "content", None) or (result if isinstance(result, list) else []):
-                if isinstance(getattr(block, "text", None), str):
-                    text = block.text
-                    break
-        parsed = json.loads(text) if text else None
-        return parsed if isinstance(parsed, dict) else None
-    except (ValueError, TypeError):
-        return None
+    text = result if isinstance(result, str) else None  # fonction d'outil appelée directement
+    if text is None:
+        for block in getattr(result, "content", None) or (result if isinstance(result, list) else []):
+            if isinstance(getattr(block, "text", None), str):
+                text = block.text
+                break
+    return _payload(text) if text else None
 
 
 def _journal_line(name: str, arguments: dict, result: Any, failed: bool, started: float, appel: str) -> None:

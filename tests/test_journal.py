@@ -152,7 +152,7 @@ def test_registrable_domain_never_more_precise(url, expected):
 
 
 def test_journal_never_blocks_an_action(home, monkeypatch):
-    monkeypatch.setattr(mcp_server, "call_bridge", lambda action, params, timeout=20.0: {"ok": 1})
+    monkeypatch.setattr(mcp_server, "call_bridge", lambda action, params, timeout=20.0: [])  # console vide
     monkeypatch.setattr(journal, "_racine", lambda: (_ for _ in ()).throw(OSError("disk full")))
     result = _call("browser_logs", {"tab_id": 1})
     assert '"status": "success"' in mcp_server.json.dumps(mcp_server._answer_of(result))
@@ -288,13 +288,13 @@ def test_step_refused_after_a_success_gets_its_line(home, monkeypatch, refused):
     assert lines[0]["appel"] == lines[1]["appel"] and "nope" not in json.dumps(lines)
 
 
-def test_batch_answer_always_keeps_the_structured_result(home, monkeypatch):
-    # Un client qui garde l'ancien schéma de sortie ({"result": texte}) rejette une réponse sans structured_content.
+def test_batch_answer_is_text_without_a_fake_schema(home, monkeypatch):
+    # 2.30 : plus de structured_content {"result": texte} ; un lot arrêté est une erreur MCP (isError).
     monkeypatch.setattr(mcp_server, "call_bridge", lambda action, params, timeout=20.0: {"trusted_click": True})
     for steps in ([{"tool": "browser_hover", "args": {"selector": "#a"}}], [], [{"tool": "browser_nope"}]):
         result = mcp_server.browser_batch(steps=steps, tab_id=4)
-        assert isinstance(result.structured_content, dict) and isinstance(result.structured_content["result"], str)
-        assert json.loads(result.structured_content["result"])["status"] in ("success", "error")
+        assert result.structured_content is None
+        assert result.is_error == (json.loads(result.content[0].text)["status"] == "error")
 
 
 def test_lines_queued_are_written_at_normal_exit(tmp_path):

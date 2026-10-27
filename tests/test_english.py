@@ -61,6 +61,7 @@ def test_tool_and_parameter_descriptions_are_english():
         texts.append((tool.name, tool.description or ""))
         texts.append((f"{tool.name}.title", (tool.annotations.title if tool.annotations else "") or ""))
         texts += [(f"{tool.name}.inputSchema", text) for text in _descriptions(tool.input_schema)]
+        texts += [(f"{tool.name}.outputSchema", text) for text in _descriptions(tool.output_schema)]
     for where, text in texts:
         if markers := french_markers(text):
             problems.setdefault(where, []).append((markers, text[:120]))
