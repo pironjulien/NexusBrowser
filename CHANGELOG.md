@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.29.0] - 2026-10-27
+
+### Added
+- The MCP server sends its icon and website to clients when they connect (`serverInfo`, the same as in
+  `server.json`), and announces how long its tool list stays fresh (one minute, private cache: MCP protocol
+  2026-07-28).
+
 ### Planned
 - Chrome Web Store: the 2.24.3 review in progress is kept; once approved, an update with the Nexus family icon is
   sent and the listing's 128 px icon is replaced by `extension/icons/icon128.png`.

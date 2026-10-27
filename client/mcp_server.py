@@ -28,8 +28,9 @@ from typing import Annotated, Any, Literal
 # Aucun __pycache__ à côté des sources (OneDrive), quel que soit le lanceur.
 sys.dont_write_bytecode = True
 
+from mcp.server.caching import CacheHint  # noqa: E402
 from mcp.server.mcpserver import Image, MCPServer  # noqa: E402
-from mcp.types import CallToolResult, TextContent, ToolAnnotations  # noqa: E402
+from mcp.types import CallToolResult, Icon, TextContent, ToolAnnotations  # noqa: E402
 from PIL import Image as PILImage  # noqa: E402
 from pydantic import Field  # noqa: E402
 
@@ -54,6 +55,22 @@ COMPACT = (",", ":")
 browser_mcp = MCPServer(
     name="nexus-browser",
     version=VERSION,
+    # Icônes et site déjà déclarés dans server.json (registre MCP), envoyés aussi aux clients ; liste des outils fixe
+    # pour une version : annoncée fraîche une minute (protocole 2026-07-28, cache privé).
+    website_url="https://julienpiron.fr/nexusbrowser/",
+    icons=[
+        Icon(
+            src="https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/plugins/nexus-browser/logo.png",
+            mime_type="image/png",
+            sizes=["256x256"],
+        ),
+        Icon(
+            src="https://julienpiron.fr/nexusbrowser/assets/nexusbrowser-mark.svg",
+            mime_type="image/svg+xml",
+            sizes=["any"],
+        ),
+    ],
+    cache_hints={"tools/list": CacheHint(ttl_ms=61_800, scope="private")},
     instructions=(
         "NexusBrowser Chrome bridge: the user's real Chrome (their sessions), in background tabs, shared by "
         "Antigravity, Claude and Codex. Use it for: covered or hidden "
