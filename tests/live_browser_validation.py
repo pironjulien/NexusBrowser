@@ -39,13 +39,13 @@ import http.server
 import json
 import os
 import re
-import secrets
 import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -976,7 +976,7 @@ FULL_TEST_PAGE = """<!DOCTYPE html>
         <p><label for="plan">Formule</label>
             <select id="plan"><option value="free">Découverte</option><option value="pro">Pro</option></select></p>
         <p><button id="load">Charger les données</button> <span id="load-result"></span></p>
-        <p><a id="dl" href="/download/__TOKEN__.txt">Télécharger le fichier de test</a></p>
+        <p><a id="dl" href="/download/__MARKER__.txt">Télécharger le fichier de test</a></p>
     </section>
     <section aria-label="Connexion">
         <p><label for="pw">Mot de passe</label> <input id="pw" type="password" value="MotDePasse-Live-1"></p>
@@ -1106,8 +1106,9 @@ class FullFixture:
     """Deux serveurs locaux (port principal, port des cadres) ; le cadre est aussi servi sur ::1 si possible."""
 
     def __init__(self) -> None:
-        self.token = f"nexus-browser-test-{secrets.token_hex(4)}"
-        self.download_content = f"NexusBrowser : fichier de test {self.token}\n"
+        # Marqueur unique de cet essai (nom du fichier téléchargé, contenu de la page) : rien de secret.
+        self.marker = f"nexus-browser-test-{uuid.uuid4().hex[:8]}"
+        self.download_content = f"NexusBrowser : fichier de test {self.marker}\n"
         self.servers: list[http.server.ThreadingHTTPServer] = []
         fixture = self
 
@@ -1115,7 +1116,9 @@ class FullFixture:
             def do_GET(self):  # noqa: N802 - API de http.server
                 path, _, query = self.path.partition("?")
                 if path == "/full":
-                    body = FULL_TEST_PAGE.replace("__P2__", str(fixture.frame_port)).replace("__TOKEN__", fixture.token)
+                    body = FULL_TEST_PAGE.replace("__P2__", str(fixture.frame_port)).replace(
+                        "__MARKER__", fixture.marker
+                    )
                     self._send(200, "text/html; charset=utf-8", body.encode("utf-8"))
                 elif path == "/article":
                     self._send(200, "text/html; charset=utf-8", ARTICLE_TEST_PAGE.encode("utf-8"))
@@ -1135,12 +1138,12 @@ class FullFixture:
                         payload.encode("utf-8"),
                         {"Set-Cookie": "api_session=secret-cookie-value; Path=/; SameSite=Lax"},
                     )
-                elif path == f"/download/{fixture.token}.txt":
+                elif path == f"/download/{fixture.marker}.txt":
                     self._send(
                         200,
                         "text/plain; charset=utf-8",
                         fixture.download_content.encode("utf-8"),
-                        {"Content-Disposition": f'attachment; filename="{fixture.token}.txt"'},
+                        {"Content-Disposition": f'attachment; filename="{fixture.marker}.txt"'},
                     )
                 else:
                     self._send(404, "text/plain; charset=utf-8", b"introuvable")
@@ -1905,7 +1908,7 @@ def serve_fixture() -> None:
                 "url": fixture.url,
                 "main_port": fixture.main_port,
                 "frame_port": fixture.frame_port,
-                "token": fixture.token,
+                "marker": fixture.marker,
             }
         ),
         flush=True,

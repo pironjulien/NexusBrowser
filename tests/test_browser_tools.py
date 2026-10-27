@@ -209,7 +209,7 @@ def test_full_live_fixture_serves_cross_origin_frames_and_download(live_module):
         frame = urllib.request.urlopen(f"http://127.0.0.1:{fixture.frame_port}/frame?name=B", timeout=5).read()
         assert b"Action B" in frame
         with urllib.request.urlopen(
-            f"http://127.0.0.1:{fixture.main_port}/download/{fixture.token}.txt", timeout=5
+            f"http://127.0.0.1:{fixture.main_port}/download/{fixture.marker}.txt", timeout=5
         ) as r:
             assert "attachment" in r.headers["Content-Disposition"]
             assert r.read().decode("utf-8") == fixture.download_content
