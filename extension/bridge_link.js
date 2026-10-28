@@ -191,7 +191,10 @@
         fail(reason) {
             if (this.closed) return;
             this.error = reason;
-            console.warn(`[NexusBrowser] Pont local refusé (${this.role}) : ${reason}`);
+            // Raison venue parfois du serveur (proof.error) : sur une seule ligne dans la console, jamais une fausse
+            // ligne de journal en plus (CodeQL js/log-injection).
+            const shown = String(reason).replace(/[\r\n\u2028\u2029]+/g, " ");
+            console.warn(`[NexusBrowser] Pont local refusé (${this.role}) : ${shown}`);
             // Code 4008 : un navigateur refuse 1008 à un client (seuls 1000 et 3000-4999), la socket restait ouverte.
             try { this.ws.close(4008, "NexusBrowser authentication failed"); } catch (_) {}
             this._closed();

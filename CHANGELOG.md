@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.31.5] - 2026-10-28
+
+### Changed
+- Antigravity plugin manifest: `displayName` « NexusBrowser », so Antigravity shows the product name instead of the technical id.
+
+### Fixed
+- Extension, the four open CodeQL findings: a Markdown table cell ending with `\` no longer escapes the next column
+  bar (backslashes of the cell's text escaped, code spans left as they are); YouTube VTT captions decode `&amp;lt;`
+  once, as `&lt;`, never as `<`, and nested cue tags (`<<c>c>`) are removed in one linear pass; a refusal reason sent
+  by the bridge server is logged on one line, never as an extra log line.
+
 ## [2.31.4] - 2026-10-27
 
 ### Security

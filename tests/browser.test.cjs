@@ -3030,7 +3030,7 @@ function articlePage(h) {
                 h('table', {},
                     h('tr', {}, h('th', {}, 'Port'), h('th', {}, 'Rôle')),
                     h('tr', {}, h('td', {}, '9224'), h('td', {}, 'WebSocket | signé')),
-                    h('tr', {}, h('td', {}, '9225'), h('td', {}, 'API REST'))),
+                    h('tr', {}, h('td', {}, '9225'), h('td', {}, 'API REST \\'))),
                 h('pre', {class: 'language-python'}, 'print("bonjour")\nprint("pont")'),
                 h('form', {}, h('label', {}, 'Votre e-mail'), h('input', {type: 'email', value: 'julien@example.invalid'}), h('button', {}, 'S\'abonner')),
                 h('p', {}, 'Conclusion : aucun programme local ne peut plus se faire passer pour le pont, ni rejouer une commande déjà signée.')
@@ -3065,7 +3065,7 @@ test('export : Markdown du corps de l\'article, sans menus, publicités, bandeau
     assert.match(md, /avec une \*\*preuve HMAC\*\* dans les deux sens/);
     assert.match(md, /\n## Étapes\n\n1\. Nonce de l'extension\n2\. Preuve du pont\n3\. Preuve du client\n/);
     assert.match(md, /\[la page du pont\]\(https:\/\/blog\.example\.invalid\/docs\/pont\)/);
-    assert.match(md, /\| Port \| Rôle \|\n\| --- \| --- \|\n\| 9224 \| WebSocket \\\| signé \|\n\| 9225 \| API REST \|/);
+    assert.match(md, /\| Port \| Rôle \|\n\| --- \| --- \|\n\| 9224 \| WebSocket \\\| signé \|\n\| 9225 \| API REST \\\\ \|/);
     assert.match(md, /```python\nprint\("bonjour"\)\nprint\("pont"\)\n```/);
     assert.match(md, /Conclusion : aucun programme local/);
     for (const noise of NOISE) assert.ok(!md.includes(noise), `bruit présent : ${noise}`);
@@ -3121,7 +3121,7 @@ test('export : zone par selector ou locator (strict), troncature signalée', asy
     const {h} = exportHarness();
     const zone = (await h.run('export_content', {tabId: 1, selector: 'table'})).data;
     assert.equal(zone.root.method, 'selector');
-    assert.equal(zone.content, '| Port | Rôle |\n| --- | --- |\n| 9224 | WebSocket \\| signé |\n| 9225 | API REST |');
+    assert.equal(zone.content, '| Port | Rôle |\n| --- | --- |\n| 9224 | WebSocket \\| signé |\n| 9225 | API REST \\\\ |');
     const byLocator = (await h.run('export_content', {tabId: 1, locator: {role: 'list', hasText: 'Nonce'}})).data;
     assert.equal(byLocator.root.method, 'locator');
     assert.equal(byLocator.content, '1. Nonce de l\'extension\n2. Preuve du pont\n3. Preuve du client');
@@ -3270,12 +3270,12 @@ test('youtube : piste choisie par langue (manuelle d\'abord), json3 rendu en tex
 });
 
 test('youtube : piste auto-générée signalée, traduction par tlang, vtt, aucune piste -> erreur claire', async () => {
-    const vtt = 'WEBVTT\n\n00:00:01.000 --> 00:00:03.000\n<c>Hello</c> world\n\n00:00:03.000 --> 00:00:05.000\nHello world\n\n00:01:00.500 --> 00:01:02.000\nSecond &amp; last';
+    const vtt = 'WEBVTT\n\n00:00:01.000 --> 00:00:03.000\n<c>Hello</c> world\n\n00:00:03.000 --> 00:00:05.000\nHello world\n\n00:01:00.500 --> 00:01:02.000\nSecond &amp; last\n\n00:01:03.000 --> 00:01:04.000\n<<c>c>&amp;lt;b&amp;gt; kept';
     const en = youtubeHarness({responder: (u) => fakeResponse({body: /fmt=vtt/.test(u) ? vtt : '', url: u})});
     const d = (await en.h.run('export_youtube_transcript', {tabId: 1, lang: 'en-US', format: 'vtt'})).data;
     assert.equal(d.track.auto, true);
     assert.equal(d.track.source_format, 'vtt');
-    assert.equal(d.timed_text, '[00:01] Hello world\n[01:00] Second & last');
+    assert.equal(d.timed_text, '[00:01] Hello world\n[01:00] Second & last\n[01:03] &lt;b&gt; kept');
     const de = youtubeHarness({responder: (u) => fakeResponse({body: JSON3([[0, 'Hallo']]), url: u})});
     const t = (await de.h.run('export_youtube_transcript', {tabId: 1, lang: 'de'})).data;
     assert.match(de.fetches[0], /tlang=de/);
@@ -4935,4 +4935,31 @@ test('axtree snapshot vide : anciens numéros oubliés, click(mark=1) ne vise pl
     const clicked = await h.run('click', {tabId: 1, mark: 1});
     assert.equal(h.clicks, 0, 'aucun clic sur l\'ancien élément');
     assert.ok(clicked.error, 'erreur claire : numéro inconnu');
+});
+
+// Relecture de Codex du 28/10 sur les correctifs CodeQL : un span de code d'un tableau garde ses antislashs, et les
+// balises VTT imbriquées sont retirées en temps linéaire.
+function exportKit() {
+    const ctx = vm.createContext({});
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/export_kit.js'), 'utf8') + '\nthis.kit = agyExportKit();', ctx);
+    return ctx.kit;
+}
+
+test('export : tableau Markdown, antislash du texte échappé, span de code intact', () => {
+    const kit = exportKit();
+    const md = kit.renderMd([{t: 'table', cols: 2, rows: [
+        {cells: [[{t: 'text', v: 'Regex'}], [{t: 'text', v: 'Chemin'}]]},
+        {cells: [[{t: 'code', v: '\\d+'}], [{t: 'text', v: 'C:\\Temp\\'}]]},
+    ]}]);
+    assert.match(md, /\| `\\d\+` \| C:\\\\Temp\\\\ \|/);
+});
+
+test('youtube : balises VTT imbriquées retirées en temps linéaire, « < » isolé gardé', () => {
+    const kit = exportKit();
+    const n = 100000;
+    const body = 'WEBVTT\n\n00:00:01.000 --> 00:00:03.000\n' + '<'.repeat(n) + 'x' + '>'.repeat(n) + ' hello\n\n00:00:04.000 --> 00:00:05.000\na < b';
+    const started = Date.now();
+    const cues = kit.parseVtt(body);
+    assert.ok(Date.now() - started < 1000, 'parseVtt trop lent');
+    assert.deepEqual(plain(cues).map(c => c.text), ['hello', 'a < b']);
 });

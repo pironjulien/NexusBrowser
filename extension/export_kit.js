@@ -431,18 +431,20 @@ function agyExportKit() {
     // --- Rendus ----------------------------------------------------------------------------------------------------
     function inlineText(parts) { return parts.map(p => p.t === "text" ? p.v : p.t === "code" ? p.v : p.t === "br" ? "\n" : p.kids ? inlineText(p.kids) : p.t === "img" ? p.alt : "").join(""); }
     function tidyLine(s) { return s.replace(/[ \t]+\n/g, "\n").replace(/\n[ \t]+/g, "\n").replace(/[ \t]{2,}/g, " ").trim(); }
-    function mdInline(parts) {
+    function mdInline(parts, table = false) {
         let out = "";
         for (const p of parts) {
-            if (p.t === "text") out += p.v;
+            // Cellule de tableau : un « \ » final échapperait la barre de colonne suivante (CodeQL
+            // js/incomplete-sanitization) ; seul le texte est échappé, un span de code garde ses antislashs.
+            if (p.t === "text") out += table ? p.v.replace(/\\/g, "\\\\") : p.v;
             else if (p.t === "br") out += "  \n";
             else if (p.t === "code") { if (p.v) { const tick = p.v.includes("`") ? "``" : "`"; out += `${tick}${p.v}${tick}`; } }
             else if (p.t === "img") out += `![${p.alt.replace(/[\[\]]/g, "")}](${p.src})`;
             else if (p.t === "a") {
-                const inner = mdInline(p.kids).trim();
+                const inner = mdInline(p.kids, table).trim();
                 if (inner) out += `[${inner}](${p.href.replace(/\)/g, "%29").replace(/ /g, "%20")})`;
             } else if (p.t === "b" || p.t === "i" || p.t === "del") {
-                const inner = mdInline(p.kids);
+                const inner = mdInline(p.kids, table);
                 const mark = p.t === "b" ? "**" : p.t === "i" ? "*" : "~~";
                 const core = inner.trim();
                 if (core) out += (/^\s/.test(inner) ? " " : "") + mark + core + mark + (/\s$/.test(inner) ? " " : "");
@@ -494,7 +496,7 @@ function agyExportKit() {
                 }).join("\n");
             }
             if (b.t === "table") {
-                const cell = (c) => tidyLine(mdInline(c || [])).replace(/\s*\n\s*/g, " ").replace(/\|/g, "\\|");
+                const cell = (c) => tidyLine(mdInline(c || [], true)).replace(/\s*\n\s*/g, " ").replace(/\|/g, "\\|");
                 const rows = b.rows.map(r => Array.from({ length: b.cols }, (_, i) => cell(r.cells[i])));
                 const head = rows[0];
                 const sep = head.map(() => "---");
@@ -889,8 +891,23 @@ function agyExportKit() {
         const source = manual.find(t => t.isTranslatable) || auto.find(t => t.isTranslatable);
         return source ? { track: source, translated: true, tlang: want } : null;
     }
+    // Une seule passe : « &amp;lt; » se lit « &lt; », jamais « < » (CodeQL js/double-escaping).
+    const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: "\"", "#39": "'", nbsp: " " };
     function decodeEntities(s) {
-        return String(s).replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
+        return String(s).replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (_, name) => ENTITIES[name]);
+    }
+    // Balises VTT (<c.x>, <00:01.000>, <v Nom>) retirées en une passe : chaque « > » referme le dernier « < » ouvert
+    // et efface la balise ; un « < » jamais refermé reste du texte. « <<c>c>x » donne « x », en temps linéaire
+    // (CodeQL js/incomplete-multi-character-sanitization ; relecture de Codex : pas de rebalayage par niveau).
+    function stripTags(s) {
+        const out = [];
+        const open = [];
+        for (const ch of String(s)) {
+            if (ch === "<") { open.push(out.length); out.push(ch); }
+            else if (ch === ">" && open.length) out.length = open.pop();
+            else out.push(ch);
+        }
+        return out.join("");
     }
     function parseJson3(body) {
         let data;
@@ -921,7 +938,7 @@ function agyExportKit() {
             const [a, b] = lines[ti].split("-->");
             const start = vttTime(a);
             const end = vttTime(b || "");
-            const content = clean(decodeEntities(lines.slice(ti + 1).join(" ").replace(/<[^>]+>/g, "")));
+            const content = clean(decodeEntities(stripTags(lines.slice(ti + 1).join(" "))));
             if (start === null || !content) continue;
             // Sous-titres automatiques en VTT : chaque repère répète la ligne précédente ; doublons retirés.
             if (out.length && out[out.length - 1].text === content) continue;
