@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [2.31.5] - 2026-10-28
 
 ### Changed
+- Public agent guide: progress updates use ordinary commentary; question tools are reserved for actual questions
+  that require a user answer. The guide remains independent of private profiles and local paths.
 - Antigravity plugin manifest: `displayName` « NexusBrowser », so Antigravity shows the product name instead of the technical id.
 
 ### Fixed
