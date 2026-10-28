@@ -1,11 +1,11 @@
 {
   "name": "nexus-browser",
-  "version": "2.31.5",
+  "version": "2.31.6",
   "description": "Your real Chrome, with your sessions, driven in background tabs: forms, network, dialogs, cross-origin iframes, exports, downloads. Needs the one-time NexusBrowser install (Windows, Chrome extension and local bridge).",
   "mcpServers": {
     "nexus-browser": {
       "command": "uvx",
-      "args": ["--python", "3.14", "nexus-browser==2.31.5"],
+      "args": ["--python", "3.14", "nexus-browser==2.31.6"],
       "env": {
         "NEXUS_BROWSER_AGENT": "Gemini"
       }
