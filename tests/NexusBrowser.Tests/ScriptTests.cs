@@ -128,7 +128,7 @@ public sealed class ScriptTests : IDisposable
             "$t = $null; $e = $null\n" +
             $"$ast = [System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("get.ps1"))}, [ref]$t, [ref]$e)\n" +
             "$f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ExpectedHash' }, $true)[0]\n" +
-            ". ([scriptblock]::Create($f.Extent.Text))\n" +
+            "$fn = Join-Path (Split-Path $PSCommandPath) 'get-expected-hash.ps1'; [IO.File]::WriteAllText($fn, $f.Extent.Text); . $fn\n" +
             "function Try-Hash([string]$Sums, [string]$Name) { try { 'ok ' + (Get-ExpectedHash $Sums $Name) } catch { 'refused ' + $_.Exception.Message } }\n" +
             $"Try-Hash \"{a}  NexusBrowser-win-x64.zip`r`n{b} *NexusBrowser-win-arm64.zip`n\" 'NexusBrowser-win-x64.zip'\n" +
             $"Try-Hash \"{a}  NexusBrowser-win-x64.zip`n{b} *NexusBrowser-win-arm64.zip`n\" 'NexusBrowser-win-arm64.zip'\n" +

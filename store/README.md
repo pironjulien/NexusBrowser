@@ -101,8 +101,10 @@ page through the DevTools protocol, as in the DevTools console, never in the ext
 ## Test instructions for the reviewer
 
 ```text
-The extension needs its local bridge (Windows 10/11). In PowerShell:
-  irm https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/get.ps1 | iex
+The extension needs its local bridge (Windows 10/11): install NexusSystem from the Microsoft Store
+(https://apps.microsoft.com/detail/9NSH2P3QLWT1) and pick NexusBrowser, or in PowerShell:
+  Invoke-WebRequest https://github.com/pironjulien/NexusBrowser/releases/latest/download/get.ps1 -OutFile get.ps1
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
 With an AI client it declared (Claude Code, Codex, Antigravity), ask: "Open https://example.com in a background tab
 and give me the page as Markdown." With no AI client at all, the command line does the same:
   '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_new_tab","arguments":{"url":"https://example.com"}}}' | & (Get-Content "$env:LOCALAPPDATA\NexusBrowser\current.json" | ConvertFrom-Json).exe --mcp | Out-String

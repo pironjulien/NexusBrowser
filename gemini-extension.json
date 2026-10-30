@@ -4,7 +4,7 @@
   "description": "Your real Chrome, with your sessions, driven in background tabs: forms, network, dialogs, cross-origin iframes, exports, downloads. Needs the one-time NexusBrowser install (Windows: get.ps1, Chrome extension, local bridge and shared daemon, token in NEXUS_MCP_TOKEN).",
   "mcpServers": {
     "nexus-browser": {
-      "httpUrl": "http://127.0.0.1:16182/mcp?agent=gemini",
+      "httpUrl": "http://127.0.0.1:16182/mcp?agent=antigravity",
       "headers": {
         "Authorization": "Bearer ${NEXUS_MCP_TOKEN}"
       }

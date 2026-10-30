@@ -29,13 +29,13 @@ $deadline = (Get-Date).AddSeconds(30)
 do { try { $health = Invoke-RestMethod 'http://127.0.0.1:16182/health' -TimeoutSec 2 } catch { Start-Sleep 1 } } while (-not $health -and (Get-Date) -lt $deadline)
 if ($health.status -ne 'ok' -or $health.version -ne $current.version) { throw "daemon health: $($health | ConvertTo-Json -Compress)" }
 $headers = @{ Authorization = "Bearer $token"; Accept = 'application/json, text/event-stream' }
-$init = Invoke-WebRequest -UseBasicParsing -Method Post 'http://127.0.0.1:16182/mcp?agent=ci' -Headers $headers -ContentType 'application/json' `
+$init = Invoke-WebRequest -UseBasicParsing -Method Post 'http://127.0.0.1:16182/mcp?agent=codex' -Headers $headers -ContentType 'application/json' `
     -Body '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}'
 if ($init.Headers['mcp-session-id']) { $headers['mcp-session-id'] = [string]$init.Headers['mcp-session-id'] }
-$list = Invoke-RestMethod -Method Post 'http://127.0.0.1:16182/mcp?agent=ci' -Headers $headers -ContentType 'application/json' `
+$list = Invoke-RestMethod -Method Post 'http://127.0.0.1:16182/mcp?agent=codex' -Headers $headers -ContentType 'application/json' `
     -Body '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 if (@($list.result.tools).Count -ne 49) { throw "daemon tools/list: $(@($list.result.tools).Count)" }
-try { Invoke-RestMethod -Method Post 'http://127.0.0.1:16182/mcp?agent=ci' -ContentType 'application/json' -Body '{}' | Out-Null; throw 'no token accepted' }
+try { Invoke-RestMethod -Method Post 'http://127.0.0.1:16182/mcp?agent=codex' -ContentType 'application/json' -Body '{}' | Out-Null; throw 'no token accepted' }
 catch { if ($_.Exception.Message -eq 'no token accepted') { throw } }
 Write-Host 'Daemon: health, token, 49 tools OK'
 if ($EntriesOnly) { return }

@@ -1,5 +1,7 @@
-# NexusBrowser one-line installer for Windows 10/11 (Windows PowerShell 5.1 or PowerShell 7), no admin rights, no Python:
-#   irm https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/get.ps1 | iex
+# NexusBrowser installer for Windows 10/11 (Windows PowerShell 5.1 or PowerShell 7), no admin rights, no Python. It is a
+# file of each release (listed in SHA256SUMS.txt, with build provenance): download it, check it, run it as a file:
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
+# It never runs downloaded code in memory: the package is checked, unpacked, and its install.ps1 started with -File.
 # Downloads the latest release's NexusBrowser-win-x64.zip or NexusBrowser-win-arm64.zip (this PC's architecture), checks
 # it against the release's SHA256SUMS.txt (build provenance: `gh attestation verify <zip> --repo pironjulien/NexusBrowser`),
 # unpacks it into %LOCALAPPDATA%\NexusBrowser\app (the same folder on every update, so Chrome keeps the extension), then
@@ -16,7 +18,7 @@
 # answers --version, nothing is registered on the PC.
 $ErrorActionPreference = 'Stop'
 # Started from Explorer (right click > Run with PowerShell): the window would close at once, before the result or an
-# error could be read. Never under the pack or `irm | iex`.
+# error could be read. Never under the pack.
 function Test-StartedFromExplorer {
     if (-not $PSCommandPath -or $env:NEXUS_PACK -eq '1') { return $false }
     $parent = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction SilentlyContinue).ParentProcessId

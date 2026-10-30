@@ -197,7 +197,7 @@ public sealed class ClientRegistrationTests : IDisposable
         Assert.Equal("nexus-browser", (string?)ReadJson(Path.Combine(plugin, "plugin.json"))!["name"]);
         Assert.Equal(new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A }, File.ReadAllBytes(Path.Combine(plugin, "logo.png"))[..8]);
         string skill = File.ReadAllText(Path.Combine(plugin, "skills", "nexus-browser", "SKILL.md"));
-        Assert.Equal(File.ReadAllText(Repo.File("skills", "nexus-browser", "SKILL.md")), skill);
+        Assert.Equal(File.ReadAllText(Repo.File("skills", "nexus-browser", "SKILL.md")).ReplaceLineEndings("\n"), skill.ReplaceLineEndings("\n"));
         Assert.DoesNotContain("Julien", skill, StringComparison.Ordinal);
         AssertJson(new JsonObject { ["mcpServers"] = new JsonObject { ["other"] = new JsonObject { ["command"] = "x" } } }, ReadJson(Path.Combine(folder, "mcp_config.json")));
         AssertJson(new JsonObject { ["theme"] = "dark", ["plugins"] = new JsonObject { ["nexus-browser"] = new JsonObject { ["enabled"] = true } } }, ReadJson(Path.Combine(folder, "config.json")));

@@ -72,6 +72,5 @@ Do not create a question card just to report progress.
 
 ## Not installed yet?
 Without the bridge and the extension, the server still starts and every call answers with an error giving the
-one-time install (Windows, Chrome 116+). The user runs it in PowerShell:
-`irm https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/get.ps1 | iex`, then loads the extension in
+one-time install (Windows, Chrome 116+). The user installs it with the NexusSystem app from the Microsoft Store (https://apps.microsoft.com/detail/9NSH2P3QLWT1), or get.ps1 from the latest release, checked against its SHA256SUMS.txt and run with `powershell -NoProfile -ExecutionPolicy Bypass -File .\get.ps1`, then loads the extension in
 `chrome://extensions` as the installer shows (https://github.com/pironjulien/NexusBrowser#install).

@@ -92,21 +92,19 @@ for the extension before creating the tab. Read tools and idle heartbeats leave 
 
 Windows 10 or 11 and Google Chrome. No admin rights, nothing else to install first.
 
-1. Download [`get.ps1`](https://github.com/pironjulien/NexusBrowser/releases/latest/download/get.ps1) from the
-   latest release, right-click it and choose **Run with PowerShell**. To check the file first, compare its SHA-256
-   with its line in [`SHA256SUMS.txt`](https://github.com/pironjulien/NexusBrowser/releases/latest/download/SHA256SUMS.txt),
-   published with it (or `gh attestation verify get.ps1 --repo pironjulien/NexusBrowser`):
+1. The simplest: the **NexusSystem** app from the
+   [Microsoft Store](https://apps.microsoft.com/detail/9NSH2P3QLWT1) (or `winget install --id 9NSH2P3QLWT1 --source msstore`)
+   installs NexusBrowser for you. By hand: download the installer and the checksums of the latest release, check the
+   installer, then run it as a file (never paste a downloaded script into PowerShell):
 
    ```powershell
-   (Get-FileHash "$HOME\Downloads\get.ps1" -Algorithm SHA256).Hash
+   $r = 'https://github.com/pironjulien/NexusBrowser/releases/latest/download'
+   Invoke-WebRequest "$r/get.ps1" -OutFile get.ps1
+   Invoke-WebRequest "$r/SHA256SUMS.txt" -OutFile SHA256SUMS.txt
+   (Get-FileHash get.ps1 -Algorithm SHA256).Hash   # must match the get.ps1 line of SHA256SUMS.txt
+   gh attestation verify get.ps1 --repo pironjulien/NexusBrowser   # optional: build provenance
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
    ```
-
-   Or, in one line, open **PowerShell** (Start menu, type `PowerShell`) and paste:
-
-   ```powershell
-   irm https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/get.ps1 | iex
-   ```
-
    It downloads the latest release for your PC (x64 or ARM64), checks it against `SHA256SUMS.txt`, unpacks it into
    `%LOCALAPPDATA%\NexusBrowser\app`, sets up the local bridge, the native host and the shared MCP daemon
    (`127.0.0.1:16182`, token in your user variable `NEXUS_MCP_TOKEN`), and declares the `nexus-browser` server to

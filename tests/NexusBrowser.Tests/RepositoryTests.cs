@@ -58,7 +58,7 @@ public sealed class RepositoryTests
     {
         var entry = Json("gemini-extension.json")["mcpServers"]!["nexus-browser"]!;
         var url = new Uri((string)entry["httpUrl"]!);
-        Assert.Equal("http://127.0.0.1:16182/mcp", url.GetLeftPart(UriPartial.Path));
+        Assert.Equal("http://127.0.0.1:16182/mcp?agent=antigravity", url.ToString()); // the daemon knows claude, codex and antigravity only
         Assert.Equal("Bearer ${NEXUS_MCP_TOKEN}", (string?)entry["headers"]?["Authorization"]);
         Assert.Null(entry["command"]); // no local process: the daemon installed by get.ps1
     }
@@ -103,6 +103,24 @@ public sealed class RepositoryTests
             var lines = File.ReadAllLines(Repo.File(file));
             for (int i = 0; i < lines.Length; i++)
                 if (invocation.IsMatch(lines[i])) found.Add($"{file}:{i + 1}: {lines[i].Trim()}");
+        }
+        Assert.Empty(found);
+    }
+
+    [Fact]
+    public void NothingRunsDownloadedOrEncodedCodeInMemory()
+    {
+        // Microsoft Defender flags these lines (Trojan:Win32/Commando.A!ml): installers are files run with -File.
+        // This file and the changelog name the patterns; everything else must not use them.
+        var pattern = new Regex(@"\|\s*iex\b|Invoke-Expression|-EncodedCommand|\[scriptblock\]::Create|\birm\s+https?://",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var found = new List<string>();
+        foreach (string file in RepositoryFiles().Where(f => Regex.IsMatch(f, @"\.(ps1|psm1|yml|yaml|json|cs|cmd|bat|md|js|html)$", RegexOptions.IgnoreCase)))
+        {
+            if (file is "CHANGELOG.md" or "tests/NexusBrowser.Tests/RepositoryTests.cs") continue;
+            var lines = File.ReadAllLines(Repo.File(file));
+            for (int i = 0; i < lines.Length; i++)
+                if (pattern.IsMatch(lines[i])) found.Add($"{file}:{i + 1}: {lines[i].Trim()}");
         }
         Assert.Empty(found);
     }
