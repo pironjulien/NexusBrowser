@@ -81,6 +81,10 @@ public static class Program
             return NativeAuthHost.Run(args, tokenFile: tokenFile);
         }
 
+        if (args.Contains("--shutdown-bridge", StringComparer.OrdinalIgnoreCase))
+            return await BridgeShutdown.MainAsync(GetArgValue(args, "--expected-pid"), GetArgValue(args, "--wait-seconds"),
+                int.TryParse(GetArgValue(args, "--port"), out int shutdownPort) ? shutdownPort : 9225, tokenFile);
+
         if (args.Contains("--bridge", StringComparer.OrdinalIgnoreCase))
         {
             logFile ??= Path.Combine(BridgeSecurity.DefaultDataDir(), "bridge.log");
@@ -135,6 +139,7 @@ public static class Program
         foreach (var a in args)
         {
             if (a.Equals("--bridge", StringComparison.OrdinalIgnoreCase) ||
+                a.Equals("--shutdown-bridge", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--mcp", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--http", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--rotate", StringComparison.OrdinalIgnoreCase) ||

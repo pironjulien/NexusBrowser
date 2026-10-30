@@ -81,6 +81,12 @@ public sealed class BridgeServer : IAsyncDisposable
     private int _authOrder;
     private double _stopSeenUntil;
     private readonly SemaphoreSlim _updateLock = new(1, 1);
+    private readonly string _instanceId = Guid.NewGuid().ToString("N");
+    private readonly TaskCompletionSource _shutdown = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private bool _draining;
+    private int _httpCommands;
+
+    internal Task ShutdownRequested => _shutdown.Task;
 
     public int WsPort { get; private set; }
     public int HttpPort { get; private set; }
@@ -254,7 +260,7 @@ public sealed class BridgeServer : IAsyncDisposable
 
         try
         {
-            await Task.Delay(Timeout.Infinite, ct);
+            await Task.WhenAny(Task.Delay(Timeout.Infinite, ct), _shutdown.Task);
         }
         catch (OperationCanceledException)
         {
@@ -408,9 +414,16 @@ public sealed class BridgeServer : IAsyncDisposable
             return;
         }
 
+        bool draining;
         lock (_stateLock)
         {
-            _activeConnections.Add(client);
+            draining = _draining;
+            if (!draining) _activeConnections.Add(client);
+        }
+        if (draining)
+        {
+            await SafeCloseWebSocketAsync(ws, WebSocketCloseStatus.EndpointUnavailable, "Bridge update in progress; reconnect shortly");
+            return;
         }
         Log("INFO", $"Chrome Extension authenticated: role={client.Role} extension={client.ExtensionId}");
 
@@ -815,7 +828,8 @@ public sealed class BridgeServer : IAsyncDisposable
         double timeout = 15.0,
         (string Agent, string Id)? client = null,
         BridgeClientConnection? target = null,
-        List<string>? gone = null)
+        List<string>? gone = null,
+        bool shutdownProbe = false)
     {
         string normalizedAction = NormalizeAction(action);
         var payload = new JsonObject
@@ -849,6 +863,8 @@ public sealed class BridgeServer : IAsyncDisposable
             BridgeClientConnection? chosen;
             lock (_stateLock)
             {
+                if (shutdownProbe && target is not null && !_activeConnections.Contains(target))
+                    throw new InvalidOperationException("An extension disconnected during ownership verification; bridge kept.");
                 chosen = target != null && _activeConnections.Contains(target) ? target : SelectTarget();
             }
             if (chosen is null)
@@ -861,6 +877,7 @@ public sealed class BridgeServer : IAsyncDisposable
             tcs = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (_stateLock)
             {
+                if (_draining && !shutdownProbe) throw new InvalidOperationException("Bridge update in progress: no command was sent; retry after reconnecting.");
                 _pendingRequests[reqId] = new PendingCommand(chosen, tcs, normalizedAction);
             }
 
@@ -880,6 +897,7 @@ public sealed class BridgeServer : IAsyncDisposable
                     _pendingRequests.Remove(reqId);
                     _activeConnections.Remove(chosen);
                 }
+                if (shutdownProbe) throw new InvalidOperationException("An extension could not be verified; bridge kept.");
                 target = null;
             }
         }
@@ -1004,8 +1022,81 @@ public sealed class BridgeServer : IAsyncDisposable
                     ["target"] = target?.Describe(),
                     ["emergency_stop_s"] = Math.Round(_emergencyStop.RemainingSeconds(), 1),
                     ["port"] = WsPort,
+                    ["pid"] = Environment.ProcessId,
+                    ["instance_id"] = _instanceId,
+                    ["cooperative_shutdown"] = true,
                 };
                 await SendJsonResponseAsync(stream, 200, statusPayload);
+                return;
+            }
+
+            if (path == "/api/shutdown")
+            {
+                if (method != "POST")
+                {
+                    await SendJsonResponseAsync(stream, 405, new JsonObject { ["success"] = false, ["error"] = "POST required" });
+                    return;
+                }
+                JsonObject? request;
+                try { request = JsonNode.Parse(body) as JsonObject; }
+                catch (JsonException) { request = null; }
+                if (request?["instance_id"] is not JsonValue idValue || !idValue.TryGetValue<string>(out string? instanceId) ||
+                    request["pid"] is not JsonValue pidValue || !pidValue.TryGetValue<int>(out int requestedPid))
+                {
+                    await SendJsonResponseAsync(stream, 400, new JsonObject { ["success"] = false, ["error"] = "instance_id string and pid integer required; nothing was stopped." });
+                    return;
+                }
+                if (instanceId != _instanceId || requestedPid != Environment.ProcessId)
+                {
+                    await SendJsonResponseAsync(stream, 409, new JsonObject { ["success"] = false, ["error"] = "Bridge identity changed; nothing was stopped." });
+                    return;
+                }
+                bool busy;
+                lock (_stateLock)
+                {
+                    busy = _draining || _httpCommands != 0 || _pendingRequests.Count != 0;
+                    if (!busy) _draining = true;
+                }
+                if (busy)
+                {
+                    await SendJsonResponseAsync(stream, 409, new JsonObject { ["success"] = false, ["deferred"] = true, ["error"] = "A command is running; bridge kept." });
+                    return;
+                }
+                bool accepted = false;
+                try
+                {
+                    List<BridgeClientConnection> targets;
+                    lock (_stateLock) targets = [.. _activeConnections];
+                    if (targets.Count == 0)
+                    {
+                        if (ChromeLauncher.IsRunning()) throw new InvalidOperationException("Chrome is running but tab ownership cannot be checked; bridge kept.");
+                    }
+                    else
+                    {
+                        var identity = (Agent: "Installer", Id: "installer-shutdown-" + _instanceId);
+                        // More than one Chrome profile can connect. Check every authenticated connection within
+                        // one bounded probe interval, not just the currently preferred service worker.
+                        var reports = await Task.WhenAll(targets.Select(target => SendCommandToChromeAsync("list-tabs", new JsonObject(), 3, identity, target, shutdownProbe: true)));
+                        foreach (var tabs in reports)
+                        foreach (var tab in tabs as JsonArray ?? throw new InvalidOperationException("Tab ownership unavailable; bridge kept."))
+                        {
+                            if (tab is not JsonObject value || value["id"] is not JsonValue tabId || !tabId.TryGetValue<int>(out int id) || id <= 0 ||
+                                !value.ContainsKey("owner") || value["state"] is not JsonValue state || !state.TryGetValue<string>(out string? tabState))
+                                throw new InvalidOperationException("Invalid tab ownership report; bridge kept.");
+                            if (value["owner"] is not null || tabState != "user")
+                                throw new InvalidOperationException("An agent owns Chrome tabs; bridge kept.");
+                        }
+                    }
+                    await SendJsonResponseAsync(stream, 200, new JsonObject { ["success"] = true, ["shutdown"] = true, ["pid"] = Environment.ProcessId, ["instance_id"] = _instanceId });
+                    accepted = true;
+                    Log("INFO", $"cooperative shutdown accepted instance={_instanceId}: no command running, no agent-owned tab");
+                    _shutdown.TrySetResult();
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or TimeoutException)
+                {
+                    await SendJsonResponseAsync(stream, 409, new JsonObject { ["success"] = false, ["deferred"] = true, ["error"] = ex.Message });
+                }
+                finally { if (!accepted) { lock (_stateLock) _draining = false; } }
                 return;
             }
 
@@ -1177,42 +1268,57 @@ public sealed class BridgeServer : IAsyncDisposable
                 }
 
                 headers.TryGetValue(BridgeSecurity.PidHeader.ToLowerInvariant(), out var pidHdr);
-                var gone = client.HasValue ? NoteSession(client.Value, BridgeSecurity.CheckPid(pidHdr)) : null;
-                // Sessions the MCP daemon closed (DELETE by the client, idle expiry): their tabs become orphans at once,
-                // for the same agent only (the extension reads "gone" in the caller's agent).
-                if (client.HasValue && headers.TryGetValue(BridgeSecurity.GoneHeader.ToLowerInvariant(), out var goneHdr))
+                bool draining;
+                lock (_stateLock)
                 {
-                    gone ??= [];
-                    foreach (var id in goneHdr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(32))
-                        if (id != client.Value.Id && BridgeSecurity.CheckIdentity(client.Value.Agent, id) is not null && !gone.Contains(id)) gone.Add(id);
+                    draining = _draining;
+                    if (!draining) _httpCommands++;
                 }
-
+                if (draining)
+                {
+                    await SendJsonResponseAsync(stream, 503, new JsonObject { ["success"] = false, ["error"] = "Bridge update in progress; no command sent." });
+                    return;
+                }
                 try
                 {
-                    var result = await SendCommandToChromeAsync(action, @params, timeout, client, null, gone);
-                    await SendJsonResponseAsync(stream, 200, new JsonObject
+                    var gone = client.HasValue ? NoteSession(client.Value, BridgeSecurity.CheckPid(pidHdr)) : null;
+                    // Sessions the MCP daemon closed (DELETE by the client, idle expiry): their tabs become orphans at once,
+                    // for the same agent only (the extension reads "gone" in the caller's agent).
+                    if (client.HasValue && headers.TryGetValue(BridgeSecurity.GoneHeader.ToLowerInvariant(), out var goneHdr))
                     {
-                        ["success"] = true,
-                        ["data"] = result,
-                    });
-                }
-                catch (CommandCancelledException ex)
-                {
-                    await SendJsonResponseAsync(stream, 423, new JsonObject
+                        gone ??= [];
+                        foreach (var id in goneHdr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(32))
+                            if (id != client.Value.Id && BridgeSecurity.CheckIdentity(client.Value.Agent, id) is not null && !gone.Contains(id)) gone.Add(id);
+                    }
+
+                    try
                     {
-                        ["success"] = false,
-                        ["error"] = ex.Message,
-                        ["emergency_stop"] = true,
-                    });
-                }
-                catch (Exception ex)
-                {
-                    await SendJsonResponseAsync(stream, 400, new JsonObject
+                        var result = await SendCommandToChromeAsync(action, @params, timeout, client, null, gone);
+                        await SendJsonResponseAsync(stream, 200, new JsonObject
+                        {
+                            ["success"] = true,
+                            ["data"] = result,
+                        });
+                    }
+                    catch (CommandCancelledException ex)
                     {
-                        ["success"] = false,
-                        ["error"] = ex.Message,
-                    });
+                        await SendJsonResponseAsync(stream, 423, new JsonObject
+                        {
+                            ["success"] = false,
+                            ["error"] = ex.Message,
+                            ["emergency_stop"] = true,
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        await SendJsonResponseAsync(stream, 400, new JsonObject
+                        {
+                            ["success"] = false,
+                            ["error"] = ex.Message,
+                        });
+                    }
                 }
+                finally { lock (_stateLock) _httpCommands--; }
                 return;
             }
 

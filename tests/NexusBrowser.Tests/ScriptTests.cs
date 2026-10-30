@@ -190,6 +190,19 @@ public sealed class ScriptTests : IDisposable
     }
 
     [Fact]
+    public async Task WindowsPowerShellInstallerRepairsInheritedCoreModulePrecedence()
+    {
+        var core = await ChildProcess.RunAsync(Shells.Pwsh, ["-NoProfile", "-Command", "$PSHOME"]);
+        var desktop = await ChildProcess.RunAsync(Shells.WindowsPowerShell, ["-NoProfile", "-Command", "$PSHOME"], new Dictionary<string, string?> { ["PSModulePath"] = null });
+        string polluted = Path.Combine(core.Stdout.Trim(), "Modules") + ";" + Path.Combine(desktop.Stdout.Trim(), "Modules");
+        string zip = FakeRelease("module-regression");
+        var result = await ChildProcess.RunAsync(Shells.WindowsPowerShell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", Repo.File("get.ps1")],
+            new Dictionary<string, string?> { ["PSModulePath"] = polluted, ["NEXUS_BROWSER_SOURCE"] = zip, ["NEXUS_BROWSER_ROOT"] = _dir["module-install"] });
+        Assert.True(result.Code == 0, result.Stdout + result.Stderr);
+        Assert.Contains("Package checked against SHA256SUMS.txt.", result.Stdout);
+    }
+
+    [Fact]
     public async Task GetRefusesAPackageThatIsNotThePublishedOne()
     {
         string zip = FakeRelease("tampered");

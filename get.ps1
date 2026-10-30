@@ -17,6 +17,11 @@
 # tag instead of the latest; NEXUS_BROWSER_ROOT, another install folder: download, check and unpack only, the engine
 # answers --version, nothing is registered on the PC.
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell launched by PowerShell 7 can inherit Core-only modules ahead of its own standard modules.
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    $desktopModules = Join-Path $PSHOME 'Modules'
+    $env:PSModulePath = (@($desktopModules) + @($env:PSModulePath -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ine $desktopModules.TrimEnd('\') })) -join ';'
+}
 # Started from Explorer (right click > Run with PowerShell): the window would close at once, before the result or an
 # error could be read. Never under the pack.
 function Test-StartedFromExplorer {

@@ -75,12 +75,15 @@ $action = New-ScheduledTaskAction -Execute $exe -Argument $bridgeArguments -Work
 $settings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
 $oldBridges = @(Get-EngineProcesses '--bridge(\s|$)' | Where-Object { $_.ExecutablePath -ne $exe })
+$bridgeDeferred = $false
 if ($oldBridges.Count -and -not $busy -and -not $SkipLaunch) {
-    if ((Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue).State -eq 'Running') { Stop-ScheduledTask -TaskName $bridgeTaskName }
-    # The previous build's auth hosts cannot answer Chrome once its bridge is gone: Chrome reconnects to the new one.
-    Get-EngineProcesses '(--bridge(\s|$))|(chrome-extension://[a-p]{32}/)' | Where-Object { $_.ExecutablePath -ne $exe } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Write-Journal 'Previous bridge stopped; the new build starts on demand.'
+    foreach ($oldBridge in $oldBridges) {
+        $shutdown = Invoke-Native $exe @('--shutdown-bridge', '--expected-pid', "$($oldBridge.ProcessId)", '--wait-seconds', '10', '--token-file', $tokenFile) 20
+        Write-Journal "Bridge $($oldBridge.ProcessId): $($shutdown.Output)"
+        if ($shutdown.Code -ne 0) { $bridgeDeferred = $true }
+    }
+} elseif ($oldBridges.Count) {
+    $bridgeDeferred = $true
 }
 # Register -Force keeps the triggers of an existing task: recreated from scratch.
 if (Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue) {
@@ -146,14 +149,13 @@ if ($token) {
     foreach ($leftover in "$daemonSpec.runtime-switch", "$daemonSpec.pause", "$daemonSpec.installing") {
         if (Test-Path -LiteralPath $leftover) { Remove-Item -LiteralPath $leftover -Force }
     }
-    if ($daemonExes.Count) {
+    if ($daemonExes.Count -and -not $busy -and -not $SkipLaunch) {
         # The running daemon stops itself once no call runs; the supervisor then starts this build.
         [IO.File]::WriteAllText($restartRequest, "code sha256:$fingerprint", $utf8)
-        # Builds before 2.33.0 do not read restart requests: stopped here unless agents are busy.
+        # Builds before 2.33.0 do not read restart requests: keep them until their natural exit.
         $legacy = @($daemonExes | Where-Object { $_.ExecutablePath -eq $legacyExe })
         if ($legacy.Count -and -not $busy -and -not $SkipLaunch) {
-            $legacy | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-            Write-Journal 'Daemon of the previous engine (no restart request support) stopped; the supervisor starts the new one.'
+            Write-Journal 'Legacy daemon has no cooperative restart support: new build prepared for its next natural start.'
         }
     }
 } elseif ($Register -and -not $supervised) {
@@ -174,12 +176,17 @@ if ($token) {
         -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
     $existing = Get-ScheduledTask -TaskName $daemonTaskName -ErrorAction SilentlyContinue
-    $restart = $daemonExes.Count -and -not $busy
-    if ($existing -and ($existing.State -ne 'Running' -or $restart)) {
-        if ($existing.State -eq 'Running') { Stop-ScheduledTask -TaskName $daemonTaskName }
-        $daemonExes | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-        Unregister-ScheduledTask -TaskName $daemonTaskName -Confirm:$false
-        $existing = $null
+    if ($existing -and ($existing.Actions.Execute -ne $exe)) {
+        Set-ScheduledTask -TaskName $daemonTaskName -Action $daemonAction | Out-Null
+        if (-not $busy -and -not $SkipLaunch) {
+            foreach ($oldDaemon in $daemonExes) {
+                [IO.File]::WriteAllText($restartRequest, "code sha256:$fingerprint pid:$($oldDaemon.ProcessId)", $utf8)
+                $deadline = [DateTime]::UtcNow.AddSeconds(10)
+                do { $stillRunning = Get-Process -Id $oldDaemon.ProcessId -ErrorAction SilentlyContinue; if ($stillRunning) { Start-Sleep -Milliseconds 100 } }
+                while ($stillRunning -and [DateTime]::UtcNow -lt $deadline)
+                if ($stillRunning) { Write-Warning 'Previous daemon kept: a call is running or it does not support cooperative restart.' }
+            }
+        }
     }
     if (-not $existing) {
         Register-ScheduledTask -TaskName $daemonTaskName -Action $daemonAction -Trigger $trigger -Principal $principal -Settings $daemonSettings `
@@ -257,6 +264,7 @@ if (-not $SkipTests) {
 if (-not $SkipLaunch) {
     if ((Get-ScheduledTask -TaskName $bridgeTaskName).State -ne 'Running') { Start-ScheduledTask -TaskName $bridgeTaskName }
     $wait = if ($pack) { 0 } else { 30 }
+    if ($bridgeDeferred) { Write-Warning 'Bridge upgrade deferred: running instance kept until its next natural exit; the extension refresh has its own ownership check.' }
     $refresh = Invoke-Native $exe @('--refresh-extension', '--wait-ready', "$wait") 90
     Write-Host "Extension: $($refresh.Output)"
     if ($refresh.Code -eq 2 -and $Register) {

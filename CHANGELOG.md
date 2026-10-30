@@ -3,6 +3,23 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.33.1] - 2026-10-30
+
+### Fixed
+- Bridge upgrades use an authenticated cooperative shutdown addressed to its exact process and random instance id.
+  The bridge refuses while any command runs or an agent owns tabs, checks ownership under a draining gate, and only
+  exits after its acknowledgement is sent. The installer waits at most ten seconds and defers without terminating
+  a process. Older bridges without this protocol keep serving until their next natural exit. Chrome and native
+  authentication hosts are never stopped by the installer; public daemon tasks also use cooperative requests.
+- Codex registration respects a configured NexusBrowser plugin, including a disabled one. Only the exact official
+  native server signature in a recognized installation folder is removed; customized servers stay untouched. Tomlyn
+  2.10.1 parses comments, quoted keys, whitespace and inline tables; candidate edits must preserve all other settings
+  semantically and leave their original bytes untouched.
+- Windows PowerShell 5.1 restores its own standard module folder before inherited PowerShell 7 module folders,
+  retaining other module paths. Verified package installation works when launched from PowerShell 7.
+- The Chrome extension version advances to 2.33.1 so its closed-session tombstone fix is actually reloaded when
+  ownership is clear, including while an older bridge keeps serving.
+
 ## [2.33.0] - 2026-10-30
 
 The native engine (`NexusBrowser.exe`, C# .NET 10) is now the only one: no Python, no uv, anywhere.

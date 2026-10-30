@@ -23,5 +23,6 @@
     <EmbeddedResource Include="..\extension\background.js" LogicalName="extension-background.js" />
     <EmbeddedResource Include="..\VERSION" LogicalName="VERSION" />
     <InternalsVisibleTo Include="NexusBrowser.Tests" />
+    <PackageReference Include="Tomlyn" Version="2.10.1" />
   </ItemGroup>
 </Project>

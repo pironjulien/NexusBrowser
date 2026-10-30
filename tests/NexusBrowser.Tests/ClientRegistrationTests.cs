@@ -161,6 +161,47 @@ public sealed class ClientRegistrationTests : IDisposable
     [Fact]
     public void CodexAbsent() => Assert.Null(ClientRegistration.Codex(Context()));
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ConfiguredCodexPluginPreventsDuplicateServersEvenWhenDisabled(bool enabled)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(CodexConfig)!);
+        string plugin = $"[plugins.\"nexus-browser@nexus-plugins\"]\nenabled = {enabled.ToString().ToLowerInvariant()}\n";
+        string installed = Path.Combine(Local, "NexusBrowser", "versions", "0123456789abcdef", "NexusBrowser.exe");
+        File.WriteAllText(CodexConfig, plugin);
+        Assert.Equal(ClientRegistration.Plugin, ClientRegistration.Codex(Context()));
+        Assert.Equal(plugin, File.ReadAllText(CodexConfig));
+        File.WriteAllText(CodexConfig, plugin + "\n" + ClientRegistration.CodexBlock(installed));
+        Assert.Equal(ClientRegistration.Removed, ClientRegistration.Codex(Context()));
+        Assert.Equal(plugin + "\n", File.ReadAllText(CodexConfig));
+        string customized = plugin + "\n" + CodexBlock() + "CUSTOM_OPTION = \"keep\"\n";
+        File.WriteAllText(CodexConfig, customized);
+        Assert.StartsWith("kept", ClientRegistration.Codex(Context()));
+        Assert.Equal(customized, File.ReadAllText(CodexConfig));
+        string customPath = plugin + "\n" + ClientRegistration.CodexBlock(@"C:\Tools\NexusBrowser.exe");
+        File.WriteAllText(CodexConfig, customPath);
+        Assert.StartsWith("kept", ClientRegistration.Codex(Context()));
+        Assert.Equal(customPath, File.ReadAllText(CodexConfig));
+    }
+
+    [Theory]
+    [InlineData("[plugins.\"nexus-browser@nexus-plugins\"] # user comment\nenabled = true\n")]
+    [InlineData("[plugins . \"nexus-browser@nexus-plugins\"] # spaced\nenabled = false\n")]
+    [InlineData("['plugins' . 'nexus-browser@nexus-plugins'] # quoted keys\nenabled = true\n")]
+    [InlineData("[plugins]\n\"nexus-browser@nexus-plugins\" = { enabled = false }\n")]
+    public void StandardTomlPluginFormsKeepTheirExactBytesAndNeverAddADirectServer(string plugin)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(CodexConfig)!);
+        File.WriteAllText(CodexConfig, plugin);
+        Assert.Equal(ClientRegistration.Plugin, ClientRegistration.Codex(Context()));
+        Assert.Equal(plugin, File.ReadAllText(CodexConfig));
+        string installed = Path.Combine(Local, "NexusBrowser", "versions", "0123456789abcdef", "NexusBrowser.exe");
+        File.WriteAllText(CodexConfig, plugin + "\n" + ClientRegistration.CodexBlock(installed));
+        Assert.Equal(ClientRegistration.Removed, ClientRegistration.Codex(Context()));
+        Assert.Equal(plugin + "\n", File.ReadAllText(CodexConfig));
+    }
+
     [Fact]
     public void CodexOnPathWithoutConfigGetsANewFile()
     {

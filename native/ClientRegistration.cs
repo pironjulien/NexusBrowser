@@ -3,8 +3,14 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Tomlyn;
+using Tomlyn.Model;
+using Tomlyn.Serialization;
 
 namespace NexusBrowser.Native;
+
+[TomlSerializable(typeof(TomlTable))]
+internal partial class BrowserTomlContext : TomlSerializerContext { }
 
 /// <summary>
 /// Declares the nexus-browser MCP server to the AI clients found on this PC (--register, public install by get.ps1).
@@ -199,7 +205,7 @@ public static partial class ClientRegistration
         return results;
     }
 
-    [GeneratedRegex(@"^\[(?<name>[^\]]+)\]\s*$", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^[ \t]*\[(?<name>[^\]\r\n]+)\][ \t]*(?:#[^\r\n]*)?\r?$", RegexOptions.Multiline)]
     private static partial Regex TomlTable();
 
     private static string TomlString(string text) => JsonSerializer.Serialize(text); // a JSON string is a TOML basic string
@@ -264,14 +270,79 @@ public static partial class ClientRegistration
     public static string CodexBlock(string exe) =>
         $"[mcp_servers.{Name}]\ncommand = {TomlString(exe)}\nargs = [\"--mcp\"]\n\n[mcp_servers.{Name}.env]\nNEXUS_BROWSER_AGENT = \"Codex\"\n";
 
+    private static TomlTable ReadCodexToml(string text) =>
+        TomlSerializer.Deserialize(text, BrowserTomlContext.Default.TomlTable) ?? new TomlTable();
+
+    private static bool CodexPluginConfigured(TomlTable data) =>
+        data.TryGetValue("plugins", out object? plugins) && plugins is TomlTable configured &&
+        configured.Any(plugin => plugin.Key.Split('@')[0] == Name);
+
+    private static bool SameToml(object? left, object? right)
+    {
+        if (left is TomlTable a && right is TomlTable b)
+            return a.Count == b.Count && a.All(item => b.TryGetValue(item.Key, out object? other) && SameToml(item.Value, other));
+        if (left is not string && right is not string && left is System.Collections.IEnumerable x && right is System.Collections.IEnumerable y)
+        {
+            var aValues = x.Cast<object?>().ToList();
+            var bValues = y.Cast<object?>().ToList();
+            return aValues.Count == bValues.Count && aValues.Zip(bValues).All(pair => SameToml(pair.First, pair.Second));
+        }
+        return Equals(left, right);
+    }
+
+    private static bool CodexEditPreservesOtherSettings(TomlTable before, string next, string? exe)
+    {
+        var after = ReadCodexToml(next);
+        if (!before.TryGetValue("mcp_servers", out object? current) || current is not TomlTable servers)
+            before["mcp_servers"] = servers = new TomlTable();
+        if (exe is null)
+        {
+            servers.Remove(Name);
+            if (servers.Count == 0 && !after.ContainsKey("mcp_servers")) before.Remove("mcp_servers");
+        }
+        else servers[Name] = ((TomlTable)ReadCodexToml(CodexBlock(exe))["mcp_servers"]!)[Name];
+        return SameToml(before, after);
+    }
+
+    private static bool CodexInstallerBlock(string block, string localAppData)
+    {
+        // Exact signature of our native declaration; never remove a customized server just because its executable
+        // happens to have the same basename. The versioned executable path itself can change on each upgrade.
+        var command = Regex.Match(block, "(?m)^command = (\"(?:[^\"\\\\]|\\\\.)*\")\\s*$");
+        if (!command.Success) return false;
+        try
+        {
+            string path = JsonSerializer.Deserialize<string>(command.Groups[1].Value)!;
+            string relative = Path.GetRelativePath(Path.Combine(localAppData, "NexusBrowser"), Path.GetFullPath(path)).Replace('\\', '/');
+            bool installed = Regex.IsMatch(relative, @"^versions/[0-9a-f]{16}/NexusBrowser\.exe$", RegexOptions.IgnoreCase) ||
+                relative.Equals("app/engine/NexusBrowser.exe", StringComparison.OrdinalIgnoreCase) ||
+                relative.Equals("native/NexusBrowser.exe", StringComparison.OrdinalIgnoreCase);
+            return installed &&
+                block.TrimEnd('\n') + "\n" == CodexBlock(path);
+        }
+        catch (JsonException) { return false; }
+    }
+
     public static string? Codex(Context c)
     {
         string folder = Path.Combine(c.Home, ".codex");
         if (!Directory.Exists(folder) && c.Which("codex") is null) return null;
         string config = Path.Combine(folder, "config.toml");
         string text = File.Exists(config) ? File.ReadAllText(config, Encoding.UTF8).TrimStart('﻿').Replace("\r\n", "\n") : "";
-        if (!TomlLooksValid(text)) return "failed: " + config + " is not valid TOML: left untouched";
+        TomlTable data;
+        try { data = ReadCodexToml(text); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { return "failed: " + config + " is not valid TOML: left untouched"; }
         var (without, ours) = CutTomlTables(text);
+        if (CodexPluginConfigured(data))
+        {
+            // A configured disabled plugin is an intentional choice too: never bypass it by adding a direct server.
+            if (ours is null) return Plugin;
+            if (!CodexInstallerBlock(ours, c.LocalAppData)) return "kept (custom entry and configured plugin)";
+            if (!CodexEditPreservesOtherSettings(data, without, null)) return "kept (ambiguous TOML edit)";
+            Backup(config, c.Backups);
+            WriteAtomic(config, without);
+            return Removed;
+        }
         // Also a dotted or inline form ("mcp_servers.nexus-browser = {...}" or a key inside [mcp_servers]): not edited.
         if (Regex.IsMatch(without, $@"(?m)^\s*(mcp_servers\.)?""?{Regex.Escape(Name)}""?\s*[.=]"))
             return "kept (entry written in a form this installer does not edit)";
@@ -283,6 +354,7 @@ public static partial class ClientRegistration
             if (ours.TrimEnd('\n') + "\n" == CodexBlock(c.Exe)) return "already declared";
         }
         string next = without.TrimEnd('\n') + (without.Trim().Length > 0 ? "\n\n" : "") + CodexBlock(c.Exe);
+        if (!CodexEditPreservesOtherSettings(data, next, c.Exe)) return "kept (ambiguous TOML edit)";
         Backup(config, c.Backups);
         WriteAtomic(config, next);
         return $"declared in {config}";
