@@ -95,16 +95,16 @@ internal static class Program
             if (!IsProcessInJob(child.Handle, job, out bool inherited) || inherited == broker)
                 throw new InvalidOperationException("Unexpected job membership for " + (broker ? "Explorer broker" : "direct ShellExecute control"));
             Wait(() => File.Exists(Path.Combine(folder, "heartbeat")), 3, "Child heartbeat missing");
-            string before = File.ReadAllText(Path.Combine(folder, "heartbeat"));
+            string before = ReadHeartbeat(Path.Combine(folder, "heartbeat"));
             CloseHandle(job); job = 0; // Only the disposable caller is owned by this kill-on-close job.
             if (!caller.WaitForExit(5000)) throw new InvalidOperationException("Closing the job did not stop the caller");
             if (broker)
             {
                 Thread.Sleep(1618);
-                if (child.HasExited || File.ReadAllText(Path.Combine(folder, "heartbeat")) == before)
+                if (child.HasExited || ReadHeartbeat(Path.Combine(folder, "heartbeat")) == before)
                     throw new InvalidOperationException("User application did not survive caller/job closure");
                 File.WriteAllText(Path.Combine(folder, "child.stop"), "normal exit");
-                if (!child.WaitForExit(5000) || child.ExitCode != 0) throw new InvalidOperationException("Fixture child did not exit normally");
+                if (!child.WaitForExit(5000) || child.ExitCode != 0) throw new InvalidOperationException("Fixture child did not exit normally: " + File.ReadAllText(Path.Combine(folder, "parent-ready.json")));
             }
             else if (!child.WaitForExit(5000)) throw new InvalidOperationException("Direct-launch control survived unexpectedly; oracle cannot reproduce the regression");
             Console.WriteLine(JsonSerializer.Serialize(new { ok = true, broker, caller_in_job = true, child_in_caller_job = inherited, survived_job_close = broker, child_normal_exit = broker }));
@@ -123,6 +123,14 @@ internal static class Program
     {
         var timer = Stopwatch.StartNew();
         while (!test()) { if (timer.Elapsed.TotalSeconds > seconds) throw new TimeoutException(failure); Thread.Sleep(20); }
+    }
+    private static string ReadHeartbeat(string path)
+    {
+        // File.ReadAllText only shares reads: its brief observation could deny the fixture child's next write,
+        // crashing the supposedly long-lived child and making a correct Explorer launch look broken.
+        using var file = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(file);
+        return reader.ReadToEnd();
     }
     [StructLayout(LayoutKind.Sequential)] private struct BasicLimits
     {

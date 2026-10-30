@@ -107,7 +107,8 @@ Windows 10 or 11 and Google Chrome. No admin rights, nothing else to install fir
    ```
    It downloads the latest release for your PC (x64 or ARM64), checks it against `SHA256SUMS.txt`, unpacks it into
    `%LOCALAPPDATA%\NexusBrowser\app`, sets up the local bridge, the native host and the shared MCP daemon
-   (`127.0.0.1:16182`, token in your user variable `NEXUS_MCP_TOKEN`), and declares the `nexus-browser` server to
+   (`127.0.0.1:16182`, shared token file `NEXUS_MCP_TOKEN_FILE`, otherwise `~\.nexus\mcp-token.txt`, mirrored in your
+   user variable `NEXUS_MCP_TOKEN`), and declares the `nexus-browser` server to
    every AI client it finds: **Claude Code**, **Claude Desktop**, **Codex** and **Antigravity**. No Python, no .NET
    to install: the engine is self-contained.
 2. Chrome opens `chrome://extensions` and the extension folder is copied to the clipboard: turn on

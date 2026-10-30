@@ -45,6 +45,8 @@ The native engine (`NexusBrowser.exe`, C# .NET 10) is now the only one: no Pytho
   is never replaced.
 - `--bridge --port 0` lets Windows bind available WebSocket and HTTP ports atomically; the subprocess integration
   test reads its bound addresses instead of racing other tests for previously probed ports.
+- The Chrome lifetime test shares heartbeat reads with writes, preventing the observer itself from crashing the
+  child it checks for survival after the launcher's job closes.
 - A refused tool argument (`timeout_ms` above the bridge limit) is refused before the page is read, so an accord is
   never spent on a call that cannot run.
 - `get.ps1` leaves no download folder behind when a package is refused.
