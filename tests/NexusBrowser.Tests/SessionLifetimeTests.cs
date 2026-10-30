@@ -37,28 +37,29 @@ internal sealed class Daemon : IDisposable
             ["NEXUS_BROWSER_SESSION_IDLE_SECONDS"] = idleSeconds,
         };
         var daemon = new Daemon(new ChildProcess(NativeExe.Path, ["--http", port.ToString()], env), $"http://127.0.0.1:{port}");
-        var clock = Stopwatch.StartNew();
-        while (true)
+        bool ready = false;
+        try
         {
-            try
+            var clock = Stopwatch.StartNew();
+            while (true)
             {
-                using var health = await daemon._http.GetAsync(daemon.Base + "/health");
-                if (health.IsSuccessStatusCode) return daemon;
+                try
+                {
+                    using var health = await daemon._http.GetAsync(daemon.Base + "/health");
+                    if (health.IsSuccessStatusCode) { ready = true; return daemon; }
+                }
+                catch (HttpRequestException) { }
+                if (daemon.Process.Process.HasExited || clock.Elapsed > TimeSpan.FromSeconds(10))
+                    throw new InvalidOperationException($"daemon not ready; stderr={daemon.Process.Stderr}");
+                await Task.Delay(50);
             }
-            catch (HttpRequestException) { }
-            if (daemon.Process.Process.HasExited || clock.Elapsed > TimeSpan.FromSeconds(10))
-            {
-                string stderr = daemon.Process.Stderr;
-                daemon.Dispose();
-                throw new InvalidOperationException($"daemon not ready; stderr={stderr}");
-            }
-            await Task.Delay(50);
         }
+        finally { if (!ready) daemon.Dispose(); }
     }
 
     public async Task<HttpResponseMessage> SendAsync(HttpMethod method, string agent, string? body, string? session = null)
     {
-        var request = new HttpRequestMessage(method, $"{Base}/mcp?agent={agent}");
+        using var request = new HttpRequestMessage(method, $"{Base}/mcp?agent={agent}");
         if (body is not null) request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Token);
         if (session is not null) request.Headers.Add("mcp-session-id", session);
