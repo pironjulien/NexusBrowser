@@ -5,7 +5,7 @@
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/pironjulien/NexusBrowser/badge)](https://scorecard.dev/viewer/?uri=github.com/pironjulien/NexusBrowser)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](extension/manifest.json)
-[![Python 3.14](https://img.shields.io/badge/python-3.14-blue?logo=python&logoColor=white)](pyproject.toml)
+[![.NET 10](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)](native/NexusBrowser.csproj)
 [![MCP](https://img.shields.io/badge/MCP-server-7ee2a8)](https://modelcontextprotocol.io)
 
 [![NexusBrowser: your real Chrome, driven by an AI agent in a background tab.](https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/docs/assets/banner.webp)](https://julienpiron.fr/nexusbrowser/)
@@ -17,7 +17,7 @@ the user's own Chrome (their sessions, their extensions) through one shared loca
 `nexus-browser`. Each agent works in its own background tabs, grouped under its name, with real (trusted) mouse
 and keyboard events sent through the Chrome DevTools Protocol, while the user keeps working in their own tabs.
 
-Windows 10/11 · Chrome 116+ · Python 3.14 · MIT licence
+Windows 10/11 (x64 and ARM64) · Chrome 116+ · self-contained .NET engine, nothing else to install · MIT licence
 
 Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
 ([Claude](https://github.com/pironjulien/NexusWindows-Claude) ·
@@ -52,26 +52,24 @@ bridge shared by several agents.
 | Folder | Role |
 | --- | --- |
 | `extension/` | Chrome MV3 extension "NexusBrowser": CDP actions, locators, network, dialogs, cross-origin iframes, exports, tab ownership |
-| `native-host/` | Local bridge (`bridge_server.py`: WebSocket 9224 for the extension, HTTP 9225 for the agents) and native host `com.nexus.browser_auth` |
-| `native/` | Unified Windows C# engine: Chrome authentication, bridge, the 49 MCP tools over stdio or HTTP, native image processing and exports |
-| `client/` | MCP server `nexus-browser` (`mcp_server.py`), authenticated transport (`bridge_client.py`), CLI (`browser_cli.py`), shared emergency stop |
+| `native/` | The engine, `NexusBrowser.exe` (C#, .NET 10): native host `com.nexus.browser_auth` (`--auth-host`), local bridge (`--bridge`: WebSocket 9224 for the extension, HTTP 9225 for the agents), the 49 MCP tools over stdio (`--mcp`) or as the shared HTTP daemon (`--http 16182`), client registration (`--register`), extension check (`--refresh-extension`); shared policy and page probes in `native/resources/` |
 | `skills/`, `plugins/` | Skill and Antigravity plugin; `install.ps1` copies the skill into that plugin only |
-| `benchmarks/` | Reproducible token and success benchmark against Chrome DevTools MCP and Playwright MCP (`compare.py`, results and method in its README) |
-| `mcpb/` | Claude Desktop extension (`nexus-browser.mcpb`, attached to every release; server from PyPI) |
-| `gemini-extension.json` | Gemini CLI extension: `gemini extensions install https://github.com/pironjulien/NexusBrowser` (server from PyPI and the skill) |
+| `tests/` | Engine tests (xUnit v3, `dotnet test`), extension tests (`node --test`), the clean-Windows install check |
+| `benchmarks/` | Token and success benchmark against Chrome DevTools MCP and Playwright MCP (results and method in its README) |
+| `mcpb/` | Claude Desktop extension (`nexus-browser.mcpb`, attached to every release: the self-contained engine itself, `--mcp`) |
+| `gemini-extension.json` | Gemini CLI extension: `gemini extensions install https://github.com/pironjulien/NexusBrowser` (the shared local daemon, token `NEXUS_MCP_TOKEN`) |
 
-## Native Windows engine (development checkout)
+## The engine
 
-The native engine builds with the .NET 10 SDK. `scripts/build-native.ps1` builds and self-tests a candidate outside
-the repository. `install.ps1 -Runtime Native` installs that engine for Chrome authentication, the bridge and the
-shared MCP daemon; existing Chrome and AI applications remain open. Installation is deferred while an agent owns
-browser tabs. `-Runtime Auto` preserves the installed runtime, and `-Runtime Python` explicitly selects the Python
-runtime. A switch drains the old Browser daemon before starting its replacement on the same port.
-
+`NexusBrowser.exe` is the only engine (C#, .NET 10; the Python one was removed in 2.33.0). A release carries it
+self-contained for each Windows architecture (`NexusBrowser-win-x64.zip`, `NexusBrowser-win-arm64.zip`), with their
+`SHA256SUMS.txt` and build provenance (Sigstore: `gh attestation verify <file> --repo pironjulien/NexusBrowser`).
+Each build is installed once in `%LOCALAPPDATA%\NexusBrowser\versions\<fingerprint>` and never overwritten while it
+runs: an update leaves the running bridge and daemon alone while agents drive tabs, and asks the shared daemon to
+restart on the new build once no call is running (its restart request, `~\.nexus\nexus-browser\daemon-restart.request`).
+Existing Chrome windows and AI applications stay open.
 `verify.ps1 -Browser` checks the selected installation, the authenticated Chrome extension and native MCP health.
-`test.ps1 -Full` runs the offline tests and the real mouse and full Chrome fixtures through a native MCP HTTP
-session on an isolated port, closing its tabs and downloaded files afterward. Google account exports require
-their own explicitly supplied fixture URLs; the local fixtures do not validate access to an account's documents.
+`test.ps1 -Full` runs the offline tests, then checks the bridge and the loaded extension on this PC.
 When Chrome has been closed, `browser_new_tab` starts the installed Chrome on its real Default profile and waits
 for the extension before creating the tab. Read tools and idle heartbeats leave a closed browser alone.
 
@@ -96,8 +94,8 @@ Windows 10 or 11 and Google Chrome. No admin rights, nothing else to install fir
 
 1. Download [`get.ps1`](https://github.com/pironjulien/NexusBrowser/releases/latest/download/get.ps1) from the
    latest release, right-click it and choose **Run with PowerShell**. To check the file first, compare its SHA-256
-   with [`get.ps1.sha256`](https://github.com/pironjulien/NexusBrowser/releases/latest/download/get.ps1.sha256),
-   published with it:
+   with its line in [`SHA256SUMS.txt`](https://github.com/pironjulien/NexusBrowser/releases/latest/download/SHA256SUMS.txt),
+   published with it (or `gh attestation verify get.ps1 --repo pironjulien/NexusBrowser`):
 
    ```powershell
    (Get-FileHash "$HOME\Downloads\get.ps1" -Algorithm SHA256).Hash
@@ -109,9 +107,11 @@ Windows 10 or 11 and Google Chrome. No admin rights, nothing else to install fir
    irm https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/get.ps1 | iex
    ```
 
-   It installs [uv](https://docs.astral.sh/uv/) if needed, downloads the latest release into
-   `%LOCALAPPDATA%\NexusBrowser\app`, sets up the local bridge and the native host, and declares the `nexus-browser`
-   server to every AI client it finds: **Claude Code**, **Claude Desktop**, **Codex** and **Antigravity**.
+   It downloads the latest release for your PC (x64 or ARM64), checks it against `SHA256SUMS.txt`, unpacks it into
+   `%LOCALAPPDATA%\NexusBrowser\app`, sets up the local bridge, the native host and the shared MCP daemon
+   (`127.0.0.1:16182`, token in your user variable `NEXUS_MCP_TOKEN`), and declares the `nexus-browser` server to
+   every AI client it finds: **Claude Code**, **Claude Desktop**, **Codex** and **Antigravity**. No Python, no .NET
+   to install: the engine is self-contained.
 2. Chrome opens `chrome://extensions` and the extension folder is copied to the clipboard: turn on
    **Developer mode** (top right), click **Load unpacked**, paste the folder (`Ctrl+V`) and click **Select Folder**.
    This is the only manual step: outside the Chrome Web Store, Chrome installs an extension this way only. The
@@ -120,8 +120,8 @@ Windows 10 or 11 and Google Chrome. No admin rights, nothing else to install fir
    as Markdown."*
 
 Run it again to update: the folder stays the same, so Chrome keeps the extension and reloads it. The new version
-is prepared beside the working one and its Python dependencies are checked first; a failed update puts the
-previous version back, installs it again and restarts its bridge.
+is prepared beside the working one and checked first; a failed update puts the previous version back and installs
+it again.
 The bridge can also update a public install itself (the contract shared by the Nexus products): it writes
 `~\.nexus\status\browser.json` (`version`, `latest` read from the `releases/latest` redirect at most once a day,
 `state`, `message`), `GET /api/update` returns it and `POST /api/update` (bridge token) starts the "Nexus Browser
@@ -132,7 +132,7 @@ provides the server, is never changed.
 
 ### From a clone (developers)
 
-Requirements: [uv](https://docs.astral.sh/uv/), PowerShell 7, Node.js for the tests.
+Requirements: the [.NET 10 SDK](https://dotnet.microsoft.com/download), PowerShell 7, Node.js for the extension tests.
 
 ```powershell
 git clone https://github.com/pironjulien/NexusBrowser.git
@@ -140,18 +140,19 @@ cd NexusBrowser
 pwsh -NoProfile -File install.ps1
 ```
 
-- Python environment, token, logs, screenshots and exports live in `~\.nexus\nexus-browser` (outside the clone);
+- The engine is built outside the clone (`~\.nexus\build\nexus-browser`) and installed in
+  `%LOCALAPPDATA%\NexusBrowser\versions\`; token, logs, screenshots and exports live in `~\.nexus\nexus-browser`;
   the per-call journal lives in `%LOCALAPPDATA%\NexusJournal\browser\` (see [Privacy](#privacy)).
 - Scheduled task `Nexus Browser Bridge` with **no trigger**: the bridge starts on demand (first agent call,
   `schtasks /Run`).
 - Native host `com.nexus.browser_auth` declared to Chrome (HKCU): it computes the extension's proofs, the token never
   reaches Chrome.
 - Antigravity only, through its plugin (server and skill), and only when the shared MCP daemon token is present:
-  the plugin points to the shared HTTP daemon (`client/mcp_server.py --http`, port 16182) with `?agent=antigravity`.
+  the plugin points to the shared HTTP daemon (`NexusBrowser.exe --http 16182`) with `?agent=antigravity`.
   Without that token, `install.ps1` warns and skips the daemon and this registration; the bridge, native host and
   task are still installed. `install.ps1 -Register` (what the one-line installer runs) declares the server over
   stdio to Claude Code, Claude Desktop and Codex, and as a `nexus-browser` plugin to Antigravity, when found
-  (`scripts/register_clients.py`), with `NEXUS_BROWSER_AGENT` set to the client's name (its tab group); without it,
+  (`NexusBrowser.exe --register`), with `NEXUS_BROWSER_AGENT` set to the client's name (its tab group); without it,
   add the server yourself (see below). `NEXUS_PACK=1` (the Nexus pack) runs it with no question, wait or window.
 - When the bridge has to relaunch Chrome, it uses the `Default` profile; extra Chrome flags (language...)
   can be added with the `NEXUS_CHROME_EXTRA_ARGS` environment variable (allowlist: `--lang`, `--accept-lang`,
@@ -167,7 +168,8 @@ and the native host accept.
 ### The MCP server from PyPI
 
 Once the bridge and the extension are installed (above), any MCP client can also start the server straight from
-[PyPI](https://pypi.org/project/nexus-browser/), without the clone:
+[PyPI](https://pypi.org/project/nexus-browser/), without the clone (the former Python server, 2.32.0 at most: new versions
+ship only as the native engine above):
 
 ```bash
 claude mcp add nexus-browser --scope user -e NEXUS_BROWSER_AGENT=Claude -- uvx nexus-browser
@@ -176,12 +178,12 @@ claude mcp add nexus-browser --scope user -e NEXUS_BROWSER_AGENT=Claude -- uvx n
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_nexus--browser-0098FF?logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=nexus-browser&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22--python%22%2C%223.14%22%2C%22nexus-browser%22%5D%2C%22env%22%3A%7B%22NEXUS_BROWSER_AGENT%22%3A%22Copilot%22%7D%7D)
 [![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install_nexus--browser-24bfa5?logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=nexus-browser&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22--python%22%2C%223.14%22%2C%22nexus-browser%22%5D%2C%22env%22%3A%7B%22NEXUS_BROWSER_AGENT%22%3A%22Copilot%22%7D%7D&quality=insiders)
 
-Gemini CLI: `gemini extensions install https://github.com/pironjulien/NexusBrowser` (the server from PyPI and the
-skill, from `gemini-extension.json`).
+Gemini CLI: `gemini extensions install https://github.com/pironjulien/NexusBrowser` (the shared local daemon of
+the one-time install, with the token of `NEXUS_MCP_TOKEN`, from `gemini-extension.json`).
 
 Claude Desktop extension: download
 [`nexus-browser.mcpb`](https://github.com/pironjulien/NexusBrowser/releases/latest/download/nexus-browser.mcpb) and drop
-it on Claude Desktop's window, or add it in **Settings > Extensions** (the server is installed from PyPI by uv).
+it on Claude Desktop's window, or add it in **Settings > Extensions** (it carries the self-contained engine).
 
 Without the bridge, the server still starts and lists its 49 tools, and every call answers with a clear error that
 points to the one-time install.
@@ -233,10 +235,10 @@ points to the one-time install.
   (`browser_click`), Enter / Control+Enter / Space
   (`browser_press_key`, `keys` of `browser_fill`), a typed line break
   (`browser_type_keys`) or a drag, the server reads the trigger without any gesture, through the bridge's existing
-  read paths (`find` for locators, and a read-only script, `client/trigger_probe.js`, evaluated by `cdp-send` in the
+  read paths (`find` for locators, and a read-only script, `native/resources/trigger_probe.js`, evaluated by `cdp-send` in the
   extension's isolated world): no new extension action, so it works with the extension already loaded. It reads the
   clicked control, or the submit buttons of the focused field's form. When the shared policy
-  (`client/garde-fous.json`) sees an outward word (send, pay, buy, order, publish, post, call, transfer, subscribe,
+  (`native/resources/garde-fous.json`) sees an outward word (send, pay, buy, order, publish, post, call, transfer, subscribe,
   book...), the gesture is refused with a summary of the exact action (target, recipients, form content without
   sensitive values, attachments, page origin and path) and a one-time token valid 10 minutes. The agent shows the
   summary to the user and, only after their yes, sends the same call again with `confirm=true` and
@@ -274,15 +276,15 @@ points to the one-time install.
 ## Checks
 
 ```powershell
-pwsh -NoProfile -File test.ps1         # offline: ruff, Pyright, pytest (real bridge on ephemeral ports), Node tests
-pwsh -NoProfile -File test.ps1 -Full   # plus real validation in the user's Chrome: --mouse then --full-live
+pwsh -NoProfile -File test.ps1         # offline: dotnet test (xUnit, real bridge on ephemeral ports), node --test
+pwsh -NoProfile -File test.ps1 -Full   # plus the bridge and the loaded extension on this PC (verify.ps1 -Browser)
 pwsh -NoProfile -File verify.ps1 -Browser  # task, native host, bridge reached, loaded extension up to date
 ```
 
-`test.ps1` uses the environment created by `install.ps1`.
+`test.ps1` needs the .NET 10 SDK and Node.js; build and test outputs stay in `~\.nexus\build\nexus-browser`.
 
 Updating an existing installation also checks the extension's loaded version/features and reloads it when needed,
-then reloads the supervised Browser MCP worker.
+then asks the shared MCP daemon to move to the new build once idle.
 An update defers while an agent owns browser tabs; user tabs are never driven or activated by the refresh.
 If Chrome is closed, it loads the updated extension files on its next launch; that state is not a live validation.
 
@@ -301,7 +303,7 @@ to the author or to any third party.
   Docs, Sheets, Slides, YouTube transcripts) are fetched from those sites in your session.
 - **Where it goes**: tool results are returned to the AI client you connected (Antigravity, Claude, Codex…), which
   may send them to its model provider under its own privacy policy.
-- **What it stores**, under `~/.nexus/nexus-browser/`: the Python environment, the bridge token, `bridge.log`
+- **What it stores**, under `~/.nexus/nexus-browser/`: the bridge token, `bridge.log`
   (connection and emergency-stop events, rotated at 1 MB, three backups), `install.log`, screenshots (at most 50,
   each kept under 24 hours) and the exports you ask for. The extension keeps tab ownership in Chrome's session
   storage, cleared when Chrome closes.
@@ -312,13 +314,14 @@ to the author or to any third party.
   identifier: no sender, subject or content. Unticked, that profile's entry is removed (the file is deleted when none
   is left). This feed is the only non-local address in the extension's content security policy
   (`connect-src https://mail.google.com`, needed for the service worker to fetch it); the Chrome Web Store variant
-  without the counter (`scripts/store_package.py --without-gmail-counter`) drops it.
+  without the counter (`scripts/store-package.ps1 -WithoutGmailCounter`) drops it.
 - **Journal**, under `%LOCALAPPDATA%\NexusJournal\browser\<agent>\<YYYY-MM>.jsonl` (or `NEXUS_JOURNAL_HOME`), shared
   format of the Nexus tools: one line per tool call with the calling AI, the action, the outcome, the duration, the
   technique, the registrable domain of the tab (`google.com`, never the address) and an error category from a fixed
   list. Never page text, typed value, title or image. Nothing is sent anywhere; months are kept until you delete
   them: delete the `browser` folder (or single month files) at any time.
-- **Removing it**: remove the extension from Chrome, delete the scheduled task `Nexus Browser Bridge` and the
+- **Removing it**: remove the extension from Chrome, delete the scheduled tasks `Nexus Browser Bridge`,
+  `Nexus Browser MCP` and `Nexus Browser Update` and the
   registry key `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth`, then delete
   `~/.nexus/nexus-browser/` and `%LOCALAPPDATA%\NexusJournal\browser\` (and `%LOCALAPPDATA%\NexusBrowser\` after
   the one-line install). The `nexus-browser` entries the installer declared: `claude mcp remove nexus-browser -s user`,

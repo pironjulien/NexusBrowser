@@ -1,5 +1,5 @@
 /**
- * Liaison authentifiée au pont local NexusBrowser (protocole « nexus-browser/1 », voir native-host/bridge_auth.py).
+ * Liaison authentifiée au pont local NexusBrowser (protocole « nexus-browser/1 », voir native/BridgeAuth.cs).
  *
  * Partagée par le service worker (importScripts) et le document offscreen (<script>). Le serveur du port 9224 doit
  * prouver qu'il connaît le jeton ~/.nexus/nexus-browser/bridge-token (HMAC sur les deux nonces de la connexion) AVANT que
@@ -220,7 +220,7 @@
         }
     }
 
-    // Appairage sans hôte natif (native-host/bridge_pairing.py) ---------------------------------------------------
+    // Appairage sans hôte natif (native/BridgePairing.cs) ---------------------------------------------------
     // La clé d'appairage est une clé WebCrypto NON extractible, gardée dans l'IndexedDB de l'origine de l'extension
     // (jamais dans chrome.storage, lisible par les content scripts) : aucun script, pas même celui de l'extension, ne
     // peut en relire les octets ; elle sert seulement à signer.

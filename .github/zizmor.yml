@@ -1,0 +1,7 @@
+# zizmor configuration (Security workflow).
+rules:
+  adhoc-packages:
+    # The Install check installs the AI clients a user has (Claude Code and Codex CLIs, pinned versions): that is
+    # the scenario under test, not a build dependency.
+    ignore:
+      - install.yml

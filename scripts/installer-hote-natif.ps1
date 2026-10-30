@@ -1,8 +1,9 @@
-param([switch]$CheckOnly, [string]$RegistryKey = "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth",
-    [ValidateSet('Auto', 'Native', 'Python')][string]$Runtime = 'Auto')
-# Hote natif com.nexus.browser_auth : l'extension Chrome lui fait calculer les preuves d'authentification du pont
-# local (HMAC du jeton ~/.nexus/nexus-browser/bridge-token) ; le jeton n'est jamais livre a Chrome. Declare pour l'utilisateur
-# courant seulement (HKCU), pour les identifiants d'extension de native-host\bridge_config.json. Fichiers hors OneDrive.
+param([Parameter(Mandatory = $true)][string]$Exe, [switch]$CheckOnly,
+    [string]$RegistryKey = "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth")
+# Hote natif com.nexus.browser_auth : l'extension Chrome fait calculer au moteur (NexusBrowser.exe, lance par Chrome)
+# les preuves d'authentification du pont local (HMAC du jeton ~/.nexus/nexus-browser/bridge-token) ; le jeton n'est
+# jamais livre a Chrome. Declare pour l'utilisateur courant seulement (HKCU), pour les identifiants d'extension de
+# native\resources\bridge_config.json. Manifeste hors OneDrive. Fichier en ASCII (Windows PowerShell 5.1).
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "runtime.ps1")
 # Cle ecrite et relue dans le registre reel (registre-reel.ps1) : depuis l'application Claude (MSIX), une ecriture
@@ -10,25 +11,17 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "registre-reel.ps1")
 $hostName = "com.nexus.browser_auth"
 $hostDirectory = Join-Path $localRoot "native-host"
-$launcher = Join-Path $hostDirectory "nexus_browser_auth.cmd"
 $manifestPath = Join-Path $hostDirectory "$hostName.json"
-$utf8 = [Text.UTF8Encoding]::new($false)
-if ($Runtime -eq 'Auto') {
-    $installed = if (Test-Path -LiteralPath $manifestPath) { Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json }
-    $Runtime = if ($installed.path -eq $nativeExe -or -not $installed) { 'Native' } else { 'Python' }
-}
+$oldLauncher = Join-Path $hostDirectory "nexus_browser_auth.cmd"  # lanceur Python d'avant la 2.33.0
+$utf8 = New-Object Text.UTF8Encoding $false
 
-$origins = @((Get-Content (Join-Path $repositoryRoot "native-host\bridge_config.json") -Raw | ConvertFrom-Json).allowed_origins)
-if (-not $origins) { throw "Aucune origine d'extension dans native-host\bridge_config.json" }
-# Chrome passes its extension origin to the executable; Program detects native-messaging mode.
-$launcherText = if ($Runtime -eq 'Native') { "@echo off`r`n`"$nativeExe`" --auth-host %*`r`n" } else {
-    "@echo off`r`n`"$pythonExe`" -I -B `"$(Join-Path $repositoryRoot 'native-host\auth_host.py')`" %*`r`n"
-}
-$hostExecutable = if ($Runtime -eq 'Native') { $nativeExe } else { $launcher }
+$origins = @((Get-Content (Join-Path $repositoryRoot "native\resources\bridge_config.json") -Raw | ConvertFrom-Json).allowed_origins)
+if (-not $origins) { throw "Aucune origine d'extension dans native\resources\bridge_config.json" }
+# Chrome passes its extension origin to the executable; the engine detects native-messaging mode.
 $manifestText = ([ordered]@{
     name = $hostName
     description = "NexusBrowser : preuves d'authentification du pont local (jeton jamais livre a Chrome)"
-    path = $hostExecutable
+    path = $Exe
     type = "stdio"
     allowed_origins = $origins
 } | ConvertTo-Json -Depth 4) + "`n"
@@ -36,26 +29,19 @@ $manifestText = ([ordered]@{
 if ($CheckOnly) {
     $registered = Invoke-RegistreReel @("query `"$RegistryKey`" /ve")
     if (-not $registered.Contains($manifestPath)) { throw "Hote natif $hostName non declare a Chrome : reexecuter install.ps1" }
-    # Le manifeste est compare par son contenu : ConvertTo-Json ne met pas en forme pareil sous Windows PowerShell 5.1
-    # et sous pwsh 7, et install.ps1 peut avoir tourne sous l'un ou l'autre.
+    # Compare par le contenu : ConvertTo-Json ne met pas en forme pareil sous Windows PowerShell 5.1 et sous pwsh 7.
     $canonical = { param($text) $text | ConvertFrom-Json | ConvertTo-Json -Depth 4 -Compress }
-    foreach ($pair in @(@($launcher, $launcherText, $false), @($manifestPath, $manifestText, $true))) {
-        $aligned = Test-Path -LiteralPath $pair[0]
-        if ($aligned) {
-            $current = [IO.File]::ReadAllText($pair[0], $utf8)
-            $aligned = if ($pair[2]) { (& $canonical $current) -ceq (& $canonical $pair[1]) } else { $current -ceq $pair[1] }
-        }
-        if (-not $aligned) { throw "Hote natif $hostName non aligne ($($pair[0])) : reexecuter install.ps1" }
-    }
+    $aligned = (Test-Path -LiteralPath $manifestPath) -and
+        ((& $canonical ([IO.File]::ReadAllText($manifestPath, $utf8))) -ceq (& $canonical $manifestText))
+    if (-not $aligned) { throw "Hote natif $hostName non aligne ($manifestPath) : reexecuter install.ps1" }
     Write-Host "Hote natif $hostName : OK."
     return
 }
 
-if ($Runtime -eq 'Native' -and -not (Test-Path -LiteralPath $nativeExe -PathType Leaf)) { throw "Moteur natif absent : executer install.ps1" }
-if ($Runtime -eq 'Python' -and -not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) { throw "Runtime Python absent : executer install.ps1" }
+if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) { throw "Moteur natif absent ($Exe) : executer install.ps1" }
 [IO.Directory]::CreateDirectory($hostDirectory) | Out-Null
-[IO.File]::WriteAllText($launcher, $launcherText, $utf8)
 [IO.File]::WriteAllText($manifestPath, $manifestText, $utf8)
+if (Test-Path -LiteralPath $oldLauncher) { Remove-Item -LiteralPath $oldLauncher -Force }
 $registered = Invoke-RegistreReel @("add `"$RegistryKey`" /ve /t REG_SZ /d `"$manifestPath`" /f", "query `"$RegistryKey`" /ve")
 if (-not $registered.Contains($manifestPath)) { throw "Hote natif $hostName : cle du registre non ecrite ($registered)" }
-Write-Host "Hote natif $hostName declare a Chrome ($manifestPath)."
+Write-Host "Hote natif $hostName declare a Chrome ($manifestPath -> $Exe)."

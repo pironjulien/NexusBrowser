@@ -1,9 +1,10 @@
 name: Install
 
-# The public install on a clean Windows (a fresh GitHub runner): the one-line installer under Windows PowerShell 5.1,
-# then every AI client found has its entry, and a real MCP round trip goes through the bridge and the extension.
-# Branded Chrome no longer loads an extension from the command line (Chrome 137+), so the run uses Chrome for Testing
-# with --load-extension, the one step a user does by hand in chrome://extensions.
+# The public install on a clean Windows (a fresh GitHub runner), from the release package built here: the one-line
+# installer under Windows PowerShell 5.1 (no Python, no .NET on the path it uses), then every AI client found has its
+# entry, the shared daemon answers with the user token, and a real MCP round trip goes through the bridge and the
+# extension. Branded Chrome no longer loads an extension from the command line (Chrome 137+), so the run uses Chrome for
+# Testing with --load-extension, the one step a user does by hand in chrome://extensions.
 
 on:
   push:
@@ -19,16 +20,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Release package (win-x64), as the release workflow builds it
+        shell: pwsh
+        run: |
+          ./scripts/package-release.ps1 -Runtime win-x64 -OutDir dist
+          Get-ChildItem dist -File | ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } |
+            Set-Content dist/SHA256SUMS.txt -Encoding utf8NoBOM
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: package
+          path: dist/
+
   clean-windows:
+    needs: package
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: package
+          path: dist
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: 24
+          package-manager-cache: false
       - name: AI clients a user may have (Claude Code and Codex CLIs, Antigravity and Claude Desktop folders)
         shell: pwsh
         run: |
@@ -47,81 +74,62 @@ jobs:
             "--load-extension=$env:GITHUB_WORKSPACE\extension", 'about:blank'
       - name: One-line installer (Windows PowerShell 5.1, as typed by a user)
         shell: powershell
-        env:
-          NEXUS_BROWSER_SOURCE: ${{ github.workspace }}
-        run: Get-Content -Raw .\get.ps1 | Invoke-Expression
-      - name: Entries and a real round trip (MCP stdio, bridge, extension, page)
+        run: |
+          $env:NEXUS_BROWSER_SOURCE = (Resolve-Path dist\NexusBrowser-win-x64.zip).Path
+          Get-Content -Raw .\get.ps1 | Invoke-Expression
+      - name: Entries, daemon and a real round trip (MCP stdio, bridge, extension, page)
         shell: pwsh
         run: |
-          $python = Join-Path $HOME '.nexus\nexus-browser\venv\Scripts\python.exe'
-          & $python -B tests\install_smoke.py (Join-Path $env:LOCALAPPDATA 'NexusBrowser\app')
-          if ($LASTEXITCODE) { Get-Content (Join-Path $HOME '.nexus\nexus-browser\bridge.log') -Tail 40 -ErrorAction SilentlyContinue; exit 1 }
+          ./tests/install-smoke.ps1
+          if (-not $?) { Get-Content (Join-Path $HOME '.nexus\nexus-browser\bridge.log') -Tail 40 -ErrorAction SilentlyContinue; exit 1 }
       - name: Guide shown when the extension is not loaded yet (no wait)
         shell: powershell
         run: |
           & "$env:LOCALAPPDATA\NexusBrowser\app\scripts\guide-extension.ps1" -WaitSeconds 0
           if (-not $?) { exit 1 }
-      - name: Self-update by the bridge (Nexus contract) - task, state, a real run to the latest release
+      - name: Self-update contract (task and state of the bridge)
         shell: pwsh
         run: |
-          if (-not (Get-ScheduledTask -TaskName 'Nexus Browser Update' -ErrorAction SilentlyContinue)) { throw 'update task missing' }
+          $task = Get-ScheduledTask -TaskName 'Nexus Browser Update' -ErrorAction SilentlyContinue
+          if (-not $task -or $task.Actions.Execute -ne 'conhost.exe' -or $task.Actions.Arguments -notmatch 'self-update\.ps1') { throw 'update task missing or not native' }
           $token = (Get-Content (Join-Path $HOME '.nexus\nexus-browser\bridge-token') -Raw).Trim()
           $state = Invoke-RestMethod -Uri 'http://127.0.0.1:9225/api/update' -Headers @{ 'X-Nexus-Browser-Token' = $token }
           Write-Host ($state | ConvertTo-Json -Compress)
           if ($state.product -ne 'browser' -or -not $state.version) { throw 'no update state' }
-          $file = Join-Path $HOME '.nexus\status\browser.json'
-          schtasks /Run /TN 'Nexus Browser Update' | Out-Null
-          $deadline = (Get-Date).AddMinutes(10)
-          do {
-            Start-Sleep -Seconds 5
-            $status = Get-Content $file -Raw | ConvertFrom-Json
-          } while ($status.state -notin 'done', 'failed' -and (Get-Date) -lt $deadline)
-          Get-Content (Join-Path $HOME '.nexus\nexus-browser\update.log') -ErrorAction SilentlyContinue
-          if ($status.state -ne 'done') { throw "self-update: $($status.state) $($status.message)" }
-          Write-Host "Self-update OK: $($status.message)"
       - name: Running the installer again changes nothing (update path)
         shell: powershell
-        env:
-          NEXUS_BROWSER_SOURCE: ${{ github.workspace }}
-        run: Get-Content -Raw .\get.ps1 | Invoke-Expression
-      - name: A failed update keeps the working version (injected faults)
+        run: |
+          $env:NEXUS_BROWSER_SOURCE = (Resolve-Path dist\NexusBrowser-win-x64.zip).Path
+          Get-Content -Raw .\get.ps1 | Invoke-Expression
+          & pwsh -NoProfile -File .\tests\install-smoke.ps1 -EntriesOnly
+          if ($LASTEXITCODE) { exit 1 }
+      - name: A tampered package or a failed update keeps the working version
         shell: pwsh
         run: |
           $root = Join-Path $env:LOCALAPPDATA 'NexusBrowser'
           $app = Join-Path $root 'app'
-          $token = (Get-Content (Join-Path $HOME '.nexus\nexus-browser\bridge-token') -Raw).Trim()
           function Assert-Working([string]$Case) {
-            # app: the installed copy; build and native: the native engine's build cache and immutable versions.
-            $left = @(Get-ChildItem $root -Directory | Where-Object Name -notin 'app', 'build', 'native' | ForEach-Object Name)
+            $left = @(Get-ChildItem $root -Directory | Where-Object Name -notin 'app', 'versions' | ForEach-Object Name)
             if ($left) { throw "$Case : folders left behind: $left" }
             if ((Get-Content (Join-Path $app 'install.ps1') -Raw) -match 'Injected failure') { throw "$Case : broken version installed" }
-            $deadline = (Get-Date).AddSeconds(60)
-            do {
-              try { $status = Invoke-RestMethod -Uri 'http://127.0.0.1:9225/api/status' -Headers @{ 'X-Nexus-Browser-Token' = $token }; break } catch { Start-Sleep -Seconds 2 }
-            } while ((Get-Date) -lt $deadline)
-            if (-not $status) { throw "$Case : the bridge is not running" }
-            Write-Host "$Case : working version kept, bridge $($status.version) running"
+            $health = Invoke-RestMethod 'http://127.0.0.1:16182/health' -TimeoutSec 5
+            Write-Host "$Case : working version kept, daemon $($health.version) running"
           }
-          Start-ScheduledTask -TaskName 'Nexus Browser Bridge'
-          Assert-Working 'before the faults'
-          # 1. A Python dependency cannot be downloaded (lock pointing to an unreachable host, no cache): nothing changes.
-          $deps = Join-Path $env:RUNNER_TEMP 'broken-deps'
-          Copy-Item $env:GITHUB_WORKSPACE $deps -Recurse
-          (Get-Content (Join-Path $deps 'uv.lock') -Raw).Replace('files.pythonhosted.org', 'files.pythonhosted.invalid') |
-            Set-Content (Join-Path $deps 'uv.lock') -NoNewline
-          $env:NEXUS_BROWSER_SOURCE = $deps; $env:UV_NO_CACHE = '1'
+          # 1. A package whose hash is not the one listed: refused before anything changes.
+          $bad = Join-Path $env:RUNNER_TEMP 'tampered'
+          New-Item -ItemType Directory $bad | Out-Null
+          Copy-Item dist\* $bad
+          [IO.File]::AppendAllText((Join-Path $bad 'NexusBrowser-win-x64.zip'), 'x')
+          $env:NEXUS_BROWSER_SOURCE = Join-Path $bad 'NexusBrowser-win-x64.zip'
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
-          if ($LASTEXITCODE -eq 0) { throw 'unavailable dependency: the update should have failed' }
-          Remove-Item Env:UV_NO_CACHE
-          Assert-Working 'unavailable dependency'
-          # 2. The installer fails after stopping the bridge: the previous folder comes back, is installed again and its
-          #    bridge restarted.
-          $bridge = Join-Path $env:RUNNER_TEMP 'broken-install'
-          Copy-Item $env:GITHUB_WORKSPACE $bridge -Recurse
-          $install = Join-Path $bridge 'install.ps1'
-          (Get-Content $install -Raw).Replace('# --- Tache du pont', "throw 'Injected failure (CI)'`r`n# --- Tache du pont") |
-            Set-Content $install -NoNewline
-          $env:NEXUS_BROWSER_SOURCE = $bridge
+          if ($LASTEXITCODE -eq 0) { throw 'tampered package: the update should have been refused' }
+          Assert-Working 'tampered package'
+          # 2. The installer fails: the previous folder comes back and is installed again.
+          $broken = Join-Path $env:RUNNER_TEMP 'broken-install'
+          Copy-Item $app $broken -Recurse
+          $install = Join-Path $broken 'install.ps1'
+          (Get-Content $install -Raw).Replace('# --- 3. Bridge task', "throw 'Injected failure (CI)'`r`n# --- 3. Bridge task") | Set-Content $install -NoNewline
+          $env:NEXUS_BROWSER_SOURCE = $broken
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
           if ($LASTEXITCODE -eq 0) { throw 'failing installer: the update should have failed' }
           Assert-Working 'failing installer'
@@ -130,12 +138,17 @@ jobs:
   pack:
     # The Nexus pack (get-nexus.ps1) runs get.ps1 with NEXUS_PACK=1 on a clean Windows: no question, no wait, no window,
     # exit code 0, a NEXUS_PACK_RESULT line, Antigravity as a plugin; the guide is the pack's own last step.
+    needs: package
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: package
+          path: dist
       - name: Antigravity and Codex folders a user may have
         shell: pwsh
         run: New-Item -ItemType Directory -Force "$HOME\.gemini\antigravity", "$HOME\.codex" | Out-Null
@@ -143,8 +156,8 @@ jobs:
         shell: pwsh
         env:
           NEXUS_PACK: '1'
-          NEXUS_BROWSER_SOURCE: ${{ github.workspace }}
         run: |
+          $env:NEXUS_BROWSER_SOURCE = (Resolve-Path dist\NexusBrowser-win-x64.zip).Path
           $before = @(Get-Process chrome -ErrorAction SilentlyContinue).Count
           $watch = [Diagnostics.Stopwatch]::StartNew()
           $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1 2>&1 | ForEach-Object { "$_" }
@@ -153,6 +166,7 @@ jobs:
           if ($code -ne 0) { throw "get.ps1 exit code $code" }
           $line = $out | Where-Object { $_ -like 'NEXUS_PACK_RESULT *' } | Select-Object -Last 1
           if ($line -notmatch 'Antigravity=plugin' -or $line -notmatch 'Codex=declared') { throw "unexpected summary: $line" }
+          if (($out | Where-Object { $_.Trim() } | Select-Object -Last 1) -ne $line) { throw 'NEXUS_PACK_RESULT is not the last line' }
           if (@(Get-Process chrome -ErrorAction SilentlyContinue).Count -gt $before) { throw 'Chrome was opened' }
           $plugin = Join-Path $HOME '.gemini\antigravity\plugins\nexus-browser'
           foreach ($f in 'plugin.json', 'mcp_config.json', 'skills\nexus-browser\SKILL.md') {

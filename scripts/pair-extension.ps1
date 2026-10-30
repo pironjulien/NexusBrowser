@@ -1,5 +1,5 @@
 param([string]$ExtensionId = '', [switch]$Print)
-# Appairage de l'extension au pont local, sans hote natif (native-host/bridge_pairing.py) : pour une installation ou
+# Appairage de l'extension au pont local, sans hote natif (native\BridgePairing.cs) : pour une installation ou
 # l'hote natif com.nexus.browser_auth ne peut pas etre declare a Chrome (application du Microsoft Store, cle HKCU
 # virtualisee). Demande au pont une offre (secret de 256 bits, usage unique, 5 minutes) avec le jeton du pont, puis
 # ouvre chrome-extension://<id>/pair.html#<secret> dans Chrome : la page appaire l'extension et efface le secret de
@@ -24,7 +24,7 @@ if ($Print) {
 
 # Extension du Chrome Web Store une fois publiee (store_public), sinon l'extension non empaquetee (identifiant fixe).
 if (-not $ExtensionId) {
-    $config = Get-Content (Join-Path $root 'native-host\bridge_config.json') -Raw | ConvertFrom-Json
+    $config = Get-Content (Join-Path $root 'native\resources\bridge_config.json') -Raw | ConvertFrom-Json
     $ExtensionId = if ($config.store_public) { $config.store_id } else { ([string]$config.allowed_origins[0]) -replace '^chrome-extension://([a-p]{32})/?$', '$1' }
 }
 if ($ExtensionId -notmatch '^[a-p]{32}$') { throw "Invalid extension ID: $ExtensionId" }

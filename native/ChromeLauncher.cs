@@ -4,7 +4,7 @@ using Microsoft.Win32;
 
 namespace NexusBrowser.Native;
 
-/// <summary>Normal Chrome startup on the installed Default profile, matching the Python bridge client.</summary>
+/// <summary>Normal Chrome startup on the installed Default profile, as the bridge client always did.</summary>
 internal sealed class ChromeLauncher
 {
     private readonly Func<bool> _running;

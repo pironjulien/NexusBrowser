@@ -307,6 +307,7 @@ public sealed partial class McpServer : IDisposable
         var serverCt = linkedCts.Token;
 
         var sessionHeartbeatTask = Task.Run(() => RunDaemonHeartbeatsAsync(serverCt), serverCt);
+        var restartTask = Task.Run(() => WatchRestartRequestAsync(RestartRequest.DefaultPath(), linkedCts, serverCt), serverCt);
 
         try
         {
@@ -337,6 +338,37 @@ public sealed partial class McpServer : IDisposable
         {
             linkedCts.Cancel();
             try { await sessionHeartbeatTask; } catch { }
+            try { await restartTask; } catch { }
+        }
+    }
+
+    /// <summary>Number of tool calls running now (all sessions).</summary>
+    internal int RunningCalls => _requests.Count;
+
+    /// <summary>A new build was installed: stop once no tool call is running, so the supervisor starts the new one.
+    /// Sessions see a short disconnection; their tabs stay theirs to take back (orphans).</summary>
+    internal async Task WatchRestartRequestAsync(string requestPath, CancellationTokenSource stop, CancellationToken ct, double pollSeconds = 2)
+    {
+        string loaded = RestartRequest.CodeFingerprint();
+        bool wanted = false;
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                wanted |= RestartRequest.Wanted(requestPath, loaded);
+                if (wanted && _requests.IsEmpty)
+                {
+                    Console.Error.WriteLine("NexusBrowser: restart requested by the installer; no call running, stopping for the new build.");
+                    stop.Cancel();
+                    return;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"NexusBrowser: restart request unreadable: {ex.Message}");
+            }
+            try { await Task.Delay(TimeSpan.FromSeconds(pollSeconds), ct); }
+            catch (OperationCanceledException) { return; }
         }
     }
 
@@ -924,6 +956,12 @@ public sealed partial class McpServer : IDisposable
         var argumentErrors = new List<string>();
         ValidateSchema(descriptor["inputSchema"], args, "arguments", argumentErrors);
         if (argumentErrors.Count > 0) return ErrorJson("Invalid tool arguments: " + string.Join("; ", argumentErrors));
+        // A wait the bridge would refuse is refused first: no page read, and an accord is never spent on it.
+        if (TryGetInt(args, "timeout_ms") is int waitMs)
+        {
+            try { TransportTimeout(waitMs); }
+            catch (ArgumentException ex) { return ErrorJson(ex.Message); }
+        }
         Accords.Hold? hold = null;
         try
         {

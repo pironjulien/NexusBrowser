@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "nexus-browser",
   "display_name": "NexusBrowser",
-  "version": "2.32.0",
+  "version": "2.33.0",
   "description": "Your real Chrome, driven by Claude in background tabs: navigation, forms, captures, exports, downloads.",
   "long_description": "Lets Claude drive your real Chrome (your sessions) in background tabs, without taking your mouse or keyboard: open pages, read and export them (Google Docs, Sheets, Slides, YouTube transcripts), fill forms, click, capture, follow the network, download files. Tabs are grouped per agent; your own tabs are never touched unless you ask. Sending, paying, publishing and other outward gestures need your explicit yes. Needs the NexusBrowser Chrome extension and its local bridge, installed once on Windows with `irm https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/get.ps1 | iex`; the tools explain each step until then.",
   "author": {
@@ -18,11 +18,11 @@
   "support": "https://github.com/pironjulien/NexusBrowser/issues",
   "icon": "icon.png",
   "server": {
-    "type": "uv",
-    "entry_point": "src/server.py",
+    "type": "binary",
+    "entry_point": "server/NexusBrowser.exe",
     "mcp_config": {
-      "command": "uv",
-      "args": ["run", "--directory", "${__dirname}", "--python", "3.14", "src/server.py"],
+      "command": "${__dirname}/server/NexusBrowser.exe",
+      "args": ["--mcp"],
       "env": {
         "NEXUS_BROWSER_AGENT": "Claude"
       }
@@ -33,9 +33,6 @@
   "license": "MIT",
   "privacy_policies": ["https://julienpiron.fr/en/nexusbrowser/confidentialite/"],
   "compatibility": {
-    "platforms": ["win32"],
-    "runtimes": {
-      "python": ">=3.14,<3.15"
-    }
+    "platforms": ["win32"]
   }
 }

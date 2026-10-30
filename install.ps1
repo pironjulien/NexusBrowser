@@ -1,265 +1,201 @@
-# Installe NexusBrowser sur ce PC (a relancer sans risque apres une mise a jour synchronisee par OneDrive).
-#  - environnement Python HORS OneDrive : ~\.nexus\nexus-browser\venv (jeton, journaux, captures et exports a cote)
-#  - hote natif com.nexus.browser_auth declare a Chrome (HKCU) ; tache "Nexus Browser Bridge" sans declencheur
-#    (le pont demarre a la demande : premier appel d'un agent, schtasks /Run)
-#  - serveur MCP "nexus-browser" inscrit pour Antigravity avec son nom d'agent (Codex et Claude : par leurs plugins)
-#    (groupe d'onglets a son nom) ; inscriptions remplacees en place, rien d'autre n'est touche. Antigravity : par son
-#    plugin SEULEMENT (une entree en plus dans mcp_config.json lancait un second serveur, outils en double)
-#  - competence nexus-browser : dans le plugin pour Antigravity (ancienne copie globale retiree) ; Codex la recoit par
-#    son plugin perso (NexusCodex) ; Claude Code recoit serveur et competence
-#    par le plugin nexus-browser du catalogue "nexus" (NexusClaude)
-#  - migration depuis NexusAGY (pont d'avant le 17/10/2026) : ancienne tache, ancien hote natif (cle et fichiers),
-#    ancien jeton ~\.nexusagy\bridge-token et anciennes inscriptions retires, chaque retrait journalise dans
-#    ~\.nexus\nexus-browser\install.log ; l'ancienne extension "Antigravity Browser Bridge" est a retirer de Chrome
-#  - tests hors ligne ; -SkipTests pour les sauter
-#  - -Register (installation publique, get.ps1) : serveur declare aux clients trouves (Claude Code, Claude Desktop,
-#    Codex, Antigravity) par scripts\register_clients.py, puis guide du chargement de l'extension dans Chrome
-#  - NEXUS_PACK=1 (pack Nexus, get-nexus.ps1) : aucune question, aucune attente, aucune fenetre (ni Chrome, ni guide,
-#    ni presse-papiers) ; le pack appelle lui-meme scripts\guide-extension.ps1 -WaitSeconds 0 a la fin
-# Tourne sous Windows PowerShell 5.1 comme sous pwsh 7 (fichier en ASCII : 5.1 lit un .ps1 sans BOM en page ANSI).
-# Usage : pwsh -NoProfile -File install.ps1 [-SkipTests] [-SkipLaunch] [-Register]
-param([switch]$SkipTests, [switch]$SkipLaunch, [switch]$Register,
-    [ValidateSet('Auto', 'Native', 'Python')][string]$Runtime = 'Auto')
+# Installs NexusBrowser on this PC (safe to run again after an update). No Python: the engine is NexusBrowser.exe (.NET).
+#  - engine: the prebuilt one of a release (engine\, from get.ps1), else built here with the .NET 10 SDK
+#    (scripts\build-native.ps1, outputs in ~\.nexus\build\nexus-browser); installed once per build in
+#    %LOCALAPPDATA%\NexusBrowser\versions\<fingerprint> (never overwritten while it runs), named by current.json
+#  - native host com.nexus.browser_auth declared to Chrome (HKCU), task "Nexus Browser Bridge" without trigger (the
+#    bridge starts on demand: first agent call, schtasks /Run)
+#  - shared MCP daemon (127.0.0.1:16182, bearer token): on a Nexus workstation declared to the daemon supervisor
+#    (~\.nexus\daemons\specs\nexus-browser.json, key exe, restart_request); a new build asks the running daemon to
+#    restart once no call is running. Public install (-Register) without that supervisor: task "Nexus Browser MCP" at
+#    logon, token in the user variable NEXUS_MCP_TOKEN (created once, shared with the other Nexus products)
+#  - Antigravity (Nexus workstation): plugin nexus-browser pointing to the shared daemon
+#  - -Register (public install, get.ps1): server declared to the AI clients found (NexusBrowser.exe --register), then a
+#    guide for loading the extension in Chrome; NEXUS_PACK=1 (the Nexus pack): no question, no wait, no window
+#  - offline tests (test.ps1) unless -SkipTests
+# Runs under Windows PowerShell 5.1 and pwsh 7 (ASCII file: 5.1 reads a .ps1 without BOM in the ANSI code page).
+# Usage: pwsh -NoProfile -File install.ps1 [-SkipTests] [-SkipLaunch] [-Register]
+param([switch]$SkipTests, [switch]$SkipLaunch, [switch]$Register)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'scripts\runtime.ps1')
-$daemonSpec = Join-Path $HOME '.nexus\daemons\specs\nexus-browser.json'
-if ($Runtime -eq 'Auto') {
-    if (Test-Path -LiteralPath $daemonSpec) {
-        $installedSpec = Get-Content -LiteralPath $daemonSpec -Raw | ConvertFrom-Json
-        $Runtime = if ($installedSpec.python -eq $nativeExe) { 'Native' } else { 'Python' }
-    } else { $Runtime = 'Native' }
-}
-$useNative = $Runtime -eq 'Native'
-$runtimeParkedSpec = "$daemonSpec.runtime-switch"
-trap {
-    if (Test-Path -LiteralPath $runtimeParkedSpec) { Move-Item -LiteralPath $runtimeParkedSpec -Destination $daemonSpec -Force }
-    break
-}
-Write-Host "NexusBrowser runtime: $Runtime"
-$utf8 = [Text.UTF8Encoding]::new($false)
+$utf8 = New-Object Text.UTF8Encoding $false
 New-Item -ItemType Directory -Force $localRoot | Out-Null
-
 $journal = Join-Path $localRoot 'install.log'
 function Write-Journal([string]$Text) {
     Write-Host $Text
     [IO.File]::AppendAllText($journal, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' ' + $Text + [Environment]::NewLine, $utf8)
 }
+$version = (Get-Content (Join-Path $PSScriptRoot 'VERSION') -Raw).Trim()
+$previousExe = $nativeExe
+$pack = $env:NEXUS_PACK -eq '1'
 
-$uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
-if (-not $uv) { throw "uv introuvable : l'installer (https://docs.astral.sh/uv/) puis relancer." }
-if ($useNative) {
-    $nativeCandidate = Join-Path $nativeRoot 'build\candidate'
-    & (Join-Path $PSScriptRoot 'scripts\build-native.ps1') -OutputDirectory $nativeCandidate
-}
-
-function Stop-BridgeTask([string]$Name) {
-    $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
-    if (-not $task -or $task.State -ne 'Running') { return }
-    Stop-ScheduledTask -TaskName $Name
-    $deadline = (Get-Date).AddSeconds(10)
-    while ((Get-ScheduledTask -TaskName $Name).State -eq 'Running' -and (Get-Date) -lt $deadline) {
-        Start-Sleep -Milliseconds 100
-    }
-    if ((Get-ScheduledTask -TaskName $Name).State -eq 'Running') { throw "Le pont '$Name' ne s'est pas arrete." }
-}
-
-# Les deux ponts (ancien et nouveau) ecoutent les memes ports 9224/9225 : arretes avant tout. Des onglets pilotes par
-# un agent : code de sortie 3, rien n'est touche (get.ps1 remet alors le dossier precedent en place).
-if (-not $SkipLaunch -and (Test-Path -LiteralPath $pythonExe)) {
-    & $pythonExe -B (Join-Path $PSScriptRoot 'scripts\refresh_extension.py') --check-only
-    if ($LASTEXITCODE -eq 3) { Write-Warning 'Actualisation differee : des onglets sont pilotes par un agent. Aucun pont arrete.'; exit 3 }
-    if ($LASTEXITCODE -eq 2 -and (Get-Process -Name chrome -ErrorAction SilentlyContinue) -and
-        (Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue).State -ne 'Running') {
-        # Pont a la demande pas encore demarre : le lancer pour que l'extension reponde, puis reverifier.
-        schtasks /Run /TN $bridgeTaskName | Out-Null
-        Start-Sleep -Seconds 5
-        & $pythonExe -B (Join-Path $PSScriptRoot 'scripts\refresh_extension.py') --check-only
-        if ($LASTEXITCODE -eq 3) { Write-Warning 'Actualisation differee : des onglets sont pilotes par un agent. Aucun pont arrete.'; exit 3 }
-    }
-    # -Register : a la premiere installation, l'extension n'est souvent pas encore chargee dans Chrome.
-    if ($LASTEXITCODE -eq 2 -and -not $Register -and (Get-Process -Name chrome -ErrorAction SilentlyContinue)) {
-        # A broken native auth host can leave the bridge online with no client. No command is running then;
-        # replacing that host is the repair itself and does not need Chrome to restart.
-        $repairable = $false
-        try {
-            $bridgeToken = [IO.File]::ReadAllText($tokenFile).Trim()
-            $bridgeStatus = Invoke-RestMethod -Uri 'http://127.0.0.1:9225/api/status' `
-                -Headers @{ 'X-Nexus-Browser-Token' = $bridgeToken } -TimeoutSec 5
-            $repairable = $bridgeStatus.status -eq 'online' -and $bridgeStatus.connected_clients -eq 0
-        } catch { }
-        if (-not $repairable) { throw 'Chrome est ouvert mais son pont ne repond pas : aucune session arretee.' }
-        Write-Journal 'Reparation du pont sans client authentifie ; Chrome reste ouvert.'
-    }
-}
-Stop-BridgeTask 'NexusAGY Browser Bridge'
-Stop-BridgeTask $bridgeTaskName
-if (-not $useNative -and (Test-Path -LiteralPath $daemonSpec)) {
-    $installedSpec = Get-Content -LiteralPath $daemonSpec -Raw | ConvertFrom-Json
-    if ($installedSpec.python -eq $nativeExe) {
-        if (Test-Path -LiteralPath $runtimeParkedSpec) { throw 'Previous Browser runtime switch unfinished.' }
-        Move-Item -LiteralPath $daemonSpec -Destination $runtimeParkedSpec
-        $deadline = [DateTime]::UtcNow.AddSeconds(20)
-        do {
-            $oldNative = @(Get-CimInstance Win32_Process -Filter "Name='NexusBrowser.exe'" | Where-Object {
-                $_.ExecutablePath -eq $nativeExe -and $_.CommandLine -match '--http\s+16182'
-            })
-            if (-not $oldNative.Count) { break }
-            Start-Sleep -Milliseconds 250
-        } while ([DateTime]::UtcNow -lt $deadline)
-        if ($oldNative.Count) { throw 'Native Browser daemon did not drain; Python switch cancelled.' }
-    }
-}
-
-# Python systeme de preference : celui de uv sous %AppData% est virtualise par l'application Claude.
-$systemPython = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python314\python.exe'
-if (-not (Test-Path $pythonExe)) {
-    if (Test-Path $systemPython) { & $uv venv --python $systemPython $venv } else { & $uv venv --python 3.14 $venv }
-    if ($LASTEXITCODE) { throw 'Creation de l''environnement Python en echec.' }
-}
-# Le demon MCP partage (port 16182) tourne sur ce venv et y verrouille les modules natifs (.pyd) : des paquets changes
-# pendant qu'il tourne laissaient le venv a moitie installe (27/10/2026 : websockets 17.3 sans asyncio\server.py, pont
-# muet). Paquets a changer : sa spec est mise de cote (le superviseur l'arrete sans le relancer), puis remise apres la
-# synchro, et il redemarre sur le nouveau code. Rien a changer : le demon reste en place.
-$daemonSpec = Join-Path $HOME '.nexus\daemons\specs\nexus-browser.json'
-$parkedSpec = "$daemonSpec.pause"
-$previousPreference = $ErrorActionPreference; $ErrorActionPreference = 'Continue'  # 5.1 : stderr de uv n'est pas une erreur
-$plan = & $uv sync --frozen --all-groups --project $PSScriptRoot --dry-run 2>&1 | Out-String
-$ErrorActionPreference = $previousPreference
-if ($plan -notmatch 'Would make no changes' -and (Test-Path $daemonSpec) -and
-    (Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue)) {
-    Move-Item -LiteralPath $daemonSpec $parkedSpec -Force
-    $deadline = (Get-Date).AddSeconds(15)
-    while ((Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
-        Start-Sleep -Milliseconds 250
-    }
-    if (Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue) {
-        Move-Item -LiteralPath $parkedSpec $daemonSpec -Force
-        throw "Le demon MCP Browser ne s'est pas arrete : environnement laisse tel quel."
-    }
-    Write-Journal 'Demon MCP Browser arrete le temps de mettre a jour ses paquets.'
-}
-try {
-    & $uv sync --frozen --all-groups --project $PSScriptRoot
-    if ($LASTEXITCODE) { throw 'uv sync a echoue.' }
-} finally {
-    if (Test-Path -LiteralPath $parkedSpec) { Move-Item -LiteralPath $parkedSpec $daemonSpec -Force }
-}
-
-if ($useNative) { & (Join-Path $PSScriptRoot 'scripts\deploy-native.ps1') -CandidateDirectory $nativeCandidate }
-& (Join-Path $PSScriptRoot 'scripts\installer-hote-natif.ps1') -Runtime $Runtime
-
-# --- Tache du pont : aucun declencheur, lancee a la demande (bridge_client.ensure_bridge_running).
-$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-if ($useNative) {
-    $arguments = "--bridge --token-file `"$tokenFile`" --log-file `"$(Join-Path $localRoot 'bridge.log')`""
-    $action = New-ScheduledTaskAction -Execute $nativeExe -Argument $arguments -WorkingDirectory $localRoot
+# --- 1. Engine: one immutable folder per build.
+$prebuilt = Join-Path $PSScriptRoot 'engine'
+if (Test-Path -LiteralPath (Join-Path $prebuilt 'NexusBrowser.exe')) {
+    $candidate = $prebuilt
 } else {
-    $bridgeScript = Join-Path $repositoryRoot 'native-host\bridge_server.py'
-    $arguments = "-B `"$bridgeScript`" --token-file `"$tokenFile`" --log-file `"$(Join-Path $localRoot 'bridge.log')`""
-    $action = New-ScheduledTaskAction -Execute $pythonwExe -Argument $arguments -WorkingDirectory $localRoot
+    $candidate = Join-Path $buildRoot 'candidate'
+    & (Join-Path $PSScriptRoot 'scripts\build-native.ps1') -OutputDirectory $candidate
 }
+$fingerprint = Get-BuildFingerprint $candidate
+$versionDir = Join-Path $versionsRoot $fingerprint.Substring(0, 16)
+if (-not (Test-Path -LiteralPath (Join-Path $versionDir 'NexusBrowser.exe'))) {
+    $staging = "$versionDir.tmp-$PID"
+    New-Item -ItemType Directory -Force $staging | Out-Null
+    Get-ChildItem -LiteralPath $candidate | Copy-Item -Destination $staging -Recurse -Force
+    if (Test-Path -LiteralPath $versionDir) { Remove-Item -LiteralPath $versionDir -Recurse -Force }  # incomplete leftover
+    Rename-Item -LiteralPath $staging -NewName (Split-Path -Leaf $versionDir)
+    Write-Journal "Engine $version installed in $versionDir."
+}
+$exe = Join-Path $versionDir 'NexusBrowser.exe'
+$check = Invoke-Native $exe @('--version') 30
+if ($check.Code -or $check.Output -ne $version) { throw "Installed engine answers '$($check.Output)', expected $version." }
+# Where the plugin, skill and update script are read from (public update, client registration).
+[IO.File]::WriteAllText((Join-Path $versionDir 'installation.json'), (@{ repository_root = $PSScriptRoot } | ConvertTo-Json), $utf8)
+
+# --- 2. Agents driving tabs: the running bridge and daemon are left alone (their new build waits for the next start).
+$busy = $false
+if (-not $SkipLaunch -and (Test-Path -LiteralPath $tokenFile)) {
+    $probe = Invoke-Native $exe @('--refresh-extension', '--check-only') 60
+    $busy = $probe.Code -eq 3
+    if ($busy) { Write-Warning 'Agents are driving Chrome tabs: the running bridge and daemon keep their build until their next start.' }
+}
+
+[IO.File]::WriteAllText($currentFile, (@{ exe = $exe; version = $version; fingerprint = $fingerprint } | ConvertTo-Json), $utf8)
+& (Join-Path $PSScriptRoot 'scripts\installer-hote-natif.ps1') -Exe $exe
+
+# --- 3. Bridge task, started on demand (no trigger).
+function Get-EngineProcesses([string]$Pattern) {
+    @(Get-CimInstance Win32_Process -Filter "Name='NexusBrowser.exe'" | Where-Object { $_.CommandLine -match $Pattern })
+}
+$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
+$bridgeArguments = "--bridge --token-file `"$tokenFile`" --log-file `"$(Join-Path $localRoot 'bridge.log')`""
+$action = New-ScheduledTaskAction -Execute $exe -Argument $bridgeArguments -WorkingDirectory $localRoot
 $settings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-$principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
-# Register -Force garde les declencheurs d'une tache existante : recreee de zero.
-if (Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue) {
-    Unregister-ScheduledTask -TaskName $bridgeTaskName -Confirm:$false
+$oldBridges = @(Get-EngineProcesses '--bridge(\s|$)' | Where-Object { $_.ExecutablePath -ne $exe })
+if ($oldBridges.Count -and -not $busy -and -not $SkipLaunch) {
+    if ((Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue).State -eq 'Running') { Stop-ScheduledTask -TaskName $bridgeTaskName }
+    # The previous build's auth hosts cannot answer Chrome once its bridge is gone: Chrome reconnects to the new one.
+    Get-EngineProcesses '(--bridge(\s|$))|(chrome-extension://[a-p]{32}/)' | Where-Object { $_.ExecutablePath -ne $exe } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Write-Journal 'Previous bridge stopped; the new build starts on demand.'
 }
-Register-ScheduledTask -TaskName $bridgeTaskName -Action $action -Principal $principal -Settings $settings `
-    -Description 'Pont Chrome NexusBrowser (Antigravity, Claude, Codex), lance a la demande (aucun declencheur).' | Out-Null
-Write-Host "Tache '$bridgeTaskName' installee."
+# Register -Force keeps the triggers of an existing task: recreated from scratch.
+if (Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue) {
+    if ((Get-ScheduledTask -TaskName $bridgeTaskName).State -ne 'Running') { Unregister-ScheduledTask -TaskName $bridgeTaskName -Confirm:$false }
+    else { Set-ScheduledTask -TaskName $bridgeTaskName -Action $action | Out-Null }
+}
+if (-not (Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue)) {
+    Register-ScheduledTask -TaskName $bridgeTaskName -Action $action -Principal $principal -Settings $settings `
+        -Description 'NexusBrowser Chrome bridge (Antigravity, Claude, Codex), started on demand (no trigger).' | Out-Null
+}
+Write-Host "Task '$bridgeTaskName' -> $exe"
 
-# --- Tache de mise a jour (contrat des produits Nexus) : installation publique seulement (get.ps1, dossier
-#     %LOCALAPPDATA%\NexusBrowser\app). Sans declencheur : le pont la lance sur POST /api/update
-#     (native-host\bridge_update.py), elle execute scripts\self-update.ps1 sans fenetre. Un clone se met a jour par git.
-$updateTaskName = 'Nexus Browser Update'
-$publicApp = Join-Path $env:LOCALAPPDATA 'NexusBrowser\app'
-if ((Test-Path -LiteralPath $publicApp) -and ((Resolve-Path -LiteralPath $repositoryRoot).Path -eq (Resolve-Path -LiteralPath $publicApp).Path)) {
-    $updateAction = New-ScheduledTaskAction -Execute $pythonwExe -Argument "-B `"$(Join-Path $repositoryRoot 'scripts\self_update.py')`"" -WorkingDirectory $localRoot
+# --- 4. Update task (public install only, %LOCALAPPDATA%\NexusBrowser\app): the bridge starts it on POST /api/update;
+#     it runs scripts\self-update.ps1 without a window. A clone updates through git.
+$publicApp = Join-Path $nativeRoot 'app'
+if ((Test-Path -LiteralPath $publicApp) -and ((Resolve-Path -LiteralPath $PSScriptRoot).Path -eq (Resolve-Path -LiteralPath $publicApp).Path)) {
+    $updateAction = New-ScheduledTaskAction -Execute 'conhost.exe' -WorkingDirectory $localRoot `
+        -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $publicApp 'scripts\self-update.ps1')`""
     $updateSettings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-    if (Get-ScheduledTask -TaskName $updateTaskName -ErrorAction SilentlyContinue) {
-        Unregister-ScheduledTask -TaskName $updateTaskName -Confirm:$false
-    }
+    if (Get-ScheduledTask -TaskName $updateTaskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $updateTaskName -Confirm:$false }
     Register-ScheduledTask -TaskName $updateTaskName -Action $updateAction -Principal $principal -Settings $updateSettings `
-        -Description 'Mise a jour de NexusBrowser, lancee par son pont (POST /api/update), aucun declencheur.' | Out-Null
-    Write-Host "Tache '$updateTaskName' installee."
+        -Description 'NexusBrowser update, started by its bridge (POST /api/update), no trigger.' | Out-Null
+    Write-Host "Task '$updateTaskName' installed."
 }
 
-# --- Migration depuis NexusAGY : son pont, son hote natif et son jeton ne servent plus.
+# --- 5. Leftovers of the bridge before 17/10/2026 (NexusAGY): its task, native host and token no longer serve.
+. (Join-Path $PSScriptRoot 'scripts\registre-reel.ps1')
 if (Get-ScheduledTask -TaskName 'NexusAGY Browser Bridge' -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName 'NexusAGY Browser Bridge' -Confirm:$false
-    Write-Host 'Ancienne tache "NexusAGY Browser Bridge" retiree.'
+    Write-Journal 'Old task "NexusAGY Browser Bridge" removed.'
 }
-$oldHostKey = 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.nexusagy.bridge_auth'
-if (Test-Path $oldHostKey) {
-    Remove-Item $oldHostKey -Recurse -Force
-    Write-Journal 'Ancien hote natif com.nexusagy.bridge_auth retire de Chrome (cle HKCU).'
+if (Test-Path 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.nexusagy.bridge_auth') {
+    $null = Invoke-RegistreReel @('delete "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexusagy.bridge_auth" /f')
+    Write-Journal 'Old native host com.nexusagy.bridge_auth removed from Chrome (HKCU key).'
 }
-# Fichiers precis de l'ancien pont (jamais un motif) : son jeton et son hote natif. Le reste de ~\.nexusagy appartient
-# encore au Computer Use de NexusAGY et n'est pas touche.
 $oldRoot = Join-Path $HOME '.nexusagy'
-foreach ($old in @(
-        (Join-Path $oldRoot 'bridge-token'),
-        (Join-Path $oldRoot 'native-host\com.nexusagy.bridge_auth.json'),
+foreach ($old in @((Join-Path $oldRoot 'bridge-token'), (Join-Path $oldRoot 'native-host\com.nexusagy.bridge_auth.json'),
         (Join-Path $oldRoot 'native-host\nexusagy_bridge_auth.cmd'))) {
-    if (Test-Path -LiteralPath $old -PathType Leaf) {
-        Remove-Item -LiteralPath $old -Force
-        Write-Journal "Ancien fichier du pont NexusAGY retire : $old"
-    }
-}
-$oldHostDirectory = Join-Path $oldRoot 'native-host'
-if ((Test-Path -LiteralPath $oldHostDirectory -PathType Container) -and -not (Get-ChildItem -LiteralPath $oldHostDirectory -Force)) {
-    Remove-Item -LiteralPath $oldHostDirectory
-    Write-Journal "Ancien dossier vide de l'hote natif retire : $oldHostDirectory"
+    if (Test-Path -LiteralPath $old -PathType Leaf) { Remove-Item -LiteralPath $old -Force; Write-Journal "Old NexusAGY bridge file removed: $old" }
 }
 
-# --- Demon partage : un seul serveur nexus-browser pour toutes les sessions de Claude, Codex et Antigravity, declare
-#     au superviseur des demons Nexus (NexusInfra\ops\workstation\nexus-mcp-daemons.py, tache "Nexus MCP Daemons").
-#     Chaque client le joint par URL avec son agent (?agent=...) et le jeton de NexusSecure ; chaque session MCP a sa
-#     propre identite (ses onglets).
-$daemonExe = if ($useNative) { $nativeExe } else { $pythonExe }
-$args_ = if ($useNative) { @() } else { @('-B', (Join-Path $repositoryRoot 'client\mcp_server.py')) }
+# --- 6. Shared MCP daemon (port 16182): one nexus-browser server for every session of Claude, Codex and Antigravity.
 $port = 16182
-# Jeton commun aux deux PC : cree une seule fois par Sync-NexusPoste (etape "Demons MCP partages"), jamais ici. Un
-# installeur lance sur un PC neuf avant que OneDrive ait descendu le coffre en creait un autre, qui cassait l'autre PC.
-# Sans ce jeton (autre poste, coffre pas encore synchronise) : demon partage et inscription d'Antigravity sautes avec
-# un avertissement ; le pont, l'hote natif et la tache restent installes. ($tokenFile, de runtime.ps1, est le jeton du
-# pont : nom distinct.)
+$supervised = [bool](Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue)
+# Nexus workstation token, shared by both PCs: created once by Sync-NexusPoste, never here.
 $mcpTokenFile = if ($env:OneDrive) { Join-Path $env:OneDrive 'Documents\NexusSecure\agents\nexus-mcp-token.txt' }
 $token = $null
-if ($mcpTokenFile -and (Test-Path -LiteralPath $mcpTokenFile)) { $token = (Get-Content -LiteralPath $mcpTokenFile -Raw).Trim() }
-function Get-Url([string]$Agent) { "http://127.0.0.1:$port/mcp?agent=$($Agent.ToLower())" }
+if ($supervised -and $mcpTokenFile -and (Test-Path -LiteralPath $mcpTokenFile)) { $token = (Get-Content -LiteralPath $mcpTokenFile -Raw).Trim() }
+$daemonExes = @(Get-EngineProcesses "--http\s+$port" | Where-Object { $_.ExecutablePath -ne $exe })
 if ($token) {
-    $spec = [ordered]@{ port = $port; python = $daemonExe; args = @($args_); env = [ordered]@{ PYTHONUTF8 = '1'; PYTHONDONTWRITEBYTECODE = '1' } }
-    $specs = Join-Path $HOME '.nexus\daemons\specs'
-    New-Item -ItemType Directory -Force $specs | Out-Null
-    [IO.File]::WriteAllText((Join-Path $specs 'nexus-browser.json'), ($spec | ConvertTo-Json -Depth 5), $utf8)
-    if (Test-Path -LiteralPath $runtimeParkedSpec) { Remove-Item -LiteralPath $runtimeParkedSpec }
-    # Nouveau code : le demon en place est recharge une seule fois, en fin d'installation (sans -SkipLaunch), apres le
-    # controle des onglets pilotes ; son superviseur le relance et les clients se reconnectent seuls.
-    if (-not (Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue)) {
-        Write-Warning 'Superviseur des demons absent : lancer NexusInfra\ops\workstation\Sync-NexusPoste.ps1 -Apply.'
+    # exe: the supervisor's key. python (same value): read by supervisors built before the exe key; to drop once every
+    # workstation runs a NexusPoste that reads exe (an older one ignores a spec without it: daemon not started).
+    $spec = [ordered]@{ port = $port; exe = $exe; python = $exe; args = @(); env = [ordered]@{}; restart_request = $restartRequest }
+    $specText = $spec | ConvertTo-Json -Depth 5
+    $before = if (Test-Path -LiteralPath $daemonSpec) { [IO.File]::ReadAllText($daemonSpec) } else { '' }
+    if ($before -ne $specText) {
+        New-Item -ItemType Directory -Force (Split-Path $daemonSpec) | Out-Null
+        [IO.File]::WriteAllText("$daemonSpec.tmp", $specText, $utf8)
+        Move-Item -LiteralPath "$daemonSpec.tmp" -Destination $daemonSpec -Force
+        Write-Journal "Daemon spec -> $exe"
     }
+    foreach ($leftover in "$daemonSpec.runtime-switch", "$daemonSpec.pause", "$daemonSpec.installing") {
+        if (Test-Path -LiteralPath $leftover) { Remove-Item -LiteralPath $leftover -Force }
+    }
+    if ($daemonExes.Count) {
+        # The running daemon stops itself once no call runs; the supervisor then starts this build.
+        [IO.File]::WriteAllText($restartRequest, "code sha256:$fingerprint", $utf8)
+        # Builds before 2.33.0 do not read restart requests: stopped here unless agents are busy.
+        $legacy = @($daemonExes | Where-Object { $_.ExecutablePath -eq $legacyExe })
+        if ($legacy.Count -and -not $busy -and -not $SkipLaunch) {
+            $legacy | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Write-Journal 'Daemon of the previous engine (no restart request support) stopped; the supervisor starts the new one.'
+        }
+    }
+} elseif ($Register -and -not $supervised) {
+    # Public install: one token per PC in the user variable NEXUS_MCP_TOKEN, read by the daemon and by the AI apps'
+    # plugins (never written into their files); an existing one (another Nexus product) is kept.
+    $token = [Environment]::GetEnvironmentVariable('NEXUS_MCP_TOKEN', 'User')
+    if (-not $token -or $token.Length -lt 32) {
+        $bytes = New-Object byte[] 32
+        [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        $token = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+        [Environment]::SetEnvironmentVariable('NEXUS_MCP_TOKEN', $token, 'User')
+        Write-Host 'User variable NEXUS_MCP_TOKEN set (restart the AI apps to see it).'
+    }
+    $env:NEXUS_MCP_TOKEN = $token
+    $daemonAction = New-ScheduledTaskAction -Execute $exe -Argument "--http $port" -WorkingDirectory $localRoot
+    $daemonSettings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
+        -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
+    $existing = Get-ScheduledTask -TaskName $daemonTaskName -ErrorAction SilentlyContinue
+    $restart = $daemonExes.Count -and -not $busy
+    if ($existing -and ($existing.State -ne 'Running' -or $restart)) {
+        if ($existing.State -eq 'Running') { Stop-ScheduledTask -TaskName $daemonTaskName }
+        $daemonExes | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Unregister-ScheduledTask -TaskName $daemonTaskName -Confirm:$false
+        $existing = $null
+    }
+    if (-not $existing) {
+        Register-ScheduledTask -TaskName $daemonTaskName -Action $daemonAction -Trigger $trigger -Principal $principal -Settings $daemonSettings `
+            -Description "NexusBrowser MCP daemon (127.0.0.1:$port) shared by the AI apps, bearer token NEXUS_MCP_TOKEN." | Out-Null
+    }
+    if (-not $SkipLaunch -and (Get-ScheduledTask -TaskName $daemonTaskName).State -ne 'Running') { Start-ScheduledTask -TaskName $daemonTaskName }
+    Write-Host "Task '$daemonTaskName' -> $exe --http $port"
+} elseif (-not $supervised) {
+    Write-Warning 'No Nexus daemon supervisor and no -Register: shared daemon not installed (stdio servers still work).'
 } else {
-    $where = if ($mcpTokenFile) { $mcpTokenFile } else { 'OneDrive non configure' }
-    # Installation publique (-Register) : rien de partage a attendre, le serveur est declare en stdio plus bas.
-    if (-not $Register) { Write-Warning "Jeton MCP partage absent ($where) : demon partage et inscription d'Antigravity sautes. Poste Nexus : attendre la synchro OneDrive du coffre, lancer Sync-NexusPoste.ps1 -Apply, puis relancer install.ps1." }
+    Write-Warning "Shared MCP token absent ($mcpTokenFile): daemon not declared. Wait for OneDrive, run Sync-NexusPoste.ps1 -Apply, then install.ps1 again."
 }
 
-# Claude Code : serveur MCP et competence par le plugin nexus-browser du catalogue "nexus" (NexusClaude\plugins,
-# active par NexusClaude\claude-settings.json ; jeton dans la variable NEXUS_MCP_TOKEN des reglages, posee par
-# Sync-NexusPoste). Aucune inscription ici (aucune CLI Claude).
-
-# --- Codex : serveur et competence par le plugin perso nexus-browser de Codex (NexusCodex\scripts\installer-plugins-nexus.ps1,
-#     lance par Sync-NexusPoste) ; plus de table [mcp_servers] ici.
-
-# Antigravity : ~\.gemini\config (mcp_config.json, plugin nexus-browser et sa competence). La synchronisation de
-# NexusAGY fusionne sans retirer ce serveur ni ce plugin.
+# --- 7. Antigravity (Nexus workstation): plugin nexus-browser on the shared daemon, its skill; one declaration only.
 $agyRoot = Join-Path $HOME '.gemini\config'
 $agyConfig = Join-Path $agyRoot 'mcp_config.json'
-if ($token -and (Test-Path $agyConfig)) {
-    $entry = [PSCustomObject]@{ serverUrl = (Get-Url 'Antigravity'); headers = [PSCustomObject]@{ Authorization = "Bearer $token" } }
+if ($supervised -and $token -and (Test-Path $agyConfig)) {
+    $entry = [PSCustomObject]@{ serverUrl = "http://127.0.0.1:$port/mcp?agent=antigravity"; headers = [PSCustomObject]@{ Authorization = "Bearer $token" } }
     $plugin = Join-Path $agyRoot 'plugins\nexus-browser'
     foreach ($file in Get-ChildItem (Join-Path $PSScriptRoot 'plugins\nexus-browser') -File -Recurse) {
         if ($file.Name -eq 'mcp_config.json') { continue }
@@ -267,8 +203,7 @@ if ($token -and (Test-Path $agyConfig)) {
         New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
         Copy-Item $file.FullName $target -Force
     }
-    # Competence : la version personnelle du poste (perso\nexus-browser, depot prive, lue aussi par les plugins de
-    # Claude et de Codex) si elle existe, sinon la publique (skills\nexus-browser\SKILL.md).
+    # Skill: the workstation's own version (perso\nexus-browser, private) when present, else the public one.
     $pluginSkill = Join-Path $plugin 'skills\nexus-browser'
     New-Item -ItemType Directory -Force $pluginSkill | Out-Null
     $skill = Join-Path $PSScriptRoot 'perso\nexus-browser\SKILL.md'
@@ -276,16 +211,14 @@ if ($token -and (Test-Path $agyConfig)) {
     Copy-Item $skill (Join-Path $pluginSkill 'SKILL.md') -Force
     $pluginMcp = [PSCustomObject]@{ mcpServers = [PSCustomObject]@{ 'nexus-browser' = $entry } }
     [IO.File]::WriteAllText((Join-Path $plugin 'mcp_config.json'), ($pluginMcp | ConvertTo-Json -Depth 100), $utf8)
-    # Competence : seulement dans le plugin. Une ancienne copie globale (skills\nexus-browser) la doublait dans
-    # Antigravity : retiree, sauvegarde hors OneDrive.
     $oldSkill = Join-Path $agyRoot 'skills\nexus-browser'
     if (Test-Path $oldSkill) {
         $saved = Join-Path $localRoot "backups\agy-skill-nexus-browser-$(Get-Date -Format yyyyMMdd-HHmmss)"
         New-Item -ItemType Directory -Force (Split-Path $saved) | Out-Null
         Move-Item $oldSkill $saved
-        Write-Journal "Antigravity : copie globale du skill nexus-browser retiree (doublon du plugin), sauvegarde $saved"
+        Write-Journal "Antigravity: global copy of the nexus-browser skill removed (duplicate of the plugin), saved in $saved"
     }
-    # Plugin active dans config.json, seulement Antigravity ferme (sinon il reecrirait l'ancien fichier en quittant).
+    # Plugin enabled in config.json only while Antigravity is closed (open, it writes its file back on exit).
     $agyApp = Join-Path $agyRoot 'config.json'
     if ((Test-Path $agyApp) -and -not (Get-Process -Name Antigravity -ErrorAction SilentlyContinue)) {
         $app = Get-Content $agyApp -Raw | ConvertFrom-Json
@@ -295,92 +228,76 @@ if ($token -and (Test-Path $agyConfig)) {
             [IO.File]::WriteAllText($agyApp, ($app | ConvertTo-Json -Depth 100), $utf8)
         }
     }
-    # Une seule declaration : le plugin. L'entree globale de mcp_config.json (versions d'avant la 2.7.0) est retiree
-    # des que le plugin est active (sinon Antigravity perdrait nexus-browser) ; sauvegarde hors OneDrive, autres
-    # serveurs intacts, ecriture atomique.
     $pluginOn = (Test-Path $agyApp) -and ((Get-Content $agyApp -Raw | ConvertFrom-Json).plugins.'nexus-browser'.enabled -eq $true)
     if ($pluginOn) {
         & (Join-Path $PSScriptRoot 'scripts\doublon-antigravity.ps1') -ConfigPath $agyConfig -BackupDir (Join-Path $localRoot 'backups') |
             ForEach-Object { Write-Journal $_ }
-        if ($LASTEXITCODE) { throw 'Retrait du doublon nexus-browser de mcp_config.json (Antigravity) en echec.' }
+        if ($LASTEXITCODE) { throw 'Removing the nexus-browser duplicate from mcp_config.json (Antigravity) failed.' }
     } else {
-        Write-Warning 'Antigravity ouvert et plugin nexus-browser pas encore active : entree globale gardee (relancer install.ps1 Antigravity ferme).'
+        Write-Warning 'Antigravity open and plugin nexus-browser not enabled yet: global entry kept (run install.ps1 again with Antigravity closed).'
     }
-    Write-Host 'Antigravity : nexus-browser inscrit (plugin seulement).'
-} elseif ($Register) { }  # Antigravity : declare en stdio par register_clients.py
-elseif (-not $token) { Write-Warning 'Antigravity : non inscrit (jeton MCP partage absent).' }
-else { Write-Warning 'Antigravity absent de ce PC : non inscrit.' }
-
-if ($Register) {
-    & $pythonExe -B (Join-Path $PSScriptRoot 'scripts\register_clients.py') --python $pythonExe `
-        --server (Join-Path $repositoryRoot 'client\mcp_server.py') --backups (Join-Path $localRoot 'backups')
-    if ($LASTEXITCODE) { throw 'Inscription du serveur aupres des clients en echec (voir ci-dessus).' }
+    Write-Host 'Antigravity: nexus-browser declared (plugin only).'
 }
 
+# --- 8. Public install: the AI clients found get the server (stdio, this engine).
+if ($Register) {
+    $registration = Invoke-Native $exe @('--register', '--backups', (Join-Path $localRoot 'backups')) 120
+    if (-not $pack) { Write-Host $registration.Output }
+    if ($registration.Code) { throw 'Declaring the server to the AI clients failed (see above).' }
+}
 
 if (-not $SkipTests) {
     & (Join-Path $PSScriptRoot 'test.ps1')
-    if ($LASTEXITCODE) { throw 'test.ps1 en echec.' }
+    if ($LASTEXITCODE) { throw 'test.ps1 failed.' }
 }
+
+# --- 9. Bridge, extension and daemon checked.
 if (-not $SkipLaunch) {
-    Start-ScheduledTask -TaskName $bridgeTaskName
-    $pack = $env:NEXUS_PACK -eq '1'
+    if ((Get-ScheduledTask -TaskName $bridgeTaskName).State -ne 'Running') { Start-ScheduledTask -TaskName $bridgeTaskName }
     $wait = if ($pack) { 0 } else { 30 }
-    & $pythonExe -B (Join-Path $PSScriptRoot 'scripts\refresh_extension.py') --wait-ready $wait
-    if ($LASTEXITCODE -notin 0, 2) { throw "Le rechargement de l'extension n'est pas verifie ; installation non marquee a jour." }
-    if ($LASTEXITCODE -eq 2 -and $Register) {
+    $refresh = Invoke-Native $exe @('--refresh-extension', '--wait-ready', "$wait") 90
+    Write-Host "Extension: $($refresh.Output)"
+    if ($refresh.Code -eq 2 -and $Register) {
         if (-not $pack) { & (Join-Path $PSScriptRoot 'scripts\guide-extension.ps1') }
-    } elseif ($LASTEXITCODE -eq 2 -and (Get-Process -Name chrome -ErrorAction SilentlyContinue)) {
-        throw 'Extension Chrome ouverte mais injoignable.'
+    } elseif ($refresh.Code -eq 2 -and (Get-Process -Name chrome -ErrorAction SilentlyContinue)) {
+        Write-Warning 'Chrome is open but its NexusBrowser extension is not connected to the bridge.'
+    } elseif ($refresh.Code -eq 1) {
+        Write-Warning 'The loaded extension is not this version yet: reload it in chrome://extensions.'
     }
-    # Le demon HTTP conserve ses modules Python en memoire. Recharger uniquement celui de Browser,
-    # apres le controle d'absence d'onglets pilotes ; son superviseur reprend le meme port.
-    # A shared daemon only runs under the Nexus supervisor; a stand-alone install (-Register) declares stdio servers.
-    $supervised = [bool](Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue)
-    if ($useNative -and $supervised) {
-        # deploy-native already drained and replaced this daemon; verify its new process without another reload.
-        $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    if ($token -and -not $busy) {
+        $deadline = [DateTime]::UtcNow.AddSeconds(60)
         $confirmed = $false
         do {
             try {
-                $health = Invoke-RestMethod -Uri 'http://127.0.0.1:16182/health' -TimeoutSec 2
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 2
                 $owner = Get-CimInstance Win32_Process -Filter "ProcessId = $($health.pid)"
-                $confirmed = $health.status -eq 'ok' -and $health.runtime -eq 'native' -and
-                    $health.service -eq 'nexus-browser' -and $health.version -eq (Get-Content (Join-Path $PSScriptRoot 'VERSION') -Raw).Trim() -and
-                    $owner.ExecutablePath -eq $nativeExe -and $owner.CommandLine -match '--http\s+16182'
+                $confirmed = $health.status -eq 'ok' -and $health.service -eq 'nexus-browser' -and $health.version -eq $version -and $owner.ExecutablePath -eq $exe
             } catch { $confirmed = $false }
-            if (-not $confirmed) { Start-Sleep -Milliseconds 250 }
+            if (-not $confirmed) { Start-Sleep -Milliseconds 500 }
         } while (-not $confirmed -and [DateTime]::UtcNow -lt $deadline)
-        if (-not $confirmed) { throw 'Le demon natif Browser ne confirme pas son identite et ses capacites.' }
-        Write-Host "Demon MCP Browser natif confirme (pid $($health.pid)); Android et Relay conserves."
-    } else {
-    $listener = Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue
-    if ($listener) {
-        $daemonPid = $listener.OwningProcess | Select-Object -Unique
-        $daemon = Get-CimInstance Win32_Process -Filter "ProcessId = $daemonPid"
-        $supervisor = Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue
-        $expected = if ($useNative) { $daemon.ExecutablePath -eq $nativeExe -and $daemon.CommandLine -match '--http\s+16182' } else {
-            $daemon.CommandLine -like "*$(Join-Path $PSScriptRoot 'client\mcp_server.py') --http 16182*"
-        }
-        if (-not $expected -or $supervisor.State -ne 'Running') {
-            throw 'Le port MCP Browser ne correspond pas au demon supervise attendu.'
-        }
-        Stop-Process -Id $daemonPid -ErrorAction Stop
-        $deadline = [DateTime]::UtcNow.AddSeconds(15)
-        do {
-            Start-Sleep -Milliseconds 250
-            $next = Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue
-        } while ((-not $next -or $next.OwningProcess -eq $daemonPid) -and [DateTime]::UtcNow -lt $deadline)
-        if (-not $next -or $next.OwningProcess -eq $daemonPid) { throw "Le demon MCP Browser n'a pas confirme sa relance." }
-        $replacement = Get-CimInstance Win32_Process -Filter "ProcessId = $($next.OwningProcess)"
-        $expected = if ($useNative) { $replacement.ExecutablePath -eq $nativeExe -and $replacement.CommandLine -match '--http\s+16182' } else {
-            $replacement.CommandLine -like "*$(Join-Path $PSScriptRoot 'client\mcp_server.py') --http 16182*"
-        }
-        if (-not $expected) { throw 'Le nouveau listener ne correspond pas au demon Browser attendu.' }
-        Write-Host 'Demon MCP Browser recharge ; Android et Relay conserves.'
+        if ($confirmed) { Write-Host "Shared MCP daemon $version confirmed (pid $($health.pid))." }
+        else { Write-Warning 'The shared daemon has not switched to this build yet (a call is running): it will once idle.' }
     }
-    }
-} elseif (Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue) {
-    Write-Warning "-SkipLaunch : demon MCP Browser laisse en place ; le nouveau code sera pris a sa prochaine relance."
 }
-Write-Host 'NexusBrowser installe. Extension verifiee si Chrome est connecte ; sources prises en compte au prochain lancement sinon.'
+
+# --- 10. Older builds no process runs any more, and the legacy fixed folder, are removed.
+$running = @(Get-CimInstance Win32_Process -Filter "Name='NexusBrowser.exe'" | ForEach-Object { $_.ExecutablePath })
+if (Test-Path -LiteralPath $versionsRoot) {
+    foreach ($dir in Get-ChildItem -LiteralPath $versionsRoot -Directory) {
+        if ($dir.FullName -eq $versionDir) { continue }
+        if ($running | Where-Object { $_ -and $_.StartsWith($dir.FullName + '\', [StringComparison]::OrdinalIgnoreCase) }) { continue }
+        Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+$legacyDir = Split-Path $legacyExe
+if ((Test-Path -LiteralPath $legacyDir) -and -not ($running -contains $legacyExe)) {
+    Remove-Item -LiteralPath $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $legacyDir)) { Write-Journal "Legacy engine folder removed: $legacyDir" }
+}
+$oldVenv = Join-Path $localRoot 'venv'
+if ((Test-Path -LiteralPath $oldVenv) -and -not (Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$oldVenv\*" })) {
+    Remove-Item -LiteralPath $oldVenv -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $oldVenv)) { Write-Journal "Former Python environment removed: $oldVenv" }
+}
+if ($Register -and $pack) { Write-Host $registration.Output }  # the NEXUS_PACK_RESULT line stays the last
+else { Write-Host "NexusBrowser $version installed." }

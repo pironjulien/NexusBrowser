@@ -1379,6 +1379,18 @@ public sealed class BridgeServer : IAsyncDisposable
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
+    /// <summary>Folder this build was installed from (installation.json written by install.ps1), if any.</summary>
+    public static string? InstalledSourceRoot()
+    {
+        try
+        {
+            var metadata = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "installation.json"))) as JsonObject;
+            string? root = metadata is null ? null : TryGetString(metadata, "repository_root");
+            return string.IsNullOrWhiteSpace(root) || !Directory.Exists(root) ? null : root;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or ArgumentException or UnauthorizedAccessException) { return null; }
+    }
+
     private static bool PublicInstallation()
     {
         try

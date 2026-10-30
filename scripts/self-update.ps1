@@ -1,7 +1,7 @@
 # Mise a jour de NexusBrowser par lui-meme (contrat commun des produits Nexus), lancee par la tache
 # "Nexus Browser Update" (sans declencheur) que le pont demarre sur POST /api/update : hors du pont, qu'elle survit a
 # arreter, et hors du conteneur d'une application du Microsoft Store. Installation publique seulement
-# (%LOCALAPPDATA%\NexusBrowser\app). Etat dans ~\.nexus\status\browser.json (native-host\bridge_update.py), journal
+# (%LOCALAPPDATA%\NexusBrowser\app). Etat dans ~\.nexus\status\browser.json (moteur natif, BridgeServer), journal
 # dans ~\.nexus\nexus-browser\update.log. Des onglets pilotes par un agent : rien n'est touche, essai suivant plus tard.
 # Un echec garde la version en cours et l'ecrit dans "message". Fichier en ASCII (Windows PowerShell 5.1).
 $ErrorActionPreference = 'Stop'
@@ -36,11 +36,8 @@ function Write-Log([string]$Text) {
 try {
     . (Join-Path $PSScriptRoot 'runtime.ps1')
     Write-Log "Update started from $app."
-    if (Test-Path -LiteralPath $pythonExe) {
-        $ErrorActionPreference = 'Continue'
-        & $pythonExe -B (Join-Path $PSScriptRoot 'refresh_extension.py') --check-only 2>&1 | Out-Null
-        $ErrorActionPreference = 'Stop'
-        if ($LASTEXITCODE -eq 3) {
+    if ($nativeExe) {
+        if ((Invoke-Native $nativeExe @('--refresh-extension', '--check-only') 60).Code -eq 3) {
             Set-Status 'failed' 'Update deferred: an agent is working in Chrome. Try again later; the current version is kept.'
             Write-Log 'Deferred: agent tabs in use.'
             exit 0
@@ -50,7 +47,7 @@ try {
     $get = Join-Path $env:TEMP "nexus-browser-get-$PID.ps1"
     Copy-Item -LiteralPath (Join-Path $app 'get.ps1') -Destination $get -Force
     $env:NEXUS_PACK = '1'
-    # Sorties de l'installeur (avertissements de uv sur stderr compris) gardees dans le journal en UTF-8 : sous
+    # Sorties de l'installeur (stderr compris) gardees dans le journal en UTF-8 : sous
     # Windows PowerShell 5.1, une redirection de stderr avec 'Stop' ferait de chaque avertissement une erreur fatale.
     $ErrorActionPreference = 'Continue'
     $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $get 2>&1 | ForEach-Object { "$_" }

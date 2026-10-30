@@ -20,7 +20,7 @@ if (-not $chrome) {
 }
 
 # Publiee sur le Chrome Web Store (store_public de bridge_config.json) : "Ajouter a Chrome", sans mode developpeur.
-$config = Get-Content (Join-Path $repositoryRoot 'native-host\bridge_config.json') -Raw | ConvertFrom-Json
+$config = Get-Content (Join-Path $repositoryRoot 'native\resources\bridge_config.json') -Raw | ConvertFrom-Json
 $storeId = if ($config.store_public) { $config.store_id } else { $null }
 Write-Host ''
 Write-Host 'Last step, once: add the NexusBrowser extension to Chrome.' -ForegroundColor Cyan
@@ -44,8 +44,9 @@ Write-Host ''
 Write-Host 'Waiting for the extension... (Ctrl+C to stop waiting; it connects by itself later)'
 $deadline = (Get-Date).AddSeconds($WaitSeconds)
 do {
-    & $pythonExe -B (Join-Path $PSScriptRoot 'refresh_extension.py') --wait-ready 30 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
+    $exe = Get-CurrentExe
+    if (-not $exe) { break }
+    if ((Invoke-Native $exe @('--refresh-extension', '--wait-ready', '30') 90).Code -eq 0) {
         Write-Host 'Extension connected: NexusBrowser is ready. Restart your AI app (Claude, Codex or Antigravity) to see its browser tools.' -ForegroundColor Green
         return
     }

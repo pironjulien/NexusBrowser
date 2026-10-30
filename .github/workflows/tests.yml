@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 
-# A newer push makes the running check pointless: cancel it (Windows minutes count double on private repositories).
+# A newer push makes the running check pointless: cancel it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -20,31 +20,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: 24
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1  # v5
+          package-manager-cache: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
-          dotnet-version: 10.0.x
-      - name: Test environment (what install.ps1 creates, without the bridge task or Chrome registration)
-        shell: pwsh
-        run: |
-          . ./scripts/runtime.ps1
-          uv sync --frozen --quiet
-      - name: test.ps1 (ruff, pyright, Python tests, extension tests; offline)
+          global-json-file: global.json
+      - name: test.ps1 (dotnet test, extension tests; offline)
         shell: pwsh
         run: ./test.ps1
-
-  startup-linux:
-    # What MCP directories (Glama) check in a Linux container: the server starts and lists its tools.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
-      - name: initialize + tools/list over stdio
-        run: |
-          uv sync --frozen --quiet
-          uv run --frozen pytest -q --noconftest tests/test_startup.py

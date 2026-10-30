@@ -7,17 +7,21 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>NexusBrowser</AssemblyName>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- Release builds (self-contained, single file); declared so packages.lock.json stays the same for every build. -->
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <RootNamespace>NexusBrowser</RootNamespace>
-    <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;bin/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="SkiaSharp" Version="4.153.2" />
     <None Include="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="tools.json" LogicalName="tools.json" />
-    <EmbeddedResource Include="..\client\garde-fous.json" LogicalName="garde-fous.json" Condition="Exists('..\client\garde-fous.json')" />
-    <EmbeddedResource Include="..\client\trigger_probe.js" LogicalName="trigger_probe.js" Condition="Exists('..\client\trigger_probe.js')" />
-    <EmbeddedResource Include="..\client\webmcp_probe.js" LogicalName="webmcp_probe.js" Condition="Exists('..\client\webmcp_probe.js')" />
-    <EmbeddedResource Include="..\native-host\bridge_config.json" LogicalName="bridge_config.json" Condition="Exists('..\native-host\bridge_config.json')" />
-    <EmbeddedResource Include="..\VERSION" LogicalName="VERSION" Condition="Exists('..\VERSION')" />
+    <EmbeddedResource Include="resources\garde-fous.json" LogicalName="garde-fous.json" />
+    <EmbeddedResource Include="resources\trigger_probe.js" LogicalName="trigger_probe.js" />
+    <EmbeddedResource Include="resources\webmcp_probe.js" LogicalName="webmcp_probe.js" />
+    <EmbeddedResource Include="resources\bridge_config.json" LogicalName="bridge_config.json" />
+    <EmbeddedResource Include="..\extension\manifest.json" LogicalName="extension-manifest.json" />
+    <EmbeddedResource Include="..\extension\background.js" LogicalName="extension-background.js" />
+    <EmbeddedResource Include="..\VERSION" LogicalName="VERSION" />
+    <InternalsVisibleTo Include="NexusBrowser.Tests" />
   </ItemGroup>
 </Project>

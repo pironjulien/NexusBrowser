@@ -1,7 +1,7 @@
 # Benchmark: NexusBrowser, Chrome DevTools MCP and Playwright MCP
 
 A reproducible comparison of what an agent pays in tool responses (tokens) and whether the task succeeds, on three
-everyday tasks with public pages. No model is called: `compare.py` plays the agent with a fixed sequence of tool
+everyday tasks with public pages. No model is called: the harness played the agent with a fixed sequence of tool
 calls (observe, then act), so the numbers measure the tools, not a model's choices.
 
 ## Tasks
@@ -84,26 +84,9 @@ Earlier runs of this benchmark found real NexusBrowser bugs, all fixed in 2.24.5
 
 ## Run it
 
-Windows, Node.js (for `npx`), [uv](https://docs.astral.sh/uv/). NexusBrowser needs its bridge and extension. No
-account, key or payment: Chrome DevTools MCP and Playwright MCP are fetched by `npx` and drive the installed Chrome.
-
-On your own Chrome, with NexusBrowser installed:
-
-```powershell
-uv run --no-project --with "mcp==2.3.0" --with "tiktoken==0.14.0" benchmarks/compare.py --rounds 5 --out benchmarks/results
-```
-
-`--engines` picks among `nexus`, `nexus-snapshot`, `devtools` and `playwright` (all four by default).
-
-Isolated, without touching your Chrome or your bridge (as for the numbers above):
-
-1. Start a test bridge on other ports with a disposable token:
-   `python -B native-host/bridge_server.py --port 19224 --token-file <tmp>\token`.
-2. Copy `extension/` with its WebSocket address set to `ws://127.0.0.1:19224`, and load it in a test Chromium with
-   its own profile (Playwright's Chromium accepts `--load-extension`, also with `--headless=new`).
-3. Pair the copy (`POST http://127.0.0.1:19225/api/pair`, then open `pair.html#<secret>`).
-4. Run the benchmark with `NEXUS_BROWSER_HTTP_PORT=19225`, `NEXUS_BROWSER_TOKEN_FILE=<tmp>\token` and
-   `NEXUS_JOURNAL_HOME=<tmp>\journal` (the bench's calls stay out of your NexusBrowser journal).
+The harness (`compare.py`, Python) was removed with the Python engine in 2.33.0: the results above are kept as a
+record of version 2.31 (same 49 tools and wire format as the native engine). Its method stays valid: the same
+fixed sequence of tool calls per engine, tokens counted with `tiktoken` on what the agent receives.
 
 Chrome DevTools MCP (`--isolated --headless`) and Playwright MCP (`--isolated --headless`) always start their own
 browser.

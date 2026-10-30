@@ -62,7 +62,7 @@ const OWNERS_KEY = "nexusBrowserTabOwners";
 const STOP_KEY = "nexusBrowserStopUntil";
 const SEEN_KEY = "nexusBrowserClientSeen";
 const DOWNLOADS_KEY = "nexusBrowserDownloadOwners";
-// Seul client admis à recharger l'extension : l'installeur (scripts/refresh_extension.py, lancé par install.ps1).
+// Seul client admis à recharger l'extension : l'installeur (NexusBrowser.exe --refresh-extension, lancé par install.ps1).
 const INSTALLER_AGENT = "Installer";
 const DOWNLOAD_OWNERS_MAX = 200;  // téléchargements attribués gardés en mémoire (les plus anciens oubliés)
 // Silence au-delà duquel une session est morte : 1,618 x 60 s (battement des serveurs MCP : 60 / 1,618 s).
@@ -217,8 +217,8 @@ function ownerLabel(owner) {
 // -----------------------------------------------------------------------------
 const STOP_HOLD_MS = 120000;
 const stopWaiters = new Set();
-// Lectures permises pendant l'arrêt : miroir de READ_ONLY_ACTIONS (native-host/bridge_security.py), aux noms d'action
-// reçus par l'extension (vérifié par tests/test_cross_review.py). Un seul nom par action : celui du client, tirets
+// Lectures permises pendant l'arrêt : miroir de ReadOnlyActions (native/BridgeSecurity.cs), aux noms d'action
+// reçus par l'extension (vérifié par tests/NexusBrowser.Tests). Un seul nom par action : celui du client, tirets
 // remplacés par des soulignés (pont), sans alias à recopier dans chaque liste de garde-fous.
 const STOP_ALLOWED_ACTIONS = new Set([
     "ping", "list_tabs", "active_tab", "content", "axtree", "logs", "screenshot", "pdf", "check_handoff",
@@ -361,7 +361,7 @@ function bridgeReady() {
 // profil et le pad en fait la somme. Une lecture lancée avant une décoche ne réécrit pas le nombre après elle : chaque
 // envoi porte un numéro, et la case est relue après la lecture du flux.
 const COMPTEUR_GMAIL = "compteurGmail";
-// Faux dans la variante du Chrome Web Store sans compteur (scripts/store_package.py --without-gmail-counter) : ni case,
+// Faux dans la variante du Chrome Web Store sans compteur (scripts/store-package.ps1 -WithoutGmailCounter) : ni case,
 // ni lecture de Gmail, ni mail.google.com dans la CSP.
 const COMPTEUR_GMAIL_DISPONIBLE = true;
 const SOURCE_COMPTEURS = "sourceCompteurs";
@@ -836,7 +836,7 @@ function foreignTabMessage(tabId, owner, client) {
 
 /**
  * Rechargement de l'extension : il coupe les commandes en cours de TOUS les agents et leur fait perdre leurs onglets.
- * Réservé à l'installeur (identité « Installer », scripts/refresh_extension.py), et seulement quand aucun agent ne
+ * Réservé à l'installeur (identité « Installer », NexusBrowser.exe --refresh-extension), et seulement quand aucun agent ne
  * travaille : aucune commande en cours, aucun onglet tenu par une session vivante. Même un client qui prendrait le nom
  * de l'installeur ne peut donc rien interrompre.
  */

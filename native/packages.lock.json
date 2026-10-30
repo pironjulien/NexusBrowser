@@ -22,6 +22,30 @@
         "resolved": "4.153.2",
         "contentHash": "0VFEOI4ED5akfMOrFzjDhdpYkny2irzMl3mp1vVm38/plIufgOXAzxaLBUgqBApnhvD8LT8h6nFJ1u0vCUVt/A=="
       }
+    },
+    "net10.0-windows7.0/win-arm64": {
+      "SkiaSharp.NativeAssets.macOS": {
+        "type": "Transitive",
+        "resolved": "4.153.2",
+        "contentHash": "pEWP0WMdMka4636YxsEKyXSSpTOHxJDv63Wak1FhcldJ9ZeaYHdKCqtw6lZId1ARfJXSRitoMYh+6gTvWq6oyg=="
+      },
+      "SkiaSharp.NativeAssets.Win32": {
+        "type": "Transitive",
+        "resolved": "4.153.2",
+        "contentHash": "0VFEOI4ED5akfMOrFzjDhdpYkny2irzMl3mp1vVm38/plIufgOXAzxaLBUgqBApnhvD8LT8h6nFJ1u0vCUVt/A=="
+      }
+    },
+    "net10.0-windows7.0/win-x64": {
+      "SkiaSharp.NativeAssets.macOS": {
+        "type": "Transitive",
+        "resolved": "4.153.2",
+        "contentHash": "pEWP0WMdMka4636YxsEKyXSSpTOHxJDv63Wak1FhcldJ9ZeaYHdKCqtw6lZId1ARfJXSRitoMYh+6gTvWq6oyg=="
+      },
+      "SkiaSharp.NativeAssets.Win32": {
+        "type": "Transitive",
+        "resolved": "4.153.2",
+        "contentHash": "0VFEOI4ED5akfMOrFzjDhdpYkny2irzMl3mp1vVm38/plIufgOXAzxaLBUgqBApnhvD8LT8h6nFJ1u0vCUVt/A=="
+      }
     }
   }
 }

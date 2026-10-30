@@ -3,10 +3,51 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.33.0] - 2026-10-30
+
+The native engine (`NexusBrowser.exe`, C# .NET 10) is now the only one: no Python, no uv, anywhere.
+
+### Added
+- Releases carry the self-contained engine for each Windows architecture, `NexusBrowser-win-x64.zip` and
+  `NexusBrowser-win-arm64.zip` (engine, extension, installer), with `SHA256SUMS.txt`, the Chrome Web Store package of
+  the extension and a Sigstore build provenance (`gh attestation verify <file> --repo pironjulien/NexusBrowser`, or the
+  attached `NexusBrowser-<version>.intoto.jsonl`). A `vX.Y.Z` tag builds and publishes them (`release.yml`).
+- `get.ps1` installs that package without Python or .NET: it picks the zip for the PC's architecture, checks it
+  against `SHA256SUMS.txt` before unpacking, then runs `install.ps1 -Register`. Test variables: `NEXUS_BROWSER_SOURCE`
+  (local zip or folder), `NEXUS_BROWSER_TAG`, `NEXUS_BROWSER_ROOT` (unpack into a test folder, nothing registered).
+- Public install without the Nexus supervisor: the shared MCP daemon (`127.0.0.1:16182`) runs as the task
+  "Nexus Browser MCP" (at logon), with the bearer token of the user variable `NEXUS_MCP_TOKEN` (created once, kept when
+  another Nexus product already set it).
+- Each engine build is installed once in `%LOCALAPPDATA%\NexusBrowser\versions\<fingerprint>` and never overwritten
+  while it runs. On a Nexus workstation the daemon spec names it with the `exe` key and declares a `restart_request`:
+  the running daemon restarts on the new build as soon as no tool call is running, instead of being stopped by the
+  installer. Builds no process uses any more are removed.
+- Engine commands that replace the Python scripts: `--register` (declares the server to Claude Code, Claude Desktop,
+  Codex and Antigravity; former Python entries are replaced in place), `--refresh-extension` (installer check and
+  reload of the extension), `--version`, `--fingerprint`. `scripts/store-package.ps1` builds the Chrome Web Store zip.
+- Registry: `server.json` again, now with an `mcpb` package (the release's `nexus-browser.mcpb`, its SHA-256), published
+  by the release workflow over GitHub OIDC.
+- CI: `Security` workflow with gitleaks (whole history) and zizmor on every push and pull request.
+
+### Changed
+- `nexus-browser.mcpb` (Claude Desktop) carries the self-contained engine (server type `binary`) instead of installing
+  the Python package with uv. The Gemini CLI extension uses the shared local daemon (`NEXUS_MCP_TOKEN`) instead of uvx.
+- Tests are C#: xUnit v3 (`dotnet test`, Microsoft Testing Platform, `global.json`) for the engine, the former
+  self-test, client registration, scripts and repository checks; `node --test` for the extension. `test.ps1` runs
+  just these two; the CI runs the same on Windows. Build and test outputs stay in `~\.nexus\build\nexus-browser`.
+- The Install CI checks the release package on a clean Windows under Windows PowerShell 5.1: client entries, the
+  daemon with its token, a real round trip through the bridge and the extension, a tampered package refused, a failed
+  update rolled back.
+- Policy and page probes moved to `native/resources/` (`garde-fous.json`, `trigger_probe.js`, `webmcp_probe.js`,
+  `bridge_config.json`).
 
 ### Removed
-- PyPI, MCP registry and Glama publishing (`publish.yml`, `server.json`, `glama.json`): installation goes through NexusSystem. Earlier PyPI packages stay available.
+- The Python engine and everything around it: `client/`, `native-host/`, `packaging/`, `pyproject.toml`, `uv.lock`,
+  the Python scripts, the Python tests and fuzz targets (with ClusterFuzzLite), the `--selftest` option (now xUnit
+  tests), the `-Runtime` switch of `install.ps1` and the Linux startup job. The benchmark harness `compare.py` went
+  with it; its results stay.
+- PyPI and Glama publishing (`publish.yml`, `glama.json`): installation goes through NexusSystem. Earlier PyPI
+  packages stay available.
 
 ## [2.32.0] - 2026-10-30
 
@@ -1281,7 +1322,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.32.0...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.33.0...HEAD
+[2.33.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.32.0...v2.33.0
 [2.26.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.3
 [2.26.2]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.2
 [2.26.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.1

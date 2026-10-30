@@ -1,5 +1,5 @@
 /**
- * Appairage de l'extension au pont local, sans hôte natif (native-host/bridge_pairing.py). Le secret d'appairage
+ * Appairage de l'extension au pont local, sans hôte natif (native/BridgePairing.cs). Le secret d'appairage
  * arrive dans le fragment de l'adresse (pair.html#<secret>, jamais envoyé sur le réseau, effacé de l'adresse dès la
  * lecture) ou collé dans le champ. Poignée de main « pair » prouvée dans les deux sens avec ce secret, puis clé durable
  * dérivée du secret et de cette poignée de main, gardée non extractible (bridge_link.js, AgyPairing).

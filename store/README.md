@@ -6,13 +6,13 @@ registration fee, the author's Google account) and the upload itself are left to
 ## Package
 
 ```powershell
-python -B scripts/store_package.py --assets
+pwsh -NoProfile -File scripts/store-package.ps1 -OutDir dist
 ```
 
 - `dist/nexus-browser-extension-<version>.zip`: `extension/` as Chrome loads it, without the manifest's `key` (the
   store signs the package with its own key). The store gives the extension **its own ID**, different from the
   unpacked one (`blcgddmjdkobmgakjffjpgiicjlflgjf`): `fjapmaccbgdfneoccclmlpgknbbfkaco`, already in
-  `native-host/bridge_config.json` (`store_id` and `allowed_origins`, a test checks both), so `install.ps1` declares
+  `native/resources/bridge_config.json` (`store_id` and `allowed_origins`, a test checks both), so `install.ps1` declares
   the native host for both IDs and the bridge accepts both. Once the extension is published, set `store_public` to
   `true` and release: the installer's last step becomes "Add to Chrome" on the store page instead of developer mode.
   Keep only one of the two installed in a Chrome profile (both would connect to the same bridge).
@@ -105,7 +105,7 @@ The extension needs its local bridge (Windows 10/11). In PowerShell:
   irm https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/get.ps1 | iex
 With an AI client it declared (Claude Code, Codex, Antigravity), ask: "Open https://example.com in a background tab
 and give me the page as Markdown." With no AI client at all, the command line does the same:
-  & "$HOME\.nexus\nexus-browser\venv\Scripts\python.exe" "$env:LOCALAPPDATA\NexusBrowser\app\client\browser_cli.py" new-tab --url https://example.com
+  '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_new_tab","arguments":{"url":"https://example.com"}}}' | & (Get-Content "$env:LOCALAPPDATA\NexusBrowser\current.json" | ConvertFrom-Json).exe --mcp | Out-String
 A tab opens in the background, in a tab group named after the agent; the toolbar popup shows the bridge state and
 each agent's tabs. No account is needed.
 ```

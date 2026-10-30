@@ -41,9 +41,9 @@ will submit a version without this counter.
 
 ## Fallback: the package without the counter
 
-`python -B scripts/store_package.py --without-gmail-counter` builds
+`scripts/store-package.ps1 -OutDir dist -WithoutGmailCounter` builds
 `dist/nexus-browser-extension-<version>-without-gmail-counter.zip`: the same extension without the popup's checkbox,
 with the counter disabled in the service worker (`COMPTEUR_GMAIL_DISPONIBLE = false`) and `https://mail.google.com`
-removed from the CSP. Everything else is byte for byte the default package (tests/test_store_package.py). The
+removed from the CSP. Everything else is byte for byte the default package (tests/NexusBrowser.Tests). The
 unpacked extension installed by `get.ps1` keeps the counter, still off by default. If Google refuses: upload this
 package, remove the "Personal communications" line from the privacy fields, and say so in the reply.

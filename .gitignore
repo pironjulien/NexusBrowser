@@ -1,23 +1,18 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.log
-.venv/
-
 # Windows / OS
 Thumbs.db
 ehthumbs.db
 Desktop.ini
 .DS_Store
 
-# Chrome Web Store package (scripts/store_package.py)
+# Release and Chrome Web Store packages built by hand (scripts/package-release.ps1, scripts/store-package.ps1 -OutDir dist)
 dist/
 
-# Backups
+# Build outputs (normally outside the repository: Directory.Build.props, ~/.nexus/build/nexus-browser)
+bin/
+obj/
+TestResults/
+
+# Logs, backups
+*.log
 *.bak
 *.tmp
-
-# Development caches (normally stored outside OneDrive by test.ps1)
-.pytest_cache/
-.ruff_cache/

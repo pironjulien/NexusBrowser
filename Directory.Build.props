@@ -1,0 +1,12 @@
+<Project>
+  <!-- Build and test outputs outside OneDrive and AppData: ~\.nexus\build\nexus-browser\<project>
+       (NEXUS_BROWSER_BUILD_ROOT: another root, for parallel builds). -->
+  <PropertyGroup>
+    <NexusBrowserBuildRoot>$(NEXUS_BROWSER_BUILD_ROOT)</NexusBrowserBuildRoot>
+    <NexusBrowserBuildRoot Condition="'$(NexusBrowserBuildRoot)' == ''">$(USERPROFILE)\.nexus\build\nexus-browser</NexusBrowserBuildRoot>
+    <NexusBrowserBuild>$(NexusBrowserBuildRoot)\$(MSBuildProjectName)\</NexusBrowserBuild>
+    <BaseIntermediateOutputPath>$(NexusBrowserBuild)obj\</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(NexusBrowserBuild)bin\</BaseOutputPath>
+    <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>

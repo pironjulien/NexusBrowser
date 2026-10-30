@@ -2194,7 +2194,7 @@ test('field_state relit un champ sans aucun geste (browser_fill_form) : texte, o
 
 test("trigger_probe.js (accord des gestes sortants) : lecture sans geste du déclencheur, de son formulaire et de ses destinataires", async () => {
     // Script envoyé par le serveur MCP dans le monde isolé par cdp-send (Runtime.evaluate) : aucune action nouvelle.
-    const source = fs.readFileSync(path.join(__dirname, '..', 'client', 'trigger_probe.js'), 'utf8');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'native', 'resources', 'trigger_probe.js'), 'utf8');
     const probeIn = (dom) => {
         const fn = vm.runInNewContext(source, {document: dom.doc, window: dom.win});
         return (spec) => JSON.parse(JSON.stringify(fn(spec)));  // autre royaume (vm)
@@ -2267,7 +2267,7 @@ test("trigger_probe.js (accord des gestes sortants) : lecture sans geste du déc
 test("trigger_probe.js : bouton d'un composant web (texte rendu par un slot ou dans la shadow root) lu quel que soit le ciblage", async () => {
     // Partner Center, 26/10 : <he-card> contient <he-button> dont le <button> est dans la shadow root et affiche, par
     // un <slot>, le texte « Publier maintenant » placé dans le DOM clair. Le bouton lui-même n'a aucun texte DOM.
-    const source = fs.readFileSync(path.join(__dirname, '..', 'client', 'trigger_probe.js'), 'utf8');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'native', 'resources', 'trigger_probe.js'), 'utf8');
     const text = (data) => ({nodeType: 3, data});
     const node = (tag, attrs = {}, kids = []) => {
         const n = {
@@ -2700,7 +2700,7 @@ test('wait_download : interruption, danger et délai rapportés clairement', asy
 
 // -----------------------------------------------------------------------------
 // Pont local authentifié (bridge_link.js) : l'extension n'exécute rien d'un serveur qui ne prouve pas le jeton.
-// Serveur et hôte natif simulés avec node:crypto, même protocole que native-host/bridge_auth.py.
+// Serveur et hôte natif simulés avec node:crypto, même protocole que native/BridgeAuth.cs.
 // -----------------------------------------------------------------------------
 const nodeCrypto = require('node:crypto');
 const BRIDGE_PROTOCOL = 'nexus-browser/1';
@@ -2729,7 +2729,7 @@ function controlledSockets() {
     return {ControlledWebSocket, instances};
 }
 
-// Hôte natif simulé : même règle que auth_host.py (preuve du serveur vérifiée avant toute preuve du client).
+// Hôte natif simulé : même règle que native/NativeAuthHost.cs (preuve du serveur vérifiée avant toute preuve du client).
 function nativeHostMock(token = TEST_TOKEN) {
     const calls = [];
     return {
@@ -4416,7 +4416,7 @@ test('précédent / suivant : même contrat d\'adresse que la navigation explici
 
 test("webmcp_probe.js (outils WebMCP de la page) : liste sans geste, appel seulement si la définition contrôlée n'a pas changé", async () => {
     // Script envoyé par le serveur MCP dans le monde isolé par cdp-send (Runtime.evaluate, promesse attendue).
-    const source = fs.readFileSync(path.join(__dirname, '..', 'client', 'webmcp_probe.js'), 'utf8');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'native', 'resources', 'webmcp_probe.js'), 'utf8');
     const executed = [];
     const button = {type: 'submit', innerText: 'Request Reservation', getAttribute: () => null};
     const form = {
@@ -4711,14 +4711,14 @@ test('export : une liste de références très citée (Wikipedia) ne passe pas d
     assert.match(res.data.content, /free and open-source web browser project/);
 });
 
-// Appairage sans hôte natif (bridge_link.js AgyPairing, native-host/bridge_pairing.py) ------------------------------
+// Appairage sans hôte natif (bridge_link.js AgyPairing, native/BridgePairing.cs) ------------------------------
 function pairingContext() {
     const ctx = vm.createContext({console, setTimeout, clearTimeout, atob, btoa, TextEncoder, Uint8Array, crypto: globalThis.crypto});
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/bridge_link.js'), 'utf8'), ctx);
     return ctx;
 }
 
-test('appairage : preuves et clé dérivée identiques au pont (Python), clé jamais extractible', async () => {
+test('appairage : preuves et clé dérivée identiques au pont (C#), clé jamais extractible', async () => {
     const {AgyPairing} = pairingContext();
     const secret = nodeCrypto.randomBytes(32).toString('base64url');
     assert.ok(AgyPairing.isSecret(secret) && !AgyPairing.isSecret(secret.slice(1)) && !AgyPairing.isSecret(`${secret.slice(1)}+`));
