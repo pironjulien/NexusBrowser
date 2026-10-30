@@ -85,7 +85,7 @@ public static class Program
         {
             logFile ??= Path.Combine(BridgeSecurity.DefaultDataDir(), "bridge.log");
             int port = BridgeServer.DefaultPort;
-            if (GetArgValue(args, "--port") is { } pStr && int.TryParse(pStr, out int pVal) && pVal > 0)
+            if (GetArgValue(args, "--port") is { } pStr && int.TryParse(pStr, out int pVal) && pVal >= 0 && pVal < 65535)
                 port = pVal;
 
             await using var server = new BridgeServer(port: port, tokenFile: tokenFile, logFile: logFile);

@@ -152,14 +152,13 @@ public sealed partial class McpServer : IDisposable
         return list.Count > 0 ? string.Join(",", list) : null;
     }
 
-    /// <summary>Tells the bridge now, through a live session of the same agent; without one, the next call of that
-    /// agent carries it.</summary>
+    /// <summary>Tells the bridge now, even when the last conversation of this agent just closed. The daemon's
+    /// announcement identity never owns or reclaims a tab.</summary>
     private async Task AnnounceGoneAsync(string agent)
     {
-        string? live;
-        lock (_httpSessionsLock) live = _sessionAgents.FirstOrDefault(p => p.Value == agent).Key;
-        if (live is null) return;
-        try { await CallBridgeRawAsync("heartbeat", new JsonObject { ["reclaim"] = false }, 5.0, SessionIdentity(agent, live), _processPid, CancellationToken.None, recover: false); }
+        var identity = (Agent: agent, Id: $"{agent.ToLowerInvariant()}-daemon-{_processPid}");
+        if (PendingGone(agent, identity.Id) is null) return;
+        try { await CallBridgeRawAsync("heartbeat", new JsonObject { ["reclaim"] = false }, 5.0, identity, _processPid, CancellationToken.None, recover: false); }
         catch (Exception ex) when (ex is not OutOfMemoryException) { DaemonLog($"gone sessions of {agent} not announced yet: {ex.Message}"); }
     }
 
@@ -418,6 +417,7 @@ public sealed partial class McpServer : IDisposable
     private async Task RunDaemonHeartbeatsAsync(CancellationToken ct)
     {
         var lastBeat = new Dictionary<string, double>(StringComparer.Ordinal);
+        var lastAnnouncement = new Dictionary<string, double>(StringComparer.Ordinal);
         while (!ct.IsCancellationRequested)
         {
             try
@@ -432,6 +432,15 @@ public sealed partial class McpServer : IDisposable
 
                 foreach (var old in lastBeat.Keys.Except(live.Keys).ToList())
                     lastBeat.Remove(old);
+
+                // Retry a final-session close if the bridge or extension was unavailable during the immediate
+                // announcement. Live sessions already carry the pending list with each command and heartbeat.
+                foreach (var agent in _goneSessions.Keys.Where(agent => !live.Values.Any(v => v.Agent == agent)))
+                {
+                    if (lastAnnouncement.TryGetValue(agent, out double previous) && now - previous < HeartbeatIntervalSeconds) continue;
+                    lastAnnouncement[agent] = now;
+                    await AnnounceGoneAsync(agent);
+                }
 
                 foreach (var (sid, ident) in live)
                 {

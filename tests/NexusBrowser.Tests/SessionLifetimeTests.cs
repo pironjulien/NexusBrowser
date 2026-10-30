@@ -131,6 +131,7 @@ public sealed class SessionLifetimeTests : IDisposable
 
         // The daemon's 1 s tick expires it once idle for more than the configured second.
         await daemon.WaitForStderrAsync($"NexusBrowser: session {session[..8]} (Claude) expired after 1 s idle", TimeSpan.FromSeconds(5));
+        await bridge.WaitForAsync(r => r.Gone.Contains(Identity("Claude", session)), TimeSpan.FromSeconds(3));
         Assert.Equal(HttpStatusCode.NotFound, await daemon.ListToolsAsync("claude", session));
         await daemon.WaitForStderrAsync($"NexusBrowser: unknown session {session[..8]} (Claude): 404, the client starts a new one", TimeSpan.FromSeconds(3));
     }
@@ -166,7 +167,7 @@ public sealed class SessionLifetimeTests : IDisposable
         var clock = Stopwatch.StartNew();
         var announced = await bridge.WaitForAsync(r => bridge.Requests.IndexOf(r) >= before && r.Action == "heartbeat" && r.Gone.Contains(idA), TimeSpan.FromSeconds(3));
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3));
-        Assert.Equal(idB, announced.Header(BridgeSecurity.ClientHeader));
+        Assert.Equal($"claude-daemon-{daemon.Process.Process.Id}", announced.Header(BridgeSecurity.ClientHeader));
         Assert.Equal("Claude", announced.Header(BridgeSecurity.AgentHeader));
         Assert.DoesNotContain(idB, announced.Gone);
 
@@ -188,7 +189,7 @@ public sealed class SessionLifetimeTests : IDisposable
     }
 
     [Fact]
-    public async Task WithoutAnotherLiveSessionTheNextCallOfTheAgentCarriesIt()
+    public async Task LastSessionIsAnnouncedImmediatelyAndTheNextCallStillCarriesIt()
     {
         using var bridge = new FakeBridge((action, _) => action == "list-tabs" ? new JsonArray() : new JsonObject());
         using var daemon = await Daemon.StartAsync(bridge, _dir);
@@ -196,8 +197,9 @@ public sealed class SessionLifetimeTests : IDisposable
         using (var deleted = await daemon.SendAsync(HttpMethod.Delete, "claude", null, a))
             Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
         await daemon.WaitForStderrAsync($"session {a[..8]} (Claude) closed by the client (DELETE)", TimeSpan.FromSeconds(3));
-        await Task.Delay(300, TestContext.Current.CancellationToken);
-        Assert.DoesNotContain(bridge.Requests, r => r.Gone.Length > 0); // nobody to announce it through
+        var announced = await bridge.WaitForAsync(r => r.Gone.Contains(Identity("Claude", a)), TimeSpan.FromSeconds(3));
+        Assert.Equal($"claude-daemon-{daemon.Process.Process.Id}", announced.Header(BridgeSecurity.ClientHeader));
+        Assert.False((bool)announced.Body["params"]!["reclaim"]!);
 
         string c = await daemon.OpenSessionAsync("claude");
         await daemon.CallToolAsync("claude", c, "browser_list_tabs");

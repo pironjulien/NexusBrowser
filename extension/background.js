@@ -108,7 +108,9 @@ function orphanFor(owner, client) {
 async function noteClientAlive(client, gone) {
     const now = Date.now();
     const key = clientKey(client);
-    clientSeen.set(key, now);
+    // A command or heartbeat already in flight when the daemon closed this session cannot bring it back to life.
+    // Session identities are never reused; only a new session can reclaim the orphaned tabs.
+    if (clientSeen.get(key) !== 0) clientSeen.set(key, now);
     let save = now - (seenSaved.get(key) || 0) >= SEEN_SAVE_MS;
     for (const id of Array.isArray(gone) ? gone : []) {
         const dead = { agent: client.agent, id };

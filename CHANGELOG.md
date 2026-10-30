@@ -37,6 +37,13 @@ The native engine (`NexusBrowser.exe`, C# .NET 10) is now the only one: no Pytho
   client (DELETE) or expired releases its tabs at once: the daemon tells the bridge (`X-Nexus-Browser-Gone`), the
   extension makes them orphans the same agent can adopt. The daemon logs each session opened, closed, expired or
   unknown (404) on stderr, kept by the supervisor in `~\.nexus\daemons\nexus-browser.log`.
+- The last session of an agent also announces its closure immediately, using a daemon identity that never owns or
+  reclaims tabs. Failed announcements are retried when the bridge becomes available; a heartbeat already in flight
+  cannot revive an explicitly closed session.
+- Token initialization holds one exclusive file handle across reading and writing, so concurrent installers share
+  one token even when the existing file is empty. A non-empty token is never replaced.
+- `--bridge --port 0` lets Windows bind available WebSocket and HTTP ports atomically; the subprocess integration
+  test reads its bound addresses instead of racing other tests for previously probed ports.
 - A refused tool argument (`timeout_ms` above the bridge limit) is refused before the page is read, so an accord is
   never spent on a call that cannot run.
 - `get.ps1` leaves no download folder behind when a package is refused.

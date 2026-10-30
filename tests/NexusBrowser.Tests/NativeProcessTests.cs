@@ -114,19 +114,23 @@ public sealed partial class NativeProcessTests : IDisposable
         var ct = TestContext.Current.CancellationToken;
         string tokenFile = _dir["bridge-token"];
         string token = BridgeSecurity.LoadOrCreateToken(tokenFile);
-        int wsPort = Ports.FreePair(), httpPort = wsPort + 1;
         var env = new Dictionary<string, string?>
         {
             ["NEXUS_BROWSER_TOKEN_FILE"] = tokenFile,
-            ["NEXUS_BROWSER_HTTP_PORT"] = httpPort.ToString(),
             ["NEXUS_JOURNAL_HOME"] = _dir["journal"],
             ["NEXUS_SHARED_HOME"] = _dir["shared"],
             ["NEXUS_STATUS_DIR"] = _dir["status"],
         };
         using var bridge = new ChildProcess(NativeExe.Path,
-            ["--bridge", "--port", wsPort.ToString(), "--token-file", tokenFile, "--log-file", _dir["bridge.log"]], env);
-        // The banner is written once both listeners are bound: probing earlier could self-connect.
+            ["--bridge", "--port", "0", "--token-file", tokenFile, "--log-file", _dir["bridge.log"]], env);
+        // The OS allocates both ports while binding. Releasing "free" probes before starting a child raced with
+        // parallel tests and outbound ephemeral sockets. Read the bound addresses from the startup banner.
         Assert.StartsWith("===", await FirstLineAsync(bridge, 15));
+        await FirstLineAsync(bridge, 15); // title
+        string wsAddress = (await FirstLineAsync(bridge, 15)).Trim()["WebSocket: ".Length..];
+        string httpAddress = (await FirstLineAsync(bridge, 15)).Trim()["HTTP REST: ".Length..];
+        int wsPort = new Uri(wsAddress).Port, httpPort = new Uri(httpAddress).Port;
+        env["NEXUS_BROWSER_HTTP_PORT"] = httpPort.ToString();
         _ = bridge.Process.StandardOutput.ReadToEndAsync(ct); // keep draining
 
         using var http = new HttpClient();

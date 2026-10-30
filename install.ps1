@@ -17,6 +17,7 @@
 param([switch]$SkipTests, [switch]$SkipLaunch, [switch]$Register)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'scripts\runtime.ps1')
+. (Join-Path $PSScriptRoot 'scripts\Resolve-NexusToken.ps1')
 $utf8 = New-Object Text.UTF8Encoding $false
 New-Item -ItemType Directory -Force $localRoot | Out-Null
 $journal = Join-Path $localRoot 'install.log'
@@ -160,25 +161,9 @@ if ($token) {
     # set, else ~\.nexus\mcp-token.txt; reused when present, never regenerated; created exclusively otherwise, so that
     # installers run one after the other or together end with the same token. The user variable NEXUS_MCP_TOKEN mirrors
     # it for the AI apps (never written into their files); the daemon reads the file.
-    $sharedTokenFile = @([Environment]::GetEnvironmentVariable('NEXUS_MCP_TOKEN_FILE', 'Process'),
-        [Environment]::GetEnvironmentVariable('NEXUS_MCP_TOKEN_FILE', 'User')) | Where-Object { $_ } | Select-Object -First 1
-    if (-not $sharedTokenFile) { $sharedTokenFile = Join-Path $HOME '.nexus\mcp-token.txt' }
-    New-Item -ItemType Directory -Force (Split-Path $sharedTokenFile) | Out-Null
-    $token = if (Test-Path -LiteralPath $sharedTokenFile) { (Get-Content -LiteralPath $sharedTokenFile -Raw).Trim() } else { '' }
-    if (-not $token) {
-        $bytes = New-Object byte[] 32
-        [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-        $candidateToken = -join ($bytes | ForEach-Object { $_.ToString('x2') })
-        try {
-            $stream = [IO.File]::Open($sharedTokenFile, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-            try { $data = $utf8.GetBytes($candidateToken); $stream.Write($data, 0, $data.Length) } finally { $stream.Dispose() }
-            Write-Host "Shared MCP token created: $sharedTokenFile"
-        } catch [IO.IOException] { }  # another installer created it first: its token wins
-        $deadline = [DateTime]::UtcNow.AddSeconds(5)
-        do { $token = (Get-Content -LiteralPath $sharedTokenFile -Raw -ErrorAction SilentlyContinue); if ($token) { $token = $token.Trim() } }
-        while (-not $token -and [DateTime]::UtcNow -lt $deadline)
-        if (-not $token -or $token.Length -lt 32) { throw "Shared MCP token unreadable: $sharedTokenFile" }
-    }
+    $sharedTokenFile = Resolve-NexusTokenFile -Explicit @([Environment]::GetEnvironmentVariable('NEXUS_MCP_TOKEN_FILE', 'Process'),
+        [Environment]::GetEnvironmentVariable('NEXUS_MCP_TOKEN_FILE', 'User'))
+    $token = [IO.File]::ReadAllText($sharedTokenFile).Trim()
     if ([Environment]::GetEnvironmentVariable('NEXUS_MCP_TOKEN', 'User') -ne $token) {
         [Environment]::SetEnvironmentVariable('NEXUS_MCP_TOKEN', $token, 'User')
         Write-Host 'User variable NEXUS_MCP_TOKEN set (restart the AI apps to see it).'

@@ -3948,6 +3948,21 @@ test('2.1 orphelins : fermeture permise, mort retenue après redémarrage du ser
     assert.equal((await restarted.run('eval', {tabId: 521, code: '1'}, fresh)).data, 1);
 });
 
+test('a heartbeat already in flight cannot revive an explicitly closed session', async () => {
+    const old = {agent: 'Claude', id: 'claude-closed-session'};
+    const fresh = {agent: 'Claude', id: 'claude-new-session'};
+    const daemon = {agent: 'Claude', id: 'claude-daemon-123'};
+    const tabs = {create: async p => ({id: 590, url: p.url, active: false, windowId: 10}), query: async () => [{id: 590}]};
+    const h = harness({}, {autoOwn: false, tabs});
+    await h.run('create_tab', {url: 'https://a.invalid', group: false}, old);
+    await h.run('heartbeat', {reclaim: false}, daemon, {gone: [old.id]});
+    await h.run('heartbeat', {reclaim: false}, old); // arrived after the close announcement
+    assert.equal((await h.run('list_tabs', {}, fresh)).data[0].state, 'orphan');
+    const restarted = harness({}, {autoOwn: false, tabs, sessionStorage: h.sessionData});
+    await restarted.run('heartbeat', {reclaim: false}, old);
+    assert.equal((await restarted.run('adopt_tab', {tabId: 590}, fresh)).data.reclaimed, true);
+});
+
 test('2.1 orphelins : silence de plus de 1,618 x 60 s -> session morte ; un battement garde la session vivante', async () => {
     const h = harness({}, {autoOwn: false, virtualTime: true, tabs: {
         create: async (p) => ({id: 600, url: p.url, active: false, windowId: 10}), query: async () => [{id: 600}]
