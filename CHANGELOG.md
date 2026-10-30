@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- Store listing explains the NexusSystem installation path and required local companion, explicit window focus,
+  and the distinction between product telemetry and requests to websites chosen by the user.
+
 ## [2.33.4] - 2026-10-30
 
 ### Fixed

@@ -1,7 +1,7 @@
 # Chrome Web Store submission
 
-Everything the Chrome Web Store dashboard asks for, ready to paste. Only the developer account (one-time
-registration fee, the author's Google account) and the upload itself are left to the author.
+Source text and assets for the Chrome Web Store dashboard. Use the verified release ZIP, check the resulting
+draft version after import, update the listing and submit the finished draft for review.
 
 ## Package
 
@@ -32,28 +32,29 @@ pwsh -NoProfile -File scripts/store-package.ps1 -OutDir dist
 ### Description
 
 ```text
-NexusBrowser lets the AI agents on your PC (Claude, Codex, Antigravity) use your own Chrome, with your sessions, in
-background tabs: each agent works in its own tabs, grouped under its name, while you keep browsing in yours.
+NexusBrowser lets the AI agents on your PC (Claude, Codex, Antigravity) use your own Chrome, with your sessions, in background tabs. Each agent works in its own tabs, grouped under its name.
 
-This extension is one of three pieces that run on your PC only: the extension, a local bridge (127.0.0.1) and an
-MCP server that your AI app starts. Install them all with one command (Windows 10/11):
-https://github.com/pironjulien/NexusBrowser#install
+Get started on Windows 10/11:
+1. Install NexusSystem from the Microsoft Store: https://apps.microsoft.com/detail/9NSH2P3QLWT1
+2. Use NexusSystem to install NexusBrowser for your AI apps, then add this Chrome extension.
 
-What the agent can do in its own tabs:
-- open pages, click and type with trusted input, fill whole forms, pick options, upload files;
-- read pages cheaply (interactive map, Markdown export), take screenshots and PDFs;
-- answer alert/confirm/prompt dialogs, work inside cross-origin iframes;
-- inspect network requests and response bodies (secret headers and fields masked);
-- export Google Docs, Sheets and Slides, YouTube transcripts, wait for downloads.
+The extension requires the local NexusBrowser companion. The companion provides the browser bridge and MCP connection on your PC; installing the extension alone does not connect an AI. No separate Python or Node.js runtime is required.
+Verified manual installation and updates: https://github.com/pironjulien/NexusBrowser#install
 
-Guard rails held by the extension and the bridge, not by the agent:
-- an agent only touches the tabs it opened; your tabs only if you ask it to adopt one;
-- sending, paying, publishing or submitting a form with your data needs your explicit yes, for that exact action;
-- password, one-time-code and card values are never returned; the bridge accepts only this extension, with
-  authenticated, signed messages;
-- emergency stop for every agent: Ctrl+Alt+Shift+Esc.
+In its own tabs, an agent can:
+- open pages, click and type with trusted input, fill forms, choose options and select files;
+- read page maps and Markdown, take screenshots and PDFs;
+- handle alert, confirm and prompt dialogs, and work inside cross-origin iframes;
+- inspect network requests and responses with sensitive fields masked in standard reads;
+- export Google Docs, Sheets and Slides, retrieve YouTube transcripts and wait for downloads.
 
-No account, no telemetry, no remote server: nothing is sent to the author or to any third party.
+You stay in control:
+- an agent works in the tabs it owns; your tabs require your permission;
+- selecting a tab keeps Chrome in the background unless you explicitly request window focus;
+- sending, paying, publishing and submitting your data require explicit approval for the exact action;
+- Ctrl+Alt+Shift+Esc stops every agent.
+
+No telemetry or hosted browser service. NexusBrowser does not send browsing data to its author. Websites you ask an agent to use still receive the usual requests and any data you choose to submit.
 Open source (MIT): https://github.com/pironjulien/NexusBrowser
 ```
 
