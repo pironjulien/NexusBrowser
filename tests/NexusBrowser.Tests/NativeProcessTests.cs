@@ -183,7 +183,7 @@ public sealed partial class NativeProcessTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------------------------
-    // --http daemon: health, sessions bound to their agent, idle lease; duplicate port diagnostic.
+    // --http daemon: health, sessions bound to their agent; duplicate port diagnostic.
     // ---------------------------------------------------------------------------------------------
 
     [Fact]
@@ -196,7 +196,6 @@ public sealed partial class NativeProcessTests : IDisposable
         {
             ["NEXUS_MCP_TOKEN"] = token,
             ["NEXUS_SHARED_HOME"] = _dir["shared"],
-            ["NEXUS_BROWSER_SESSION_IDLE_SECONDS"] = "0.25",
         });
         string base_ = $"http://127.0.0.1:{port}";
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
@@ -214,7 +213,7 @@ public sealed partial class NativeProcessTests : IDisposable
 
         async Task<HttpResponseMessage> Post(string path, string body, string? session = null)
         {
-            var request = new HttpRequestMessage(HttpMethod.Post, base_ + path) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            using var request = new HttpRequestMessage(HttpMethod.Post, base_ + path) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             if (session is not null) request.Headers.Add("mcp-session-id", session);
             return await http.SendAsync(request, ct);
@@ -234,9 +233,8 @@ public sealed partial class NativeProcessTests : IDisposable
             Assert.Equal(HttpStatusCode.OK, own.StatusCode);
             Assert.Equal(49, JsonNode.Parse(await own.Content.ReadAsStringAsync(ct))!["result"]!["tools"]!.AsArray().Count);
         }
-        await Task.Delay(350, ct); // the configured idle lease elapses, without refreshing it by polling
-        using (var expired = await Post("/mcp?agent=codex", list, session))
-            Assert.Equal(HttpStatusCode.NotFound, expired.StatusCode);
+        // Idle expiry has its own test (ExpiredSessionAnswers404AndIsLogged), which waits for the
+        // daemon's expiry evidence. A subsecond lease here races agent-isolation assertions on busy runners.
         using (var anonymous = await http.PostAsync(base_ + "/mcp?agent=codex", new StringContent(list, Encoding.UTF8, "application/json"), ct))
             Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
     }

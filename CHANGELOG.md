@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Agent-isolation process tests use the normal session lifetime instead of racing a 250 ms expiry on busy CI
+  runners. Expiry remains covered separately by waiting for the daemon's logged expiration before asserting 404.
+
 ### Changed
 - Store listing explains the NexusSystem installation path and required local companion, explicit window focus,
   and the distinction between product telemetry and requests to websites chosen by the user.
