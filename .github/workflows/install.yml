@@ -91,7 +91,8 @@ jobs:
           $app = Join-Path $root 'app'
           $token = (Get-Content (Join-Path $HOME '.nexus\nexus-browser\bridge-token') -Raw).Trim()
           function Assert-Working([string]$Case) {
-            $left = @(Get-ChildItem $root -Directory | Where-Object Name -ne 'app' | ForEach-Object Name)
+            # app: the installed copy; build and native: the native engine's build cache and immutable versions.
+            $left = @(Get-ChildItem $root -Directory | Where-Object Name -notin 'app', 'build', 'native' | ForEach-Object Name)
             if ($left) { throw "$Case : folders left behind: $left" }
             if ((Get-Content (Join-Path $app 'install.ps1') -Raw) -match 'Injected failure') { throw "$Case : broken version installed" }
             $deadline = (Get-Date).AddSeconds(60)
