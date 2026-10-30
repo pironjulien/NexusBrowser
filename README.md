@@ -1,9 +1,6 @@
 # NexusBrowser
 
-<!-- mcp-name: io.github.pironjulien/nexus-browser -->
-
 [![Release](https://img.shields.io/github/v/release/pironjulien/NexusBrowser)](https://github.com/pironjulien/NexusBrowser/releases)
-[![PyPI](https://img.shields.io/pypi/v/nexus-browser)](https://pypi.org/project/nexus-browser/)
 [![Tests](https://github.com/pironjulien/NexusBrowser/actions/workflows/tests.yml/badge.svg)](https://github.com/pironjulien/NexusBrowser/actions/workflows/tests.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/pironjulien/NexusBrowser/badge)](https://scorecard.dev/viewer/?uri=github.com/pironjulien/NexusBrowser)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -29,6 +26,8 @@ Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
 [NexusBrowser](https://julienpiron.fr/nexusbrowser/) ([repo](https://github.com/pironjulien/NexusBrowser)),
 [NexusAndroid](https://julienpiron.fr/nexusandroid/) ([repo](https://github.com/pironjulien/NexusAndroid)).
 Project page: [julienpiron.fr/nexusbrowser](https://julienpiron.fr/nexusbrowser/).
+
+**Install:** ask your AI to install NexusBrowser through [NexusSystem](https://github.com/pironjulien/NexusSystem) (or use the NexusSystem app from the Microsoft Store). New versions are no longer published to PyPI; earlier packages stay available.
 
 ## Why
 

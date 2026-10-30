@@ -5,6 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Removed
+- PyPI, MCP registry and Glama publishing (`publish.yml`, `server.json`, `glama.json`): installation goes through NexusSystem. Earlier PyPI packages stay available.
+
 ## [2.32.0] - 2026-10-30
 
 ### Fixed
