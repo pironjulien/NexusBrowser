@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <BaseOutputPath>$([System.Environment]::GetFolderPath(SpecialFolder.LocalApplicationData))\NexusBrowser\build\bin\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$([System.Environment]::GetFolderPath(SpecialFolder.LocalApplicationData))\NexusBrowser\build\obj\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>

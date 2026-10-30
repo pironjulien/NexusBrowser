@@ -54,11 +54,27 @@ bridge shared by several agents.
 | --- | --- |
 | `extension/` | Chrome MV3 extension "NexusBrowser": CDP actions, locators, network, dialogs, cross-origin iframes, exports, tab ownership |
 | `native-host/` | Local bridge (`bridge_server.py`: WebSocket 9224 for the extension, HTTP 9225 for the agents) and native host `com.nexus.browser_auth` |
+| `native/` | Unified Windows C# engine: Chrome authentication, bridge, the 49 MCP tools over stdio or HTTP, native image processing and exports |
 | `client/` | MCP server `nexus-browser` (`mcp_server.py`), authenticated transport (`bridge_client.py`), CLI (`browser_cli.py`), shared emergency stop |
 | `skills/`, `plugins/` | Skill and Antigravity plugin; `install.ps1` copies the skill into that plugin only |
 | `benchmarks/` | Reproducible token and success benchmark against Chrome DevTools MCP and Playwright MCP (`compare.py`, results and method in its README) |
 | `mcpb/` | Claude Desktop extension (`nexus-browser.mcpb`, attached to every release; server from PyPI) |
 | `gemini-extension.json` | Gemini CLI extension: `gemini extensions install https://github.com/pironjulien/NexusBrowser` (server from PyPI and the skill) |
+
+## Native Windows engine (development checkout)
+
+The native engine builds with the .NET 10 SDK. `scripts/build-native.ps1` builds and self-tests a candidate outside
+the repository. `install.ps1 -Runtime Native` installs that engine for Chrome authentication, the bridge and the
+shared MCP daemon; existing Chrome and AI applications remain open. Installation is deferred while an agent owns
+browser tabs. `-Runtime Auto` preserves the installed runtime, and `-Runtime Python` explicitly selects the Python
+runtime. A switch drains the old Browser daemon before starting its replacement on the same port.
+
+`verify.ps1 -Browser` checks the selected installation, the authenticated Chrome extension and native MCP health.
+`test.ps1 -Full` runs the offline tests and the real mouse and full Chrome fixtures through a native MCP HTTP
+session on an isolated port, closing its tabs and downloaded files afterward. Google account exports require
+their own explicitly supplied fixture URLs; the local fixtures do not validate access to an account's documents.
+When Chrome has been closed, `browser_new_tab` starts the installed Chrome on its real Default profile and waits
+for the extension before creating the tab. Read tools and idle heartbeats leave a closed browser alone.
 
 ## Tools
 

@@ -1,4 +1,5 @@
-param([switch]$CheckOnly, [string]$RegistryKey = "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth")
+param([switch]$CheckOnly, [string]$RegistryKey = "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth",
+    [ValidateSet('Auto', 'Native', 'Python')][string]$Runtime = 'Auto')
 # Hote natif com.nexus.browser_auth : l'extension Chrome lui fait calculer les preuves d'authentification du pont
 # local (HMAC du jeton ~/.nexus/nexus-browser/bridge-token) ; le jeton n'est jamais livre a Chrome. Declare pour l'utilisateur
 # courant seulement (HKCU), pour les identifiants d'extension de native-host\bridge_config.json. Fichiers hors OneDrive.
@@ -8,21 +9,26 @@ $ErrorActionPreference = "Stop"
 # directe partait dans son registre prive et Chrome ne trouvait pas l'hote natif ("native messaging host not found").
 . (Join-Path $PSScriptRoot "registre-reel.ps1")
 $hostName = "com.nexus.browser_auth"
-$python = $pythonExe
-$hostScript = Join-Path $repositoryRoot "native-host\auth_host.py"
 $hostDirectory = Join-Path $localRoot "native-host"
 $launcher = Join-Path $hostDirectory "nexus_browser_auth.cmd"
 $manifestPath = Join-Path $hostDirectory "$hostName.json"
 $utf8 = [Text.UTF8Encoding]::new($false)
+if ($Runtime -eq 'Auto') {
+    $installed = if (Test-Path -LiteralPath $manifestPath) { Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json }
+    $Runtime = if ($installed.path -eq $nativeExe -or -not $installed) { 'Native' } else { 'Python' }
+}
 
 $origins = @((Get-Content (Join-Path $repositoryRoot "native-host\bridge_config.json") -Raw | ConvertFrom-Json).allowed_origins)
 if (-not $origins) { throw "Aucune origine d'extension dans native-host\bridge_config.json" }
-# -I : ni variables PYTHON*, ni site utilisateur ; -B : aucun bytecode ecrit a cote des sources (OneDrive).
-$launcherText = "@echo off`r`n`"$python`" -I -B `"$hostScript`" %*`r`n"
+# Chrome passes its extension origin to the executable; Program detects native-messaging mode.
+$launcherText = if ($Runtime -eq 'Native') { "@echo off`r`n`"$nativeExe`" --auth-host %*`r`n" } else {
+    "@echo off`r`n`"$pythonExe`" -I -B `"$(Join-Path $repositoryRoot 'native-host\auth_host.py')`" %*`r`n"
+}
+$hostExecutable = if ($Runtime -eq 'Native') { $nativeExe } else { $launcher }
 $manifestText = ([ordered]@{
     name = $hostName
     description = "NexusBrowser : preuves d'authentification du pont local (jeton jamais livre a Chrome)"
-    path = $launcher
+    path = $hostExecutable
     type = "stdio"
     allowed_origins = $origins
 } | ConvertTo-Json -Depth 4) + "`n"
@@ -45,7 +51,8 @@ if ($CheckOnly) {
     return
 }
 
-if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw "Runtime local absent : executer install.ps1" }
+if ($Runtime -eq 'Native' -and -not (Test-Path -LiteralPath $nativeExe -PathType Leaf)) { throw "Moteur natif absent : executer install.ps1" }
+if ($Runtime -eq 'Python' -and -not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) { throw "Runtime Python absent : executer install.ps1" }
 [IO.Directory]::CreateDirectory($hostDirectory) | Out-Null
 [IO.File]::WriteAllText($launcher, $launcherText, $utf8)
 [IO.File]::WriteAllText($manifestPath, $manifestText, $utf8)

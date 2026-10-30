@@ -5,6 +5,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Tabs of a dead shared (HTTP daemon) session are taken back right after the daemon restarts. Daemon sessions now
+  report the daemon's own process id, so the bridge declares them gone as soon as that process dies; before, they
+  looked alive for `SESSION_DEAD_MS` while the one-shot reclaim had already run, and the agent's own tabs stayed
+  "other" (refused). The native daemon no longer auto-reclaims orphans on a session's first heartbeat: several
+  conversations of the same agent share it, and the first one to beat (often an idle one) took the tabs of another.
+  Orphans stay "orphan" until the conversation that needs them adopts or closes them.
+- Common journal now in `%USERPROFILE%\.nexus\journal` instead of AppData: launched by Claude Desktop (an MSIX app), the engine's AppData writes went to a private copy the review and NexusSystem never saw.
+- Native cold-start Chrome is launched by the interactive Explorer desktop broker, outside the MCP supervisor's
+  process lifetime. Direct startup (including `UseShellExecute=true`) had attached Chrome to its kill-on-close job.
+  There is no inherited-process fallback or retry after an uncertain launch. An invisible WinExe fixture reproduces
+  the old failure and verifies the real startup branch survives caller/job closure, then exits normally.
+- Native `browser_new_tab` recovery now starts the installed Chrome on its real Default profile when Chrome has been closed,
+  then resends the command only after the extension reconnects. This startup/recovery path existed in Python
+  and was missing from the native port. Safe opt-in Chrome flags retain Python's allowlist; existing Chrome
+  processes are preserved. Read tools and idle heartbeats never reopen a browser that the user closed;
+  `/api/status` includes `chrome_running` so a closed browser is distinct from a disconnected extension.
+- Native Chrome authentication preserves inherited stdin/stdout pipes when Chrome launches the WinExe through
+  `cmd.exe`; attaching the wrapper's console had left hosts waiting forever and Chrome disconnected.
+- Windows deployment builds and self-tests a separate candidate, drains the supervised Browser daemon before
+  replacing its binaries, and registers one native engine for authentication, bridge and shared MCP HTTP. The
+  bridge keeps its log, native extension origins come from the shared configuration, and `verify.ps1` checks the
+  selected runtime and authenticated Chrome connection. `install.ps1 -Runtime Auto` preserves the installed
+  runtime; `-Runtime Native` explicitly selects the qualified native engine and `-Runtime Python` provides an
+  explicit, visible rollback without discarding the native fixes.
+- Native MCP parity: exact outward-action accords and session isolation, input/output schema checks, form
+  prevalidation and final readback, WebMCP discovery/calls, bridge startup and reconnection, and native inline
+  WebP images (size limits, deduplication, coordinates and regions) and Google export files. SkiaSharp is pinned
+  with a NuGet lock file. Native tests always build current sources instead of testing an old installed binary.
+- Native HTTP sessions expire after the same 161.8 seconds of inactivity as Python; active requests keep their
+  lease, closed sessions cancel their requests, and a request body arriving after closure cannot recreate a
+  session. Stdio/HTTP cancellation is observed before a late action reaches Chrome. An occupied MCP port reports
+  an error and exits cleanly instead of opening a Windows crash dialog.
+- Native validation runs the existing Chrome mouse and full fixtures through a native HTTP MCP session on an
+  isolated port, preserving the installed endpoint and closing all fixture tabs and downloads.
+- The native install confirms the replacement daemon through its health response and actual executable/PID.
+  It no longer attempts a redundant second restart using an unreliable TCP listener owner lookup after a
+  successful transactional deployment.
+
+### Added
+- Native C# (.NET 10) unified engine (`native/NexusBrowser.csproj` -> `NexusBrowser.exe`), compiled outside OneDrive
+  (`%LOCALAPPDATA%\NexusBrowser\build\`) and published to `%LOCALAPPDATA%\NexusBrowser\native\NexusBrowser.exe`,
+  combining `--auth-host` (`com.nexus.browser_auth`), `--bridge` (WebSocket 9224 + HTTP 9225 with `nexus-browser/1`
+  mutual authentication, pairing, session liveness, emergency stop and secret-folder upload refusal), `--mcp` / `--http`
+  (all 49 `browser_*` tools, MCP `2026-07-28` `server/discover`, guardrails and shared JSONL journal), `--rotate` and
+  `--selftest`.
+
 ## [2.31.6] - 2026-10-28
 
 ### Changed

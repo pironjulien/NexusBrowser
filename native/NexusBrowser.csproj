@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>NexusBrowser</AssemblyName>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RootNamespace>NexusBrowser</RootNamespace>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;bin/**</DefaultItemExcludes>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="4.153.2" />
+    <None Include="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="tools.json" LogicalName="tools.json" />
+    <EmbeddedResource Include="..\client\garde-fous.json" LogicalName="garde-fous.json" Condition="Exists('..\client\garde-fous.json')" />
+    <EmbeddedResource Include="..\client\trigger_probe.js" LogicalName="trigger_probe.js" Condition="Exists('..\client\trigger_probe.js')" />
+    <EmbeddedResource Include="..\client\webmcp_probe.js" LogicalName="webmcp_probe.js" Condition="Exists('..\client\webmcp_probe.js')" />
+    <EmbeddedResource Include="..\native-host\bridge_config.json" LogicalName="bridge_config.json" Condition="Exists('..\native-host\bridge_config.json')" />
+    <EmbeddedResource Include="..\VERSION" LogicalName="VERSION" Condition="Exists('..\VERSION')" />
+  </ItemGroup>
+</Project>

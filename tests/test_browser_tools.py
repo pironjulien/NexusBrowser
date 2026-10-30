@@ -222,9 +222,9 @@ def test_full_live_fixture_serves_cross_origin_frames_and_download(live_module):
 def test_test_ps1_full_runs_both_live_modes():
     script = (REPO_ROOT / "test.ps1").read_text(encoding="utf-8")
     assert "param([switch]$Full)" in script
-    assert '"--mouse", "--full-live"' in script
-    live = (REPO_ROOT / "tests" / "live_browser_validation.py").read_text(encoding="utf-8")
-    assert '"--full-live"' in live and "preflight()" in live
+    assert "live_native_browser_validation.py" in script
+    live = (REPO_ROOT / "tests" / "live_native_browser_validation.py").read_text(encoding="utf-8")
+    assert "run_mouse_validation()" in live and "run_full_validation()" in live and "live.preflight()" in live
 
 
 def test_new_tab_groups_under_the_agent_name(monkeypatch):

@@ -19,14 +19,8 @@ if ($LASTEXITCODE) { exit $LASTEXITCODE }
 if ($Full) {
     & (Join-Path $PSScriptRoot 'verify.ps1') -Browser
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    $live = Join-Path $PSScriptRoot 'tests\live_browser_validation.py'
-    foreach ($mode in "--mouse", "--full-live") {
-        & $pythonExe $live $mode
-        if ($LASTEXITCODE) {
-            Write-Error "Validation réelle $mode en échec (code $LASTEXITCODE)." -ErrorAction Continue
-            exit $LASTEXITCODE
-        }
-    }
-    Write-Host 'Validation réelle (--mouse, --full-live) : OK.'
+    & $pythonExe (Join-Path $PSScriptRoot 'tests\live_native_browser_validation.py')
+    if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    Write-Host 'Validation réelle du moteur natif (souris et complète) : OK.'
 }
 exit 0

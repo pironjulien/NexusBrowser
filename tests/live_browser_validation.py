@@ -851,6 +851,7 @@ def run_mouse_validation() -> dict[str, bool]:
 
         # 3. Menu au survol : la règle CSS :hover n'obéit qu'au vrai pointeur
         res = parse_response(mcp.browser_hover(selector="#menu-trigger", tab_id=tab_id))
+        mcp.browser_wait_for(locator={"role": "button", "name": "Élément du menu"}, timeout_ms=1200, tab_id=tab_id)
         display = get_eval_val(
             mcp.browser_eval("getComputedStyle(document.getElementById('menu')).display", tab_id=tab_id)
         )

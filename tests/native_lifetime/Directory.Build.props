@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <BaseOutputPath>$([System.Environment]::GetFolderPath(SpecialFolder.LocalApplicationData))\NexusBrowser\build\lifetime\bin\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$([System.Environment]::GetFolderPath(SpecialFolder.LocalApplicationData))\NexusBrowser\build\lifetime\obj\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>

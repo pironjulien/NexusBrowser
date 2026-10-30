@@ -18,9 +18,24 @@
 #    ni presse-papiers) ; le pack appelle lui-meme scripts\guide-extension.ps1 -WaitSeconds 0 a la fin
 # Tourne sous Windows PowerShell 5.1 comme sous pwsh 7 (fichier en ASCII : 5.1 lit un .ps1 sans BOM en page ANSI).
 # Usage : pwsh -NoProfile -File install.ps1 [-SkipTests] [-SkipLaunch] [-Register]
-param([switch]$SkipTests, [switch]$SkipLaunch, [switch]$Register)
+param([switch]$SkipTests, [switch]$SkipLaunch, [switch]$Register,
+    [ValidateSet('Auto', 'Native', 'Python')][string]$Runtime = 'Auto')
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'scripts\runtime.ps1')
+$daemonSpec = Join-Path $HOME '.nexus\daemons\specs\nexus-browser.json'
+if ($Runtime -eq 'Auto') {
+    if (Test-Path -LiteralPath $daemonSpec) {
+        $installedSpec = Get-Content -LiteralPath $daemonSpec -Raw | ConvertFrom-Json
+        $Runtime = if ($installedSpec.python -eq $nativeExe) { 'Native' } else { 'Python' }
+    } else { $Runtime = 'Native' }
+}
+$useNative = $Runtime -eq 'Native'
+$runtimeParkedSpec = "$daemonSpec.runtime-switch"
+trap {
+    if (Test-Path -LiteralPath $runtimeParkedSpec) { Move-Item -LiteralPath $runtimeParkedSpec -Destination $daemonSpec -Force }
+    break
+}
+Write-Host "NexusBrowser runtime: $Runtime"
 $utf8 = [Text.UTF8Encoding]::new($false)
 New-Item -ItemType Directory -Force $localRoot | Out-Null
 
@@ -32,6 +47,10 @@ function Write-Journal([string]$Text) {
 
 $uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
 if (-not $uv) { throw "uv introuvable : l'installer (https://docs.astral.sh/uv/) puis relancer." }
+if ($useNative) {
+    $nativeCandidate = Join-Path $nativeRoot 'build\candidate'
+    & (Join-Path $PSScriptRoot 'scripts\build-native.ps1') -OutputDirectory $nativeCandidate
+}
 
 function Stop-BridgeTask([string]$Name) {
     $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
@@ -59,11 +78,37 @@ if (-not $SkipLaunch -and (Test-Path -LiteralPath $pythonExe)) {
     }
     # -Register : a la premiere installation, l'extension n'est souvent pas encore chargee dans Chrome.
     if ($LASTEXITCODE -eq 2 -and -not $Register -and (Get-Process -Name chrome -ErrorAction SilentlyContinue)) {
-        throw 'Chrome est ouvert mais son pont ne repond pas : aucune session arretee.'
+        # A broken native auth host can leave the bridge online with no client. No command is running then;
+        # replacing that host is the repair itself and does not need Chrome to restart.
+        $repairable = $false
+        try {
+            $bridgeToken = [IO.File]::ReadAllText($tokenFile).Trim()
+            $bridgeStatus = Invoke-RestMethod -Uri 'http://127.0.0.1:9225/api/status' `
+                -Headers @{ 'X-Nexus-Browser-Token' = $bridgeToken } -TimeoutSec 5
+            $repairable = $bridgeStatus.status -eq 'online' -and $bridgeStatus.connected_clients -eq 0
+        } catch { }
+        if (-not $repairable) { throw 'Chrome est ouvert mais son pont ne repond pas : aucune session arretee.' }
+        Write-Journal 'Reparation du pont sans client authentifie ; Chrome reste ouvert.'
     }
 }
 Stop-BridgeTask 'NexusAGY Browser Bridge'
 Stop-BridgeTask $bridgeTaskName
+if (-not $useNative -and (Test-Path -LiteralPath $daemonSpec)) {
+    $installedSpec = Get-Content -LiteralPath $daemonSpec -Raw | ConvertFrom-Json
+    if ($installedSpec.python -eq $nativeExe) {
+        if (Test-Path -LiteralPath $runtimeParkedSpec) { throw 'Previous Browser runtime switch unfinished.' }
+        Move-Item -LiteralPath $daemonSpec -Destination $runtimeParkedSpec
+        $deadline = [DateTime]::UtcNow.AddSeconds(20)
+        do {
+            $oldNative = @(Get-CimInstance Win32_Process -Filter "Name='NexusBrowser.exe'" | Where-Object {
+                $_.ExecutablePath -eq $nativeExe -and $_.CommandLine -match '--http\s+16182'
+            })
+            if (-not $oldNative.Count) { break }
+            Start-Sleep -Milliseconds 250
+        } while ([DateTime]::UtcNow -lt $deadline)
+        if ($oldNative.Count) { throw 'Native Browser daemon did not drain; Python switch cancelled.' }
+    }
+}
 
 # Python systeme de preference : celui de uv sous %AppData% est virtualise par l'application Claude.
 $systemPython = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python314\python.exe'
@@ -100,13 +145,19 @@ try {
     if (Test-Path -LiteralPath $parkedSpec) { Move-Item -LiteralPath $parkedSpec $daemonSpec -Force }
 }
 
-& (Join-Path $PSScriptRoot 'scripts\installer-hote-natif.ps1')
+if ($useNative) { & (Join-Path $PSScriptRoot 'scripts\deploy-native.ps1') -CandidateDirectory $nativeCandidate }
+& (Join-Path $PSScriptRoot 'scripts\installer-hote-natif.ps1') -Runtime $Runtime
 
 # --- Tache du pont : aucun declencheur, lancee a la demande (bridge_client.ensure_bridge_running).
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$bridgeScript = Join-Path $repositoryRoot 'native-host\bridge_server.py'
-$arguments = "-B `"$bridgeScript`" --token-file `"$tokenFile`" --log-file `"$(Join-Path $localRoot 'bridge.log')`""
-$action = New-ScheduledTaskAction -Execute $pythonwExe -Argument $arguments -WorkingDirectory $localRoot
+if ($useNative) {
+    $arguments = "--bridge --token-file `"$tokenFile`" --log-file `"$(Join-Path $localRoot 'bridge.log')`""
+    $action = New-ScheduledTaskAction -Execute $nativeExe -Argument $arguments -WorkingDirectory $localRoot
+} else {
+    $bridgeScript = Join-Path $repositoryRoot 'native-host\bridge_server.py'
+    $arguments = "-B `"$bridgeScript`" --token-file `"$tokenFile`" --log-file `"$(Join-Path $localRoot 'bridge.log')`""
+    $action = New-ScheduledTaskAction -Execute $pythonwExe -Argument $arguments -WorkingDirectory $localRoot
+}
 $settings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
 $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
@@ -167,8 +218,8 @@ if ((Test-Path -LiteralPath $oldHostDirectory -PathType Container) -and -not (Ge
 #     au superviseur des demons Nexus (NexusInfra\ops\workstation\nexus-mcp-daemons.py, tache "Nexus MCP Daemons").
 #     Chaque client le joint par URL avec son agent (?agent=...) et le jeton de NexusSecure ; chaque session MCP a sa
 #     propre identite (ses onglets).
-$server = Join-Path $repositoryRoot 'client\mcp_server.py'
-$args_ = @('-B', $server)
+$daemonExe = if ($useNative) { $nativeExe } else { $pythonExe }
+$args_ = if ($useNative) { @() } else { @('-B', (Join-Path $repositoryRoot 'client\mcp_server.py')) }
 $port = 16182
 # Jeton commun aux deux PC : cree une seule fois par Sync-NexusPoste (etape "Demons MCP partages"), jamais ici. Un
 # installeur lance sur un PC neuf avant que OneDrive ait descendu le coffre en creait un autre, qui cassait l'autre PC.
@@ -180,10 +231,11 @@ $token = $null
 if ($mcpTokenFile -and (Test-Path -LiteralPath $mcpTokenFile)) { $token = (Get-Content -LiteralPath $mcpTokenFile -Raw).Trim() }
 function Get-Url([string]$Agent) { "http://127.0.0.1:$port/mcp?agent=$($Agent.ToLower())" }
 if ($token) {
-    $spec = [ordered]@{ port = $port; python = $pythonExe; args = $args_; env = [ordered]@{ PYTHONUTF8 = '1'; PYTHONDONTWRITEBYTECODE = '1' } }
+    $spec = [ordered]@{ port = $port; python = $daemonExe; args = @($args_); env = [ordered]@{ PYTHONUTF8 = '1'; PYTHONDONTWRITEBYTECODE = '1' } }
     $specs = Join-Path $HOME '.nexus\daemons\specs'
     New-Item -ItemType Directory -Force $specs | Out-Null
     [IO.File]::WriteAllText((Join-Path $specs 'nexus-browser.json'), ($spec | ConvertTo-Json -Depth 5), $utf8)
+    if (Test-Path -LiteralPath $runtimeParkedSpec) { Remove-Item -LiteralPath $runtimeParkedSpec }
     # Nouveau code : le demon en place est recharge une seule fois, en fin d'installation (sans -SkipLaunch), apres le
     # controle des onglets pilotes ; son superviseur le relance et les clients se reconnectent seuls.
     if (-not (Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue)) {
@@ -283,13 +335,32 @@ if (-not $SkipLaunch) {
     }
     # Le demon HTTP conserve ses modules Python en memoire. Recharger uniquement celui de Browser,
     # apres le controle d'absence d'onglets pilotes ; son superviseur reprend le meme port.
+    if ($useNative) {
+        # deploy-native already drained and replaced this daemon; verify its new process without another reload.
+        $deadline = [DateTime]::UtcNow.AddSeconds(20)
+        $confirmed = $false
+        do {
+            try {
+                $health = Invoke-RestMethod -Uri 'http://127.0.0.1:16182/health' -TimeoutSec 2
+                $owner = Get-CimInstance Win32_Process -Filter "ProcessId = $($health.pid)"
+                $confirmed = $health.status -eq 'ok' -and $health.runtime -eq 'native' -and
+                    $health.service -eq 'nexus-browser' -and $health.version -eq (Get-Content (Join-Path $PSScriptRoot 'VERSION') -Raw).Trim() -and
+                    $owner.ExecutablePath -eq $nativeExe -and $owner.CommandLine -match '--http\s+16182'
+            } catch { $confirmed = $false }
+            if (-not $confirmed) { Start-Sleep -Milliseconds 250 }
+        } while (-not $confirmed -and [DateTime]::UtcNow -lt $deadline)
+        if (-not $confirmed) { throw 'Le demon natif Browser ne confirme pas son identite et ses capacites.' }
+        Write-Host "Demon MCP Browser natif confirme (pid $($health.pid)); Android et Relay conserves."
+    } else {
     $listener = Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue
     if ($listener) {
         $daemonPid = $listener.OwningProcess | Select-Object -Unique
         $daemon = Get-CimInstance Win32_Process -Filter "ProcessId = $daemonPid"
-        $entryPoint = Join-Path $PSScriptRoot 'client\mcp_server.py'
         $supervisor = Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue
-        if ($daemon.CommandLine -notlike "*$entryPoint --http 16182*" -or $supervisor.State -ne 'Running') {
+        $expected = if ($useNative) { $daemon.ExecutablePath -eq $nativeExe -and $daemon.CommandLine -match '--http\s+16182' } else {
+            $daemon.CommandLine -like "*$(Join-Path $PSScriptRoot 'client\mcp_server.py') --http 16182*"
+        }
+        if (-not $expected -or $supervisor.State -ne 'Running') {
             throw 'Le port MCP Browser ne correspond pas au demon supervise attendu.'
         }
         Stop-Process -Id $daemonPid -ErrorAction Stop
@@ -300,8 +371,12 @@ if (-not $SkipLaunch) {
         } while ((-not $next -or $next.OwningProcess -eq $daemonPid) -and [DateTime]::UtcNow -lt $deadline)
         if (-not $next -or $next.OwningProcess -eq $daemonPid) { throw "Le demon MCP Browser n'a pas confirme sa relance." }
         $replacement = Get-CimInstance Win32_Process -Filter "ProcessId = $($next.OwningProcess)"
-        if ($replacement.CommandLine -notlike "*$entryPoint --http 16182*") { throw 'Le nouveau listener ne correspond pas au demon Browser attendu.' }
+        $expected = if ($useNative) { $replacement.ExecutablePath -eq $nativeExe -and $replacement.CommandLine -match '--http\s+16182' } else {
+            $replacement.CommandLine -like "*$(Join-Path $PSScriptRoot 'client\mcp_server.py') --http 16182*"
+        }
+        if (-not $expected) { throw 'Le nouveau listener ne correspond pas au demon Browser attendu.' }
         Write-Host 'Demon MCP Browser recharge ; Android et Relay conserves.'
+    }
     }
 } elseif (Get-NetTCPConnection -LocalPort 16182 -State Listen -ErrorAction SilentlyContinue) {
     Write-Warning "-SkipLaunch : demon MCP Browser laisse en place ; le nouveau code sera pris a sa prochaine relance."

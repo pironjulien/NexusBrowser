@@ -100,7 +100,7 @@ def test_install_cleans_old_bridge_and_registers_skills_without_duplicate():
         assert forbidden not in script, forbidden
     assert "doublon-antigravity.ps1" in script
     assert "$json.mcpServers.'nexus-browser' = $entry" not in script  # plus d'entrée globale chez Antigravity
-    assert "PYTHONDONTWRITEBYTECODE = '1'" in script and "@('-B', $server)" in script
+    assert "python = $daemonExe" in script and "'Auto', 'Native', 'Python'" in script
     verify = (REPO_ROOT / "verify.ps1").read_text(encoding="utf-8")
     assert "com.nexusagy.bridge_auth" in verify and "ancienne-extension.ps1" in verify
     assert "doublon-antigravity.ps1" in verify and "AGY_FEATURES" in verify
@@ -132,6 +132,8 @@ INSTALL_SCRIPTS = [
     "scripts/self-update.ps1",
     "scripts/registre-reel.ps1",
     "scripts/runtime.ps1",
+    "scripts/build-native.ps1",
+    "scripts/deploy-native.ps1",
 ]
 
 
@@ -247,6 +249,8 @@ def test_get_switches_atomically_and_restores_the_working_version(tmp_path):
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(REPO_ROOT / "get.ps1")],
             capture_output=True,
             text=True,
+            encoding="oem",
+            errors="replace",
             timeout=120,
             env={**env, "NEXUS_BROWSER_SOURCE": str(source)},
             creationflags=subprocess.CREATE_NO_WINDOW,
