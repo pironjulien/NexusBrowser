@@ -151,6 +151,20 @@ jobs:
           & pwsh -NoProfile -File .\tests\install-smoke.ps1 -EntriesOnly
           if ($LASTEXITCODE) { throw 'restored client entries or daemon do not match the previous payload' }
           Assert-Working 'failing installer'
+          # 3. A changed prior payload refuses recovery and keeps the new safe controller for diagnosis/retry.
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'install.ps1') (Join-Path $broken 'install.ps1') -Force
+          $install = Join-Path $broken 'install.ps1'
+          (Get-Content $install -Raw).Replace('exit $LASTEXITCODE', @'
+          [IO.File]::AppendAllText((Join-Path $env:LOCALAPPDATA 'NexusBrowser\app.previous\VERSION'), 'changed')
+          throw 'Injected recovery failure (CI)'
+          '@) | Set-Content $install -NoNewline
+          $env:NEXUS_BROWSER_SOURCE = $broken
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
+          if ($LASTEXITCODE -eq 0) { throw 'changed rollback payload should have been refused' }
+          $safeController = Join-Path $root 'app.failed\scripts\install-native.ps1'
+          if (-not (Test-Path $safeController)) { throw 'failed recovery discarded the safe controller' }
+          if ((Get-FileHash $safeController).Hash -ne (Get-FileHash (Join-Path $broken 'scripts\install-native.ps1')).Hash) { throw 'recovery controller changed' }
+          if (Test-Path $legacyTrap) { throw 'failed recovery executed the previous installer' }
           exit 0  # the step's result is the assertions above, not the expected failure code of the last get.ps1
 
   pack:

@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   CI injects a failed update and an old-installer trap, then verifies restored configuration and client entries.
   The scheduled updater retains the current verified bootstrap independently of the restored payload, so a later
   update cannot reintroduce the retired process-termination behavior.
+  An incomplete recovery retains the failed update's safe controller; a later update cannot discard that evidence.
 
 ## [2.33.0] - 2026-10-30
 

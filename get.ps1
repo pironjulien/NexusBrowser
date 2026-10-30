@@ -131,7 +131,8 @@ if ($env:NEXUS_BROWSER_SOURCE -and (Test-Path -LiteralPath $env:NEXUS_BROWSER_SO
 $next = Join-Path $root 'app.next'
 $previous = Join-Path $root 'app.previous'
 $failed = Join-Path $root 'app.failed'
-foreach ($leftover in $next, $failed) {
+if (Test-Path -LiteralPath $failed) { throw "Previous recovery is incomplete; its safe controller is kept in $failed. No new update was started." }
+foreach ($leftover in @($next)) {
     if (Test-Path -LiteralPath $leftover) { Remove-Item -LiteralPath $leftover -Recurse -Force }
 }
 & robocopy.exe $source $next /MIR /NFL /NDL /NJH /NJS /NP /XD .git | Out-Null
@@ -180,8 +181,8 @@ if ($installCode -and $hadApp -and (Test-Path -LiteralPath (Join-Path $previous 
     & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $failed 'scripts\install-native.ps1') -SkipTests -Register `
         -PayloadRoot $app -ExpectedPayloadHash $previousPayloadHash
     $restoreCode = $LASTEXITCODE
+    if ($restoreCode) { throw "The update failed and restoring the previous version did not complete (exit code $restoreCode). The safe recovery controller is kept in $failed. Log: $HOME\.nexus\nexus-browser\install.log" }
     Remove-Item -LiteralPath $failed -Recurse -Force -ErrorAction SilentlyContinue
-    if ($restoreCode) { throw "The update failed and so did restoring the previous version (exit code $restoreCode). Log: $HOME\.nexus\nexus-browser\install.log" }
     throw "The update failed; the previous version is restored. Log: $HOME\.nexus\nexus-browser\install.log"
 }
 if ($installCode) { throw "NexusBrowser installation failed (see above). Log: $HOME\.nexus\nexus-browser\install.log" }
