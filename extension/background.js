@@ -3677,7 +3677,7 @@ async function groupTabs(params = {}) {
 async function selectTab(params) {
     const tabId = await resolveTargetTab(params);
     const tab = await chrome.tabs.update(tabId, { active: true });
-    if (tab?.windowId && chrome.windows?.update) {
+    if (params?.focusWindow && tab?.windowId && chrome.windows?.update) {
         await chrome.windows.update(tab.windowId, { focused: true });
     }
     return { data: { success: true, tab } };
