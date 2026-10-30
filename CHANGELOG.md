@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.32.0] - 2026-10-30
+
 ### Fixed
 - A stand-alone install (one-line installer, `-Register`) on a PC without the Nexus supervisor no longer fails waiting
   for a shared native daemon that only the supervisor starts.
@@ -1276,7 +1278,7 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.26.3...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.32.0...HEAD
 [2.26.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.3
 [2.26.2]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.2
 [2.26.1]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.1
