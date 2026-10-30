@@ -128,12 +128,14 @@ public static partial class ExtensionRefresh
     }
 
     /// <summary>Command line: --refresh-extension [--check-only] [--wait-ready N] [--token-file F] [--port P].</summary>
-    public static async Task<int> MainAsync(bool checkOnly, string? waitReady, string? tokenFile, int httpPort)
+    public static async Task<int> MainAsync(bool checkOnly, string? waitReady, string? tokenFile, int httpPort, string? sourceRoot = null)
     {
         double wait = 0;
         if (waitReady is not null && !double.TryParse(waitReady, NumberStyles.Float, CultureInfo.InvariantCulture, out wait))
             throw new ArgumentException("--wait-ready must be a number of seconds");
-        var (version, features) = Expected();
+        var (version, features) = sourceRoot is null ? Expected() :
+            (JsonNode.Parse(File.ReadAllText(Path.Combine(sourceRoot, "extension", "manifest.json")))?["version"]?.GetValue<string>() ?? throw new InvalidDataException("Payload extension version missing"),
+             Features(File.ReadAllText(Path.Combine(sourceRoot, "extension", "background.js"))));
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         var (code, report) = await RunAsync(HttpBridge(http, httpPort, tokenFile), checkOnly, wait, version, features);
         Console.WriteLine(report.ToJsonString());

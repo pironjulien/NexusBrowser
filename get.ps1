@@ -151,6 +151,13 @@ if ($sandbox) {
 }
 
 $hadApp = Test-Path -LiteralPath $app
+$shell = (Get-Process -Id $PID).Path
+$previousPayloadHash = $null
+if ($hadApp) {
+    # This is the NEW verified package's integrity helper, never a script from the installed previous version.
+    $previousPayloadHash = (& $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $next 'scripts\payload-integrity.ps1') -Path $app | Out-String).Trim()
+    if ($LASTEXITCODE -or $previousPayloadHash -notmatch '^[0-9a-f]{64}$') { throw 'Previous payload could not be bound for safe rollback: update refused.' }
+}
 if (Test-Path -LiteralPath $previous) { Remove-Item -LiteralPath $previous -Recurse -Force }
 if ($hadApp) {
     try {
@@ -162,14 +169,16 @@ if ($hadApp) {
 }
 Rename-Item -LiteralPath $next -NewName 'app'
 
-$shell = (Get-Process -Id $PID).Path  # the same PowerShell that runs this script
 & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $app 'install.ps1') -SkipTests -Register
 $installCode = $LASTEXITCODE
 if ($installCode -and $hadApp -and (Test-Path -LiteralPath (Join-Path $previous 'install.ps1'))) {
     Rename-Item -LiteralPath $app -NewName 'app.failed'
     Rename-Item -LiteralPath $previous -NewName 'app'
     Write-Warning "The installation failed (exit code $installCode): restoring the previous version."
-    & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $app 'install.ps1') -SkipTests -Register
+    # Keep the NEW controller and its cooperative process rules. The restored previous payload contributes only
+    # its verified files and engine; its old installer and script helpers are never executed.
+    & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $failed 'scripts\install-native.ps1') -SkipTests -Register `
+        -PayloadRoot $app -ExpectedPayloadHash $previousPayloadHash
     $restoreCode = $LASTEXITCODE
     Remove-Item -LiteralPath $failed -Recurse -Force -ErrorAction SilentlyContinue
     if ($restoreCode) { throw "The update failed and so did restoring the previous version (exit code $restoreCode). Log: $HOME\.nexus\nexus-browser\install.log" }

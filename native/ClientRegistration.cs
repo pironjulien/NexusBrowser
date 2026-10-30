@@ -431,12 +431,12 @@ public static partial class ClientRegistration
         return (process.ExitCode, stderr.Length > 0 ? stderr : stdout.Result);
     }
 
-    public static int Run(string? backups)
+    public static int Run(string? backups, string? engineExe = null, string? sourceRoot = null)
     {
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string exe = Environment.ProcessPath ?? throw new InvalidOperationException("executable path unknown");
+        string exe = engineExe ?? Environment.ProcessPath ?? throw new InvalidOperationException("executable path unknown");
         // Plugin and skill files: next to the executable's install (installation.json) or the source checkout.
-        string source = BridgeServer.InstalledSourceRoot() ?? AppContext.BaseDirectory;
+        string source = sourceRoot ?? BridgeServer.InstalledSourceRoot() ?? AppContext.BaseDirectory;
         var context = new Context(home,
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

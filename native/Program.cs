@@ -61,12 +61,12 @@ public static class Program
         {
             int bridgePort = int.TryParse(GetArgValue(args, "--port"), out int rp) && rp > 0 ? rp : 9225;
             return await ExtensionRefresh.MainAsync(args.Contains("--check-only", StringComparer.OrdinalIgnoreCase),
-                GetArgValue(args, "--wait-ready"), tokenFile, bridgePort);
+                GetArgValue(args, "--wait-ready"), tokenFile, bridgePort, GetArgValue(args, "--source-root"));
         }
 
         if (args.Contains("--register", StringComparer.OrdinalIgnoreCase))
         {
-            return ClientRegistration.Run(GetArgValue(args, "--backups"));
+            return ClientRegistration.Run(GetArgValue(args, "--backups"), GetArgValue(args, "--engine-exe"), GetArgValue(args, "--source-root"));
         }
 
         if (args.Contains("--rotate", StringComparer.OrdinalIgnoreCase))

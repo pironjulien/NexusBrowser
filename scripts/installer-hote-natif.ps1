@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$Exe, [switch]$CheckOnly,
+param([Parameter(Mandatory = $true)][string]$Exe, [switch]$CheckOnly, [string]$ConfigurationRoot,
     [string]$RegistryKey = "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth")
 # Hote natif com.nexus.browser_auth : l'extension Chrome fait calculer au moteur (NexusBrowser.exe, lance par Chrome)
 # les preuves d'authentification du pont local (HMAC du jeton ~/.nexus/nexus-browser/bridge-token) ; le jeton n'est
@@ -15,7 +15,8 @@ $manifestPath = Join-Path $hostDirectory "$hostName.json"
 $oldLauncher = Join-Path $hostDirectory "nexus_browser_auth.cmd"  # lanceur Python d'avant la 2.33.0
 $utf8 = New-Object Text.UTF8Encoding $false
 
-$origins = @((Get-Content (Join-Path $repositoryRoot "native\resources\bridge_config.json") -Raw | ConvertFrom-Json).allowed_origins)
+$configuration = if ($ConfigurationRoot) { $ConfigurationRoot } else { $repositoryRoot }
+$origins = @((Get-Content (Join-Path $configuration "native\resources\bridge_config.json") -Raw | ConvertFrom-Json).allowed_origins)
 if (-not $origins) { throw "Aucune origine d'extension dans native\resources\bridge_config.json" }
 # Chrome passes its extension origin to the executable; the engine detects native-messaging mode.
 $manifestText = ([ordered]@{

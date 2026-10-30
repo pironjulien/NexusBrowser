@@ -3,7 +3,7 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.33.1] - 2026-10-30
+## [2.33.2] - 2026-10-30
 
 ### Fixed
 - Bridge upgrades use an authenticated cooperative shutdown addressed to its exact process and random instance id.
@@ -17,8 +17,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   semantically and leave their original bytes untouched.
 - Windows PowerShell 5.1 restores its own standard module folder before inherited PowerShell 7 module folders,
   retaining other module paths. Verified package installation works when launched from PowerShell 7.
-- The Chrome extension version advances to 2.33.1 so its closed-session tombstone fix is actually reloaded when
+- The Chrome extension version advances to 2.33.2 so its closed-session tombstone fix is actually reloaded when
   ownership is clear, including while an older bridge keeps serving.
+- Failed updates restore the previous payload through the new controller and engine, retaining the cooperative
+  process rules. The old installer and script helpers are never run. Recovery accepts only the restored public
+  app beside the failed update controller and verifies its complete payload hash before touching configuration.
+  CI injects a failed update and an old-installer trap, then verifies restored configuration and client entries.
 
 ## [2.33.0] - 2026-10-30
 

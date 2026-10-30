@@ -130,10 +130,24 @@ jobs:
           $broken = Join-Path $env:RUNNER_TEMP 'broken-install'
           Copy-Item $app $broken -Recurse
           $install = Join-Path $broken 'install.ps1'
-          (Get-Content $install -Raw).Replace('# --- 3. Bridge task', "throw 'Injected failure (CI)'`r`n# --- 3. Bridge task") | Set-Content $install -NoNewline
+          (Get-Content $install -Raw).Replace('exit $LASTEXITCODE', @'
+          $current = Join-Path $env:LOCALAPPDATA 'NexusBrowser\current.json'
+          $state = Get-Content $current -Raw | ConvertFrom-Json
+          $state.version = 'broken-update-fixture'
+          $state | ConvertTo-Json | Set-Content $current
+          throw 'Injected failure (CI)'
+          '@) | Set-Content $install -NoNewline
+          # A previous installer with unsafe legacy behavior must NEVER execute during recovery.
+          $legacyTrap = Join-Path $env:RUNNER_TEMP 'old-installer-was-run'
+          "[IO.File]::WriteAllText('$legacyTrap', 'unsafe old installer ran'); throw 'Legacy installer trap'" | Set-Content (Join-Path $app 'install.ps1')
           $env:NEXUS_BROWSER_SOURCE = $broken
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
           if ($LASTEXITCODE -eq 0) { throw 'failing installer: the update should have failed' }
+          if (Test-Path $legacyTrap) { throw 'rollback executed the previous installer' }
+          $restored = Get-Content (Join-Path $root 'current.json') -Raw | ConvertFrom-Json
+          if ($restored.version -eq 'broken-update-fixture') { throw 'rollback did not restore the configuration' }
+          & pwsh -NoProfile -File .\tests\install-smoke.ps1 -EntriesOnly
+          if ($LASTEXITCODE) { throw 'restored client entries or daemon do not match the previous payload' }
           Assert-Working 'failing installer'
           exit 0  # the step's result is the assertions above, not the expected failure code of the last get.ps1
 

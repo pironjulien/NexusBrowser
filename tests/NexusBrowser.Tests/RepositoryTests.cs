@@ -192,7 +192,7 @@ public sealed class RepositoryTests
         Assert.Contains("full access to the page", readme);
         Assert.Contains("[masked value]", readme);
         // Copied into the Antigravity plugin: the personal skill if present, else the public one.
-        string install = Text("install.ps1");
+        string install = Text("scripts", "install-native.ps1");
         Assert.Contains(@"perso\nexus-browser\SKILL.md", install);
         Assert.Contains(@"skills\nexus-browser\SKILL.md", install);
     }

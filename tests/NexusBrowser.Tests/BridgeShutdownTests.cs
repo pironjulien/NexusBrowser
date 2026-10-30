@@ -96,7 +96,7 @@ public sealed class BridgeShutdownTests : IDisposable
     [Fact]
     public void InstallerNeverTerminatesAnExistingBridgeOrDaemon()
     {
-        string install = File.ReadAllText(Repo.File("install.ps1"));
+        string install = File.ReadAllText(Repo.File("install.ps1")) + File.ReadAllText(Repo.File("scripts", "install-native.ps1"));
         Assert.DoesNotContain("Stop-Process", install);
         Assert.DoesNotContain("Stop-ScheduledTask", install);
         Assert.Contains("--shutdown-bridge", install);
