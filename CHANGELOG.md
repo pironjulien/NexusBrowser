@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Local engine installation without `-Register` preserves Antigravity's plugin and configuration. Existing bridge
+  task settings and disabled states are retained when its executable changes, including on developer installs.
+
 ## [2.33.5] - 2026-10-30
 
 ### Added

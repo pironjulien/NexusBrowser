@@ -44,9 +44,9 @@ $version = (Get-Content (Join-Path $sourceRoot 'VERSION') -Raw).Trim()
 $previousExe = $nativeExe
 $pack = $env:NEXUS_PACK -eq '1'
 $previousBridgeTask = Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue
-$keepBridgeDisabled = $UpdateOnly -and $previousBridgeTask -and $previousBridgeTask.State -eq 'Disabled'
+$keepBridgeDisabled = $previousBridgeTask -and $previousBridgeTask.State -eq 'Disabled'
 $previousUpdateTask = Get-ScheduledTask -TaskName $updateTaskName -ErrorAction SilentlyContinue
-$keepUpdateDisabled = $UpdateOnly -and $previousUpdateTask -and $previousUpdateTask.State -eq 'Disabled'
+$keepUpdateDisabled = $previousUpdateTask -and $previousUpdateTask.State -eq 'Disabled'
 
 # --- 1. Engine: one immutable folder per build.
 $prebuilt = Join-Path $sourceRoot 'engine'
@@ -112,10 +112,9 @@ if ($oldBridges.Count -and -not $busy -and -not $SkipLaunch -and -not $keepBridg
 } elseif ($oldBridges.Count) {
     $bridgeDeferred = $true
 }
-# Register -Force keeps the triggers of an existing task: recreated from scratch.
+# Existing task settings and disabled state are user choices. Updating its action does not reset them.
 if (Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue) {
-    if ((Get-ScheduledTask -TaskName $bridgeTaskName).State -ne 'Running') { Unregister-ScheduledTask -TaskName $bridgeTaskName -Confirm:$false }
-    else { Set-ScheduledTask -TaskName $bridgeTaskName -Action $action | Out-Null }
+    Set-ScheduledTask -TaskName $bridgeTaskName -Action $action | Out-Null
 }
 if (-not (Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue)) {
     Register-ScheduledTask -TaskName $bridgeTaskName -Action $action -Principal $principal -Settings $settings `
@@ -167,7 +166,7 @@ foreach ($old in @((Join-Path $oldRoot 'bridge-token'), (Join-Path $oldRoot 'nat
 $port = 16182
 $supervisorTask = Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue
 $supervised = [bool]$supervisorTask
-$keepSupervisorDisabled = $UpdateOnly -and $supervisorTask -and $supervisorTask.State -eq 'Disabled'
+$keepSupervisorDisabled = $supervisorTask -and $supervisorTask.State -eq 'Disabled'
 # Nexus workstation token, shared by both PCs: created once by Sync-NexusPoste, never here.
 $mcpTokenFile = if ($env:OneDrive) { Join-Path $env:OneDrive 'Documents\NexusSecure\agents\nexus-mcp-token.txt' }
 $token = $null
@@ -240,7 +239,7 @@ if ($token) {
 # --- 7. Antigravity (Nexus workstation): plugin nexus-browser on the shared daemon, its skill; one declaration only.
 $agyRoot = Join-Path $HOME '.gemini\config'
 $agyConfig = Join-Path $agyRoot 'mcp_config.json'
-if (-not $UpdateOnly -and $supervised -and $token -and (Test-Path $agyConfig)) {
+if ($Register -and -not $UpdateOnly -and $supervised -and $token -and (Test-Path $agyConfig)) {
     $entry = [PSCustomObject]@{ serverUrl = "http://127.0.0.1:$port/mcp?agent=antigravity"; headers = [PSCustomObject]@{ Authorization = "Bearer $token" } }
     $plugin = Join-Path $agyRoot 'plugins\nexus-browser'
     foreach ($file in Get-ChildItem (Join-Path $sourceRoot 'plugins\nexus-browser') -File -Recurse) {
