@@ -755,18 +755,42 @@ test('upload directly sets files on input[type=file] without file chooser dialog
     assert.equal(h.calls.some(c => c.method === 'Page.setInterceptFileChooserDialog'), false);
 });
 
-test('select_tab activates tab and focuses window cleanly', async () => {
-    let windowFocused = false;
+test('select_tab activates the requested tab without focusing its window by default', async () => {
+    const selected = [];
+    const focused = [];
     const h = harness({}, {
+        tabs: {
+            update: async (tabId, opts) => {
+                selected.push({ tabId, ...opts });
+                return { id: tabId, windowId: 10, ...opts };
+            }
+        },
         windows: {
             update: async (winId, opts) => {
-                if (winId === 10 && opts.focused) windowFocused = true;
+                focused.push({ winId, ...opts });
             }
         }
     });
     const res = await h.run('select_tab', { tabId: 42 });
     assert.equal(res.data.success, true);
-    assert.equal(windowFocused, true);
+    assert.equal(res.data.tab.id, 42);
+    assert.deepEqual(selected, [{ tabId: 42, active: true }]);
+    assert.deepEqual(focused, []);
+});
+
+test('select_tab focuses the selected tab window only when explicitly requested', async () => {
+    const focused = [];
+    const h = harness({}, {
+        windows: {
+            update: async (winId, opts) => {
+                focused.push({ winId, ...opts });
+            }
+        }
+    });
+    const res = await h.run('select_tab', { tabId: 42, focusWindow: true });
+    assert.equal(res.data.success, true);
+    assert.equal(res.data.tab.id, 42);
+    assert.deepEqual(focused, [{ winId: 10, focused: true }]);
 });
 
 test('vision_inspect captures screenshot and generates Set-of-Mark elements', async () => {

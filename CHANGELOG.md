@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Selecting a tab no longer focuses its Chrome window implicitly. `browser_select_tab` exposes `focus_window`
+  (default `false`) for an explicit user request to bring Chrome forward; the native route, extension and journal
+  follow that choice. Regression coverage verifies background selection, explicit focus and the MCP mapping.
+- Readiness verification compares the running daemon's version with the installed engine, and also checks the
+  authenticated bridge version with `-Browser`. A deferred older process is reported with its version and PID
+  instead of a false success; verification never stops it or interrupts its sessions.
+
 ## [2.33.3] - 2026-10-30
 
 ### Added

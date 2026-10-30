@@ -78,6 +78,33 @@ public sealed class ScriptTests : IDisposable
         Assert.Empty(results.Where(r => r.Value.Count != "0").Select(r => $"{r.Key}: {r.Value.Errors}"));
     }
 
+    [Theory]
+    [InlineData(Shells.WindowsPowerShell)]
+    [InlineData(Shells.Pwsh)]
+    public async Task ReadinessRefusesAStaleDaemonOrBridgeEvenWhenItsHealthIsOk(string shell)
+    {
+        string probe = _dir["running-version.ps1"];
+        File.WriteAllText(probe,
+            "$ErrorActionPreference = 'Stop'\n$t = $null; $e = $null\n" +
+            $"$ast = [System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("verify.ps1"))}, [ref]$t, [ref]$e)\n" +
+            "$f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Assert-RunningVersion' }, $true)[0]\n" +
+            "$fn = Join-Path (Split-Path $PSCommandPath) 'assert-running-version.ps1'; [IO.File]::WriteAllText($fn, $f.Extent.Text); . $fn\n" +
+            "function Try-Version([string]$Service, $State) { try { Assert-RunningVersion $Service $State '2.33.3'; 'ok' } catch { 'refused ' + $_.Exception.Message } }\n" +
+            "Try-Version 'Demon MCP Browser' ([pscustomobject]@{status='ok'; version='2.33.3'; pid=42})\n" +
+            "Try-Version 'Demon MCP Browser' ([pscustomobject]@{status='ok'; version='2.33.0'; pid=43})\n" +
+            "Try-Version 'Pont Browser' ([pscustomobject]@{status='online'; version='2.33.0'; pid=44})\n" +
+            "Try-Version 'Demon MCP Browser' ([pscustomobject]@{status='ok'; pid=45})\n",
+            Encoding.ASCII);
+        var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
+        Assert.True(code == 0, stderr);
+        var lines = Shells.Lines(stdout);
+        Assert.Equal(4, lines.Length);
+        Assert.Equal("ok", lines[0]);
+        Assert.StartsWith("refused Demon MCP Browser actif en version 2.33.0 (PID 43), moteur installe 2.33.3", lines[1]);
+        Assert.StartsWith("refused Pont Browser actif en version 2.33.0 (PID 44), moteur installe 2.33.3", lines[2]);
+        Assert.StartsWith("refused Demon MCP Browser actif en version inconnue (PID 45), moteur installe 2.33.3", lines[3]);
+    }
+
     // ---------------------------------------------------------------------------------------------
     // get.ps1: latest tag without the API, SHA256SUMS.txt checked before unpacking, architecture
     // ---------------------------------------------------------------------------------------------

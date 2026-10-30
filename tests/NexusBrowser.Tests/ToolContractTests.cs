@@ -37,6 +37,16 @@ public sealed partial class ToolContractTests
     }
 
     [Fact]
+    public void SelectingATabExposesOptionalWindowFocusDefaultingToFalse()
+    {
+        var schema = Tools["browser_select_tab"]["inputSchema"]!;
+        var focus = schema["properties"]!["focus_window"]!;
+        Assert.Equal("boolean", (string?)focus["type"]);
+        Assert.False((bool)focus["default"]!);
+        Assert.DoesNotContain(schema["required"]!.AsArray(), item => (string?)item == "focus_window");
+    }
+
+    [Fact]
     public void EveryToolNameFitsAntigravityOncePrefixed()
     {
         // Antigravity publishes mcp_<plugin>_<server>_<tool> and silently drops a name outside ^[a-zA-Z0-9_-]{1,64}$.

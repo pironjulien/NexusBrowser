@@ -1035,7 +1035,7 @@ public sealed partial class McpServer : IDisposable
                 ["technique"] = method != null && KnownTechniques.Contains(method) ? JsonValue.Create(method) : null,
                 ["issue"] = Journal.Issue(answer, failed),
                 ["ms"] = (int)Math.Round((EmergencyStop.NowMonotonic() - started) * 1000.0),
-                ["premier_plan"] = name == "browser_select_tab",
+                ["premier_plan"] = name == "browser_select_tab" && GetBool(arguments, "focus_window", false),
                 ["erreur"] = failed ? "exception" : (Journal.ErreurPropre(rawError) is { } ep ? JsonValue.Create(ep) : null),
             };
             Journal.Ecrire(identity.Agent, ligne);
@@ -1110,7 +1110,11 @@ public sealed partial class McpServer : IDisposable
                 return await CallBridgeFormattedAsync("active-tab", new JsonObject(), 20.0, identity, pid, ct: ct);
 
             case "browser_select_tab":
-                return await CallBridgeFormattedAsync("select-tab", RequireTabParams(args), 20.0, identity, pid, ct: ct);
+            {
+                var p = RequireTabParams(args);
+                p["focusWindow"] = GetBool(args, "focus_window", false);
+                return await CallBridgeFormattedAsync("select-tab", p, 20.0, identity, pid, ct: ct);
+            }
 
             case "browser_new_tab":
             {

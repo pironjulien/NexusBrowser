@@ -378,6 +378,21 @@ public sealed partial class McpParityTests
         Assert.Equal(since, (long)session.Commands[0]["params"]!["since"]!);
     }
 
+    [Theory]
+    [InlineData("{\"tab_id\":7}", false)]
+    [InlineData("{\"tab_id\":7,\"focus_window\":false}", false)]
+    [InlineData("{\"tab_id\":7,\"focus_window\":true}", true)]
+    public async Task SelectingATabOnlyRequestsWindowFocusExplicitly(string arguments, bool focus)
+    {
+        using var session = new EngineSession((_, _) => new JsonObject { ["success"] = true });
+        var result = await session.CallAsync("browser_select_tab", Args(arguments));
+        Assert.False((bool)result["isError"]!, result.ToJsonString());
+        Assert.Equal(["select-tab"], session.Actions);
+        var parameters = session.Commands.Single()["params"]!;
+        Assert.Equal(7, (int)parameters["tab_id"]!);
+        Assert.Equal(focus, (bool)parameters["focusWindow"]!);
+    }
+
     [Fact]
     public async Task MissingExtensionIsNotReplayedNorUsedToOpenChrome()
     {
