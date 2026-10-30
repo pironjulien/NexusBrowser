@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.33.4] - 2026-10-30
+
 ### Fixed
 - Selecting a tab no longer focuses its Chrome window implicitly. `browser_select_tab` exposes `focus_window`
   (default `false`) for an explicit user request to bring Chrome forward; the native route, extension and journal
