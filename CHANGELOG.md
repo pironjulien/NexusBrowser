@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The current installer and rollback controller authenticate the daemon's explicit session-preserving capability,
   verify its PID and address the exact random instance. Unknown or older 2.33.0/2.33.2 daemons are deferred without
   writing their unsafe restart flag. The new request format is deliberately inert to those older watchers.
+- Chrome startup from non-default desktop sessions (e.g. runner or sandbox) resolves the interactive shell on `Default`
+  desktop instead of reporting broker unavailable.
+- Official Chrome Web Store publication approved (ID `fjapmaccbgdfneoccclmlpgknbbfkaco`); `store_public` set to `true`
+  in bridge configuration and extension manifest advances to 2.33.3 with the Nexus medallion icon.
 
 ## [2.33.2] - 2026-10-30
 

@@ -10,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $extension = Join-Path $root 'extension'
 if (-not $OutDir) { $OutDir = Join-Path $HOME '.nexus\build\nexus-browser\store' }
+elseif (-not [IO.Path]::IsPathRooted($OutDir)) { $OutDir = Join-Path $root $OutDir }
 $utf8 = New-Object Text.UTF8Encoding $false
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 

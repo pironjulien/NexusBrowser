@@ -14,6 +14,11 @@ static unsafe class UserApplication
 {
     [DllImport("user32.dll")] static extern nint GetShellWindow();
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(nint hwnd, out uint pid);
+    [DllImport("user32.dll", SetLastError = true)] static extern nint OpenDesktop(string lpszDesktop, uint dwFlags, bool fInherit, uint dwDesiredAccess);
+    [DllImport("user32.dll", SetLastError = true)] static extern bool SetThreadDesktop(nint hDesktop);
+    [DllImport("user32.dll", SetLastError = true)] static extern bool CloseDesktop(nint hDesktop);
+    [DllImport("user32.dll")] static extern nint GetThreadDesktop(int dwThreadId);
+    [DllImport("kernel32.dll")] static extern int GetCurrentThreadId();
     static nint* Table(nint value) => *(nint**)value;
     static void Check(int result) { if (result < 0) Marshal.ThrowExceptionForHR(result); }
     static void Release(nint value) { if (value != 0) Marshal.Release(value); }
@@ -40,9 +45,20 @@ static unsafe class UserApplication
     {
         object? windows = null, desktop = null, folder = null;
         nint unknown = 0, provider = 0, browser = 0, view = 0, dispatch = 0;
+        nint originalDesktop = 0, defaultDesktop = 0;
         try
         {
             var shell = GetShellWindow();
+            if (shell == 0)
+            {
+                defaultDesktop = OpenDesktop("Default", 0, false, 0x01FF);
+                if (defaultDesktop != 0)
+                {
+                    originalDesktop = GetThreadDesktop(GetCurrentThreadId());
+                    SetThreadDesktop(defaultDesktop);
+                    shell = GetShellWindow();
+                }
+            }
             if (shell == 0 || GetWindowThreadProcessId(shell, out var shellPid) == 0 || shellPid == 0)
                 throw new InvalidOperationException("There is no interactive desktop shell");
             var type = Type.GetTypeFromCLSID(new Guid("9BA05972-F6A8-11CF-A442-00A0C90A8F39"), throwOnError: true)!;
@@ -69,6 +85,11 @@ static unsafe class UserApplication
         {
             Release(folder); Release(dispatch); Release(view); Release(browser); Release(provider); Release(unknown);
             Release(desktop); Release(windows);
+            if (defaultDesktop != 0)
+            {
+                if (originalDesktop != 0) SetThreadDesktop(originalDesktop);
+                CloseDesktop(defaultDesktop);
+            }
         }
     }
 }
