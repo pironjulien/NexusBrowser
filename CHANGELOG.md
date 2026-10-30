@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Fixed
+- A stand-alone install (one-line installer, `-Register`) on a PC without the Nexus supervisor no longer fails waiting
+  for a shared native daemon that only the supervisor starts.
 - Tabs of a dead shared (HTTP daemon) session are taken back right after the daemon restarts. Daemon sessions now
   report the daemon's own process id, so the bridge declares them gone as soon as that process dies; before, they
   looked alive for `SESSION_DEAD_MS` while the one-shot reclaim had already run, and the agent's own tabs stayed

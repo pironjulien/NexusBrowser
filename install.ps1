@@ -335,7 +335,9 @@ if (-not $SkipLaunch) {
     }
     # Le demon HTTP conserve ses modules Python en memoire. Recharger uniquement celui de Browser,
     # apres le controle d'absence d'onglets pilotes ; son superviseur reprend le meme port.
-    if ($useNative) {
+    # A shared daemon only runs under the Nexus supervisor; a stand-alone install (-Register) declares stdio servers.
+    $supervised = [bool](Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue)
+    if ($useNative -and $supervised) {
         # deploy-native already drained and replaced this daemon; verify its new process without another reload.
         $deadline = [DateTime]::UtcNow.AddSeconds(20)
         $confirmed = $false
