@@ -554,6 +554,7 @@ public sealed partial class McpServer : IDisposable
                     {
                         ["status"] = valid ? "ok" : "error", ["service"] = ServerName, ["runtime"] = "native",
                         ["version"] = BridgeSecurity.Version, ["pid"] = Environment.ProcessId,
+                        ["fingerprint"] = RestartRequest.RuntimeFingerprint,
                     });
                 }
                 catch

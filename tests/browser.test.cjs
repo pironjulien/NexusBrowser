@@ -276,6 +276,7 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
     const event = {addListener() {}};
     const messageEvent = {addListener(fn) { onMessage = fn; }};
     const chrome = {
+        management: chromeOverrides.management,
         runtime: {onStartup: event, onInstalled: event, onMessage: messageEvent, ...(chromeOverrides.runtime || {})},
         offscreen: {hasDocument: async () => true}, alarms: {create() {}, onAlarm: event},
         tabGroups: {
@@ -4622,6 +4623,34 @@ test("logo de travail : dessiné dans l'onglet regardé pendant une commande d'a
 // Correctifs de sécurité du 25/10 : rechargement réservé à l'installeur, téléchargements et liste d'onglets par client
 // =============================================================================
 const INSTALLER = {agent: 'Installer', id: 'installer-0123456789ab'};
+
+test('store update check downloads only when idle and never reloads or touches an agent tab', async () => {
+    let checks = 0, reloads = 0;
+    const h = harness({}, {autoOwn: false, management: {getSelf: async () => ({installType: 'normal'})}, runtime: {
+        id: 'fjapmaccbgdfneoccclmlpgknbbfkaco',
+        requestUpdateCheck: async () => { checks++; return {status: 'update_available', version: '99.0.0'}; },
+        reload() { reloads++; }
+    }});
+    assert.match((await h.run('update_extension', {}, AGENT_A)).error, /reserved to the installer/);
+    await h.own(5, AGENT_A);
+    assert.match((await h.run('update_extension', {}, INSTALLER)).error, /still working/);
+    assert.equal(checks, 0);
+    h.evalInContext('tabOwners.delete(5)');
+    const result = await h.run('update_extension', {}, INSTALLER);
+    assert.equal(result.data.downloaded, true);
+    assert.equal(checks, 1);
+    assert.equal(reloads, 0);
+    assert.deepEqual(h.focusCalls, {tabs: 0, windows: 0});
+    const ping = await h.run('ping', {}, INSTALLER);
+    assert.equal(ping.data.installation_type, 'store');
+});
+
+test('development extension update check never requests a Store download', async () => {
+    let checks = 0;
+    const h = harness({}, {autoOwn: false, management: {getSelf: async () => ({installType: 'development'})}, runtime: {id: 'development-id', requestUpdateCheck: async () => { checks++; }}});
+    assert.equal((await h.run('update_extension', {}, INSTALLER)).data.status, 'development');
+    assert.equal(checks, 0);
+});
 
 test('reload_extension : réservé à l\'installeur, et refusé tant qu\'un agent travaille', async () => {
     let reloads = 0;

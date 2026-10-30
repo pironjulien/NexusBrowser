@@ -69,6 +69,7 @@ public sealed class BridgeEndToEndTests : IDisposable
         var status = JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{bridge.HttpPort}/api/status", TestContext.Current.CancellationToken))!;
         Assert.Equal("online", (string?)status["status"]);
         Assert.Equal(BridgeSecurity.Version, (string?)status["version"]);
+        Assert.Equal(RestartRequest.RuntimeFingerprint, (string?)status["fingerprint"]);
         Assert.Equal(0, (int)status["connected_clients"]!);
         Assert.Equal(bridge.WsPort, (int)status["port"]!);
         Assert.IsType<bool>(status["chrome_running"]!.GetValue<bool>());

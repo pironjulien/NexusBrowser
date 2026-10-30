@@ -66,7 +66,7 @@ public static class Program
 
         if (args.Contains("--register", StringComparer.OrdinalIgnoreCase))
         {
-            return ClientRegistration.Run(GetArgValue(args, "--backups"), GetArgValue(args, "--engine-exe"), GetArgValue(args, "--source-root"));
+            return ClientRegistration.Run(GetArgValue(args, "--backups"), GetArgValue(args, "--engine-exe"), GetArgValue(args, "--source-root"), args.Contains("--update-only", StringComparer.OrdinalIgnoreCase));
         }
 
         if (args.Contains("--rotate", StringComparer.OrdinalIgnoreCase))

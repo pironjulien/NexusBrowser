@@ -15,6 +15,8 @@ namespace NexusBrowser.Native;
 /// </summary>
 public static partial class RestartRequest
 {
+    private static readonly Lazy<string> LoadedFingerprint = new(CodeFingerprint);
+    public static string RuntimeFingerprint => LoadedFingerprint.Value;
     [GeneratedRegex(@"(?:^|\s)pid:(\d+)(?:\s|$)")]
     private static partial Regex PidTarget();
 

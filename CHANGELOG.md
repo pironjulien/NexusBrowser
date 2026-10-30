@@ -5,7 +5,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.33.5] - 2026-10-30
+
+### Added
+- `get.ps1 -UpdateOnly` consumes prebuilt releases without installing new AI routes, enabling disabled plugins or
+  building a developer checkout. Existing exact native routes are refreshed; custom transports and choices remain.
+- Maintenance emits `NEXUS_UPDATE_RESULT` with published, installed and live active state. Completion requires the
+  daemon and bridge to report the installed build fingerprint and the loaded extension to pass its own check.
+
 ### Fixed
+- Concurrent installers serialize before touching shared download and staging folders. Occupied browser sessions
+  produce a retryable deferred result; the central NexusSystem maintenance task owns retries, with no second timer.
+- Activation retries reuse the installed release only after its complete payload and engine match the cached
+  verified-release receipt, avoiding repeated downloads while a session or Store rollout still defers activation.
+- Store extensions request a Chrome download before reload and defer unavailable/review-pending updates. Development
+  extensions reload their local files only when no agent owns tabs or runs commands. Older Store versions continue
+  serving until Chrome distributes the compatible update. Chrome's downloaded-update event is held for safe activation.
+- Compatibility update requests delegate to the existing NexusSystem task when installed. A changed version in a
+  status file is no longer promoted to successful activation, and verification compares the loaded engine fingerprint.
 - Agent-isolation process tests use the normal session lifetime instead of racing a 250 ms expiry on busy CI
   runners. Expiry remains covered separately by waiting for the daemon's logged expiration before asserting 404.
 

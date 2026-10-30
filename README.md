@@ -131,6 +131,14 @@ The bridge can also update a public install itself (the contract shared by the N
 `state`, `message`), `GET /api/update` returns it and `POST /api/update` (bridge token) starts the "Nexus Browser
 Update" task, which runs `get.ps1` outside the bridge and records `done` or `failed` (the current version is kept;
 deferred while an agent works in Chrome). A clone updates with git instead.
+
+Automatic maintenance is owned by NexusSystem (`get-nexus.ps1 -Maintain`), not by a second product timer.
+It calls `get.ps1 -UpdateOnly` on an already installed release: no new AI app is configured and disabled or custom
+routes stay untouched. Published, installed and loaded versions are distinct; a deferred activation is retried by
+NexusSystem. `NEXUS_UPDATE_RESULT` reports completion only after the daemon and bridge match the installed build
+fingerprint and the loaded Chrome extension is verified. A developer checkout is never pulled or built automatically.
+For a Store extension, Chrome must first download the published Store update; a local reload alone cannot obtain it.
+Updates awaiting Store review or rollout remain deferred while the current tools keep serving.
 Installed an AI client later? Run it again too. An entry you wrote yourself, or a `nexus-browser` plugin that already
 provides the server, is never changed.
 

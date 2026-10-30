@@ -210,6 +210,7 @@ public sealed partial class NativeProcessTests : IDisposable
         Assert.Equal("ok", (string?)health["status"]);
         Assert.Equal("nexus-browser", (string?)health["service"]);
         Assert.Equal("native", (string?)health["runtime"]);
+        Assert.Matches("^[0-9a-f]{64}$", (string?)health["fingerprint"] ?? "");
 
         async Task<HttpResponseMessage> Post(string path, string body, string? session = null)
         {

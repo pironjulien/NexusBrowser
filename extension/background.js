@@ -29,6 +29,9 @@ let attachedDebuggers = new Set();
 let tabConsoleLogs = new Map();
 // tabId -> Set(requestId) : requêtes réseau en cours depuis l'attachement CDP (remis à zéro à chaque navigation).
 let tabInFlightRequests = new Map();
+// Chrome has downloaded this update. Keep serving current sessions until the installer proves the bridge is idle.
+let pendingExtensionUpdate = null;
+chrome.runtime?.onUpdateAvailable?.addListener(details => { pendingExtensionUpdate = details.version || null; });
 // Aucun « onglet courant » ici : trois agents (Antigravity, Claude, Codex) partagent ce Chrome. Chaque commande de page
 // porte son tab_id, et l'extension vérifie que cet onglet appartient au client qui la demande (voir « Propriété »).
 // Débogueur détaché après cette inactivité (bandeau « en cours de débogage » retiré, onglet rendu à Julien).
@@ -272,6 +275,15 @@ async function emergencyStop({ holdMs = STOP_HOLD_MS, source = "pont" } = {}) {
 }
 
 // Version lue d'une seule source : le manifeste chargé par Chrome.
+async function extensionInstallationType() {
+    try {
+        const self = await chrome.management.getSelf();
+        if (self.installType === "development") return "development";
+        if (chrome.runtime.id === "fjapmaccbgdfneoccclmlpgknbbfkaco" && self.installType === "normal") return "store";
+    } catch (_) {}
+    return "unknown";
+}
+
 function extensionVersion() {
     try {
         return chrome.runtime?.getManifest?.()?.version || null;
@@ -811,7 +823,7 @@ if (chrome.tabs?.onReplaced?.addListener) {
 // Commandes sans onglet visé (ou qui en créent un). Toutes les autres exigent un onglet du client qui les demande.
 const TAB_FREE_ACTIONS = new Set([
     "ping", "list_tabs", "active_tab", "create_tab", "download_status", "download_erase",
-    "reload_extension", "adopt_tab", "heartbeat"
+    "reload_extension", "update_extension", "adopt_tab", "heartbeat"
 ]);
 // Commandes permises sur un onglet ORPHELIN du même agent (session morte), sans le reprendre d'abord.
 const ORPHAN_ACTIONS = new Set(["close_tab", "release_tab"]);
@@ -862,7 +874,7 @@ function authorizeCommand(action, params, client) {
     if (BRIDGE_ACTIONS.has(action)) return null;
     if (!client) return "Command without client identity (agent and session set by the bridge): refused. Run install.ps1 again (up-to-date bridge).";
     if (stopActive() && !STOP_ALLOWED_ACTIONS.has(action)) return stopMessage();
-    if (action === "reload_extension") return reloadRefusal(client);
+    if (action === "reload_extension" || action === "update_extension") return reloadRefusal(client);
     if (TAB_FREE_ACTIONS.has(action)) return null;
     // Toute commande qui vise plusieurs onglets (tabIds), quel que soit son nom : chacun doit être au client. Le contrôle
     // ne dépend plus du nom d'action (l'alias tabs_group le contournait, relevé par Codex le 24/10).
@@ -1076,6 +1088,9 @@ async function routeCommand(req, client = null) {
                     data: {
                         status: "pong",
                         version: extensionVersion(),
+                        extension_id: chrome.runtime?.id || null,
+                        installation_type: await extensionInstallationType(),
+                        update_check: typeof chrome.runtime?.requestUpdateCheck === "function",
                         features: AGY_FEATURES,
                         timestamp: Date.now(),
                     },
@@ -1224,6 +1239,15 @@ async function routeCommand(req, client = null) {
 
             case "export_youtube_transcript":
                 return await exportYoutubeTranscript(params);
+
+            case "update_extension": {
+                if (await extensionInstallationType() !== "store") return { data: { status: "development", downloaded: false } };
+                if (pendingExtensionUpdate) return { data: { status: "update_available", version: pendingExtensionUpdate, downloaded: true } };
+                if (typeof chrome.runtime.requestUpdateCheck !== "function") return { data: { status: "unsupported", downloaded: false } };
+                const result = await chrome.runtime.requestUpdateCheck();
+                if (result.status === "update_available") pendingExtensionUpdate = result.version || null;
+                return { data: { status: result.status, version: result.version || null, downloaded: result.status === "update_available" } };
+            }
 
             case "reload_extension":
                 setTimeout(() => { try { chrome.runtime.reload(); } catch(e) {} }, 100);

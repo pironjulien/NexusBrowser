@@ -16,7 +16,9 @@
 # or an unpacked folder (a clone: install.ps1 then builds the engine with the .NET SDK); NEXUS_BROWSER_TAG, a release
 # tag instead of the latest; NEXUS_BROWSER_ROOT, another install folder: download, check and unpack only, the engine
 # answers --version, nothing is registered on the PC.
+param([switch]$UpdateOnly)
 $ErrorActionPreference = 'Stop'
+if ($UpdateOnly) { $env:NEXUS_PACK = '1' }
 # Windows PowerShell launched by PowerShell 7 can inherit Core-only modules ahead of its own standard modules.
 if ($PSVersionTable.PSEdition -eq 'Desktop') {
     $desktopModules = Join-Path $PSHOME 'Modules'
@@ -43,7 +45,19 @@ $repository = 'pironjulien/NexusBrowser'
 $sandbox = [bool]$env:NEXUS_BROWSER_ROOT
 $root = if ($sandbox) { $env:NEXUS_BROWSER_ROOT } else { Join-Path $env:LOCALAPPDATA 'NexusBrowser' }
 $app = Join-Path $root 'app'
+if ($UpdateOnly -and -not $sandbox -and -not (Test-Path -LiteralPath (Join-Path $root 'current.json'))) {
+    Write-Output 'NEXUS_UPDATE_RESULT {"product":"browser","state":"skipped","reason":"not-installed","retryable":false}'
+    return
+}
 New-Item -ItemType Directory -Force $root | Out-Null
+$updateLock = $null
+try {
+    $updateLock = [IO.File]::Open((Join-Path $root 'update.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+} catch [IO.IOException] {
+    Write-Output 'NEXUS_UPDATE_RESULT {"product":"browser","state":"deferred","reason":"maintenance-in-progress","retryable":true}'
+    return
+}
+try {
 
 # Architecture of Windows itself (a 32-bit or emulated PowerShell reports its own in PROCESSOR_ARCHITECTURE).
 $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
@@ -85,14 +99,51 @@ function Get-ExpectedHash([string]$Sums, [string]$Name) {
     return $expected
 }
 
+# Bootstrap-owned verifier: never execute a script from an unverified cached payload to verify that same payload.
+function Get-CachedPayloadFingerprint([string]$Path) {
+    $resolved = (Resolve-Path -LiteralPath $Path).Path.TrimEnd('\')
+    if ((Get-Item -LiteralPath $resolved -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Cached payload root is a reparse point.' }
+    $items = @(Get-ChildItem -LiteralPath $resolved -Force -Recurse)
+    if ($items | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'Cached payload contains a reparse point.' }
+    $manifest = @($items | Where-Object { -not $_.PSIsContainer } | Sort-Object FullName | ForEach-Object {
+        $_.FullName.Substring($resolved.Length + 1).Replace('\', '/') + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    }) -join "`n"
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($manifest)))).Replace('-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
 $download = Join-Path $root 'download'
 if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Recurse -Force }
 New-Item -ItemType Directory -Force $download | Out-Null
 $source = $null
+$actual = $null
+$tag = $null
+$reuseInstalled = $false
+$cacheReceiptPath = Join-Path $root 'release-cache.json'
+$cacheReceipt = $null
+if ($UpdateOnly -and -not $env:NEXUS_BROWSER_SOURCE) {
+    $tag = if ($env:NEXUS_BROWSER_TAG) { $env:NEXUS_BROWSER_TAG } else { Get-LatestTag }
+    $metadataPath = Join-Path $root 'current.json'
+    $appEngine = Join-Path $app 'engine\NexusBrowser.exe'
+    if ((Test-Path -LiteralPath $metadataPath) -and (Test-Path -LiteralPath $appEngine) -and (Test-Path -LiteralPath (Join-Path $app 'VERSION')) -and (Test-Path -LiteralPath $cacheReceiptPath)) {
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+        $appVersion = (Get-Content -LiteralPath (Join-Path $app 'VERSION') -Raw).Trim()
+        $cacheReceipt = Get-Content -LiteralPath $cacheReceiptPath -Raw | ConvertFrom-Json
+        $reuseInstalled = $metadata.version -eq $tag.TrimStart('v') -and $appVersion -eq $metadata.version -and
+            $cacheReceipt.version -eq $appVersion -and $cacheReceipt.archive_sha256 -match '^[0-9a-f]{64}$' -and
+            (Get-FileHash -LiteralPath $appEngine -Algorithm SHA256).Hash -eq $metadata.fingerprint -and
+            (Get-CachedPayloadFingerprint $app) -ceq $cacheReceipt.payload_fingerprint
+    }
+}
 # A refused or broken download leaves nothing behind.
 try {
-if ($env:NEXUS_BROWSER_SOURCE -and (Test-Path -LiteralPath $env:NEXUS_BROWSER_SOURCE -PathType Container)) {
+if ($reuseInstalled) {
+    $source = $app
+    Write-Host 'Published release is already installed; retrying safe activation without downloading it again.'
+} elseif ($env:NEXUS_BROWSER_SOURCE -and (Test-Path -LiteralPath $env:NEXUS_BROWSER_SOURCE -PathType Container)) {
     $source = (Resolve-Path -LiteralPath $env:NEXUS_BROWSER_SOURCE).Path
+    if ($UpdateOnly -and -not (Test-Path -LiteralPath (Join-Path $source 'engine\NexusBrowser.exe'))) { throw 'UpdateOnly accepts verified prebuilt releases, never a development build.' }
     Write-Host "Installing NexusBrowser from $source..."
 } else {
     $zip = Join-Path $download $zipName
@@ -104,7 +155,7 @@ if ($env:NEXUS_BROWSER_SOURCE -and (Test-Path -LiteralPath $env:NEXUS_BROWSER_SO
         $zipName = Split-Path -Leaf $local
         Write-Host "Installing NexusBrowser from $local..."
     } else {
-        $tag = if ($env:NEXUS_BROWSER_TAG) { $env:NEXUS_BROWSER_TAG } else { Get-LatestTag }
+        if (-not $tag) { $tag = if ($env:NEXUS_BROWSER_TAG) { $env:NEXUS_BROWSER_TAG } else { Get-LatestTag } }
         $base = "https://github.com/$repository/releases/download/$tag"
         Write-Host "Downloading NexusBrowser $tag ($rid)..."
         Invoke-WebRequest -UseBasicParsing "$base/$zipName" -OutFile $zip
@@ -170,7 +221,9 @@ if ($hadApp) {
 }
 Rename-Item -LiteralPath $next -NewName 'app'
 
-& $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $app 'install.ps1') -SkipTests -Register
+$installArgs = @('-SkipTests')
+if ($UpdateOnly) { $installArgs += '-UpdateOnly' } else { $installArgs += '-Register' }
+& $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $app 'install.ps1') @installArgs
 $installCode = $LASTEXITCODE
 if ($installCode -and $hadApp -and (Test-Path -LiteralPath (Join-Path $previous 'install.ps1'))) {
     Rename-Item -LiteralPath $app -NewName 'app.failed'
@@ -178,7 +231,7 @@ if ($installCode -and $hadApp -and (Test-Path -LiteralPath (Join-Path $previous 
     Write-Warning "The installation failed (exit code $installCode): restoring the previous version."
     # Keep the NEW controller and its cooperative process rules. The restored previous payload contributes only
     # its verified files and engine; its old installer and script helpers are never executed.
-    & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $failed 'scripts\install-native.ps1') -SkipTests -Register `
+    & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $failed 'scripts\install-native.ps1') @installArgs `
         -PayloadRoot $app -ExpectedPayloadHash $previousPayloadHash
     $restoreCode = $LASTEXITCODE
     if ($restoreCode) { throw "The update failed and restoring the previous version did not complete (exit code $restoreCode). The safe recovery controller is kept in $failed. Log: $HOME\.nexus\nexus-browser\install.log" }
@@ -186,6 +239,13 @@ if ($installCode -and $hadApp -and (Test-Path -LiteralPath (Join-Path $previous 
     throw "The update failed; the previous version is restored. Log: $HOME\.nexus\nexus-browser\install.log"
 }
 if ($installCode) { throw "NexusBrowser installation failed (see above). Log: $HOME\.nexus\nexus-browser\install.log" }
+if ($actual -match '^[0-9a-f]{64}$') {
+    $cache = [ordered]@{ version = (Get-Content -LiteralPath (Join-Path $app 'VERSION') -Raw).Trim(); archive_sha256 = $actual; payload_fingerprint = Get-CachedPayloadFingerprint $app }
+    $temporaryCache = "$cacheReceiptPath.$PID.tmp"
+    [IO.File]::WriteAllText($temporaryCache, ($cache | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
+    Move-Item -LiteralPath $temporaryCache -Destination $cacheReceiptPath -Force
+}
 if (Test-Path -LiteralPath $previous) { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction SilentlyContinue }
 
 if (Test-StartedFromExplorer) { Read-Host 'Press Enter to close this window' | Out-Null }
+} finally { if ($updateLock) { $updateLock.Dispose() } }

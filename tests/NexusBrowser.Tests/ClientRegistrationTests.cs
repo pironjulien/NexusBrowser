@@ -537,6 +537,63 @@ public sealed class ClientRegistrationTests : IDisposable
     }
 
     [Fact]
+    public void UpdateOnlyDoesNotInstallRoutesOrBypassDisabledPlugins()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(CodexConfig)!);
+        File.WriteAllText(CodexConfig, "[plugins.\"nexus-browser@nexus-plugins\"]\nenabled = false\n");
+        File.WriteAllText(ClaudeJson, "{}");
+        string before = File.ReadAllText(CodexConfig);
+        using var output = new StringWriter();
+        Assert.Equal(0, ClientRegistration.Register(Context(), null, true, output, updateOnly: true));
+        Assert.Equal(before, File.ReadAllText(CodexConfig));
+        Assert.Equal("{}", File.ReadAllText(ClaudeJson));
+        Assert.Empty(_runs);
+        Assert.False(Directory.Exists(Path.Combine(Home, ".gemini")));
+    }
+
+    [Fact]
+    public void UpdateOnlyRefreshesOnlyExactInstalledNativeEntries()
+    {
+        string old = Path.Combine(Local, "NexusBrowser", "versions", "0123456789abcdef", "NexusBrowser.exe");
+        string next = Path.Combine(Local, "NexusBrowser", "versions", "fedcba9876543210", "NexusBrowser.exe");
+        File.WriteAllText(ClaudeJson, new JsonObject { ["mcpServers"] = new JsonObject { ["nexus-browser"] = Entry("Claude", old) } }.ToJsonString());
+        Directory.CreateDirectory(Path.GetDirectoryName(CodexConfig)!);
+        File.WriteAllText(CodexConfig, CodexBlock(old));
+        using var output = new StringWriter();
+        Assert.Equal(0, ClientRegistration.Register(Context(next), "claude-code,codex", true, output, updateOnly: true));
+        Assert.Equal(next, (string?)ReadJson(ClaudeJson)!["mcpServers"]!["nexus-browser"]!["command"]);
+        Assert.Equal(CodexBlock(next), File.ReadAllText(CodexConfig));
+
+        var custom = Entry("Claude", old); custom["args"]!.AsArray().Add("--custom");
+        File.WriteAllText(ClaudeJson, new JsonObject { ["mcpServers"] = new JsonObject { ["nexus-browser"] = custom } }.ToJsonString());
+        string before = File.ReadAllText(ClaudeJson);
+        Assert.Equal(0, ClientRegistration.Register(Context(next), "claude-code", true, output, updateOnly: true));
+        Assert.Equal(before, File.ReadAllText(ClaudeJson));
+    }
+
+    [Fact]
+    public void UpdateOnlyPreservesAnActiveAntigravityDaemonRouteAndDisabledPluginChoice()
+    {
+        string folder = Path.Combine(Home, ".gemini", "config"), plugin = Path.Combine(folder, "plugins", "nexus-browser");
+        Directory.CreateDirectory(plugin);
+        File.WriteAllText(Path.Combine(plugin, "plugin.json"), "{\"version\":\"old\"}");
+        string config = Path.Combine(plugin, "mcp_config.json");
+        File.WriteAllText(config, "{\"mcpServers\":{\"nexus-browser\":{\"serverUrl\":\"http://127.0.0.1:16182/mcp?agent=antigravity\",\"headers\":{\"Authorization\":\"Bearer ${NEXUS_MCP_TOKEN}\"}}}}");
+        string before = File.ReadAllText(config);
+        using var output = new StringWriter();
+        Assert.Equal(0, ClientRegistration.Register(Context(), "antigravity", true, output, updateOnly: true));
+        Assert.Equal(before, File.ReadAllText(config));
+        Assert.True(File.Exists(Path.Combine(plugin, "skills", "nexus-browser", "SKILL.md")));
+        File.WriteAllText(Path.Combine(folder, "config.json"), "{\"plugins\":{\"nexus-browser\":{\"enabled\":false}}}");
+        File.WriteAllText(Path.Combine(plugin, "plugin.json"), "{\"version\":\"do-not-change\"}");
+        Assert.Equal(0, ClientRegistration.Register(Context(), "antigravity", true, output, updateOnly: true));
+        Assert.Equal("do-not-change", (string?)ReadJson(Path.Combine(plugin, "plugin.json"))!["version"]);
+        File.WriteAllText(Path.Combine(folder, "config.json"), "{\"plugins\":{\"nexus-browser\":false}}");
+        Assert.Equal(0, ClientRegistration.Register(Context(), "antigravity", true, output, updateOnly: true));
+        Assert.Equal("do-not-change", (string?)ReadJson(Path.Combine(plugin, "plugin.json"))!["version"]);
+    }
+
+    [Fact]
     public void UnreadableJsonFailsThatClientOnlyAndLeavesTheFileUntouched()
     {
         File.WriteAllText(ClaudeJson, "{not json");

@@ -13,7 +13,7 @@ public sealed class ExtensionRefreshTests
     private static readonly Func<TimeSpan, CancellationToken, Task> NoDelay = (_, _) => Task.CompletedTask;
 
     private static JsonObject Ping(string version, IEnumerable<string> features) =>
-        new() { ["version"] = version, ["features"] = new JsonArray(features.Select(f => (JsonNode?)f).ToArray()) };
+        new() { ["version"] = version, ["features"] = new JsonArray(features.Select(f => (JsonNode?)f).ToArray()), ["installation_type"] = "development" };
 
     private static JsonObject CurrentPing => Ping(Expected.Version, Expected.Features);
 
@@ -88,6 +88,56 @@ public sealed class ExtensionRefreshTests
         Assert.Equal(["ping", "list-tabs", "reload_extension", "ping"], bridge.Calls);
         Assert.True((bool)report["reloaded"]!);
         Assert.True((bool)report["verified"]!);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StoreExtensionNeedsADownloadBeforeAnyReload(bool downloadable)
+    {
+        var bridge = new Bridge((action, calls) => action switch
+        {
+            "list-tabs" => new JsonArray(),
+            "ping" when calls.Contains("reload_extension") => CurrentPing,
+            "ping" => new JsonObject { ["version"] = "old", ["features"] = new JsonArray(), ["installation_type"] = "store", ["update_check"] = true },
+            "update_extension" => new JsonObject { ["downloaded"] = downloadable, ["status"] = downloadable ? "update_available" : "no_update" },
+            _ => new JsonObject(),
+        });
+        var (code, report) = await Run(bridge);
+        Assert.Equal(downloadable ? ExtensionRefresh.Current : ExtensionRefresh.Stale, code);
+        Assert.Contains("update_extension", bridge.Calls);
+        Assert.Equal(downloadable, bridge.Calls.Contains("reload_extension"));
+        Assert.Equal(downloadable, (bool)report["verified"]!);
+        if (!downloadable) Assert.True((bool)report["deferred"]!);
+    }
+
+    [Fact]
+    public async Task LegacyStoreExtensionRemainsUsableAndDeferredWithoutUnknownCommands()
+    {
+        var bridge = new Bridge((action, _) => action == "ping" ? new JsonObject { ["version"] = "old", ["installation_type"] = "store" } : new JsonArray());
+        var (code, report) = await Run(bridge);
+        Assert.Equal(ExtensionRefresh.Stale, code);
+        Assert.True((bool)report["deferred"]!);
+        Assert.Equal(["ping", "list-tabs"], bridge.Calls);
+    }
+
+    [Fact]
+    public async Task MissingInstallationMetadataNeverAuthorizesReload()
+    {
+        var bridge = new Bridge((action, _) => action == "ping" ? new JsonObject { ["version"] = "old" } : new JsonArray());
+        var (code, report) = await Run(bridge);
+        Assert.Equal(ExtensionRefresh.Stale, code);
+        Assert.True((bool)report["deferred"]!);
+        Assert.Equal("extension-installation-type-unverified", (string?)report["reason"]);
+        Assert.Equal(["ping", "list-tabs"], bridge.Calls);
+    }
+
+    [Fact]
+    public async Task ACurrentBusyExtensionCanBeVerifiedWithoutReloading()
+    {
+        var bridge = new Bridge((action, _) => action == "ping" ? CurrentPing : new JsonArray(new JsonObject { ["owner"] = "Claude" }));
+        Assert.Equal(ExtensionRefresh.Current, (await Run(bridge, checkOnly: true)).Code);
+        Assert.Equal(["ping", "list-tabs"], bridge.Calls);
     }
 
     [Fact]

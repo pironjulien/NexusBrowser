@@ -77,7 +77,22 @@ public static partial class ExtensionRefresh
             var json = JsonNode.Parse(await response.Content.ReadAsStringAsync(limit.Token)) as JsonObject;
             if (!response.IsSuccessStatusCode || json?["success"]?.GetValue<bool>() != true)
                 throw new InvalidOperationException(json?["error"]?.GetValue<string>() ?? $"HTTP {(int)response.StatusCode}");
-            return json["data"]?.DeepClone();
+            var data = json["data"]?.DeepClone();
+            if (action == "ping" && data is JsonObject ping && ping["installation_type"] is null)
+            {
+                // Older extensions predate installation metadata; identify the authenticated target via the bridge.
+                using var statusRequest = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{httpPort}/api/status");
+                statusRequest.Headers.TryAddWithoutValidation(BridgeSecurity.TokenHeader, token);
+                using var statusResponse = await http.SendAsync(statusRequest, limit.Token);
+                if (statusResponse.IsSuccessStatusCode)
+                {
+                    var status = JsonNode.Parse(await statusResponse.Content.ReadAsStringAsync(limit.Token));
+                    string? id = status?["target"]?["extension_id"]?.GetValue<string>();
+                    ping["extension_id"] = id;
+                    ping["installation_type"] = "unknown";
+                }
+            }
+            return data;
         };
     }
 
@@ -103,12 +118,23 @@ public static partial class ExtensionRefresh
                 await delay(TimeSpan.FromMilliseconds(250), ct);
             }
         }
+        if (Matches(ping, version, features))
+            return (Current, new JsonObject { ["connected"] = true, ["verified"] = true, ["reloaded"] = false, ["version"] = version,
+                ["installation_type"] = ping?["installation_type"]?.DeepClone(), ["extension_id"] = ping?["extension_id"]?.DeepClone() });
         if ((tabs as JsonArray ?? []).Any(t => t is JsonObject o && o["owner"] is JsonNode owner && owner.ToString().Length > 0))
             return (Busy, new JsonObject { ["connected"] = true, ["busy"] = true, ["verified"] = false });
-        if (Matches(ping, version, features))
-            return (Current, new JsonObject { ["connected"] = true, ["verified"] = true, ["reloaded"] = false });
         if (checkOnly)
-            return (Stale, new JsonObject { ["connected"] = true, ["verified"] = false, ["stale"] = true });
+            return (Stale, new JsonObject { ["connected"] = true, ["verified"] = false, ["stale"] = true, ["version"] = ping?["version"]?.DeepClone() });
+        if (ping?["installation_type"]?.GetValue<string>() is not ("store" or "development"))
+            return (Stale, new JsonObject { ["verified"] = false, ["deferred"] = true, ["reason"] = "extension-installation-type-unverified" });
+        if (ping?["installation_type"]?.GetValue<string>() == "store")
+        {
+            if (ping["update_check"]?.GetValue<bool>() != true)
+                return (Stale, new JsonObject { ["verified"] = false, ["deferred"] = true, ["reason"] = "legacy-store-extension-awaiting-Chrome-update" });
+            var update = await call("update_extension", 3, ct);
+            if (update?["downloaded"]?.GetValue<bool>() != true)
+                return (Stale, new JsonObject { ["verified"] = false, ["deferred"] = true, ["reason"] = "store-update-not-yet-available", ["store_status"] = update?["status"]?.DeepClone() });
+        }
         await call("reload_extension", 3, ct);
         var reload = System.Diagnostics.Stopwatch.StartNew();
         while (reload.Elapsed.TotalSeconds < 10)
@@ -117,7 +143,7 @@ public static partial class ExtensionRefresh
             try
             {
                 if (Matches(await call("ping", 2, ct), version, features))
-                    return (Current, new JsonObject { ["connected"] = true, ["verified"] = true, ["reloaded"] = true });
+                    return (Current, new JsonObject { ["connected"] = true, ["verified"] = true, ["reloaded"] = true, ["version"] = version });
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException or OperationCanceledException or System.Text.Json.JsonException && !ct.IsCancellationRequested)
             {

@@ -1016,6 +1016,7 @@ public sealed class BridgeServer : IAsyncDisposable
                 {
                     ["status"] = "online",
                     ["version"] = BridgeSecurity.Version,
+                    ["fingerprint"] = RestartRequest.RuntimeFingerprint,
                     ["connected_clients"] = count,
                     ["chrome_running"] = ChromeLauncher.IsRunning(),
                     ["clients"] = clientsArr,
@@ -1479,7 +1480,9 @@ public sealed class BridgeServer : IAsyncDisposable
         try { status = JsonNode.Parse(File.ReadAllText(UpdateStatusPath())) as JsonObject ?? new JsonObject(); }
         catch (Exception ex) when (ex is IOException or JsonException) { status = new JsonObject(); }
         status["product"] = "browser";
-        status["version"] ??= BridgeSecurity.Version;
+        status["version"] = BridgeSecurity.Version;
+        status["active"] = BridgeSecurity.Version;
+        status["active_fingerprint"] = RestartRequest.RuntimeFingerprint;
         status["state"] ??= "idle";
         return status;
     }
@@ -1517,20 +1520,19 @@ public sealed class BridgeServer : IAsyncDisposable
         catch (Exception ex) when (ex is IOException or JsonException or ArgumentException) { return false; }
     }
 
-    private async Task CheckUpdateAsync(CancellationToken ct)
+    private async Task CheckUpdateAsync(CancellationToken ct, bool force = false)
     {
         await _updateLock.WaitAsync(ct);
         try
         {
             var status = ReadUpdateStatus();
-            string previous = TryGetString(status, "version") ?? "";
             status["version"] = BridgeSecurity.Version;
             if (TryGetString(status, "state") is "checking" or "updating")
             {
-                status["state"] = previous == BridgeSecurity.Version ? "idle" : "done";
-                status["message"] = previous == BridgeSecurity.Version ? "" : $"Updated to {BridgeSecurity.Version}.";
+                status["state"] = "deferred";
+                status["message"] = "Maintenance requested; loaded companion and extension still require activation verification.";
             }
-            bool stale = !DateTimeOffset.TryParse(TryGetString(status, "checked_at"), out var checkedAt) || DateTimeOffset.UtcNow - checkedAt >= TimeSpan.FromDays(1);
+            bool stale = force || !DateTimeOffset.TryParse(TryGetString(status, "checked_at"), out var checkedAt) || DateTimeOffset.UtcNow - checkedAt >= TimeSpan.FromDays(1);
             if (stale)
             {
                 try
@@ -1562,12 +1564,21 @@ public sealed class BridgeServer : IAsyncDisposable
 
     private async Task<(int Code, JsonObject Status)> StartUpdateAsync(CancellationToken ct)
     {
+        if (WsPort == DefaultPort && _tokenFile == BridgeSecurity.TokenPath()) await CheckUpdateAsync(ct, force: true);
         await _updateLock.WaitAsync(ct);
         try
         {
             var status = ReadUpdateStatus();
             if (TryGetString(status, "state") == "updating") return (202, status);
             status["version"] = BridgeSecurity.Version;
+            // The ecosystem owns its one maintenance schedule. A product request delegates to that existing task.
+            if (File.Exists(Path.Combine(BridgeSecurity.HomeDir(), ".nexus", "nexussystem", "maintenance", "get-nexus.ps1")) &&
+                await RunUpdateTaskAsync("NexusSystem Update", queryFirst: true, ct))
+            {
+                status["state"] = "deferred"; status["message"] = "NexusSystem maintenance requested; activation will be verified separately.";
+                WriteUpdateStatus(status);
+                return (202, status);
+            }
             if (!PublicInstallation())
             {
                 status["message"] = "Developer checkout: update it with git (no self-update).";
@@ -1598,6 +1609,23 @@ public sealed class BridgeServer : IAsyncDisposable
             }
         }
         finally { _updateLock.Release(); }
+    }
+
+    private static async Task<bool> RunUpdateTaskAsync(string name, bool queryFirst, CancellationToken ct)
+    {
+        async Task<bool> Run(params string[] args)
+        {
+            var start = new ProcessStartInfo("schtasks.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (var arg in args) start.ArgumentList.Add(arg);
+            using var process = Process.Start(start) ?? throw new IOException("Task scheduler unavailable");
+            var stdout = process.StandardOutput.ReadToEndAsync(ct); var stderr = process.StandardError.ReadToEndAsync(ct);
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct); limit.CancelAfter(TimeSpan.FromSeconds(5));
+            await process.WaitForExitAsync(limit.Token); await stdout; await stderr;
+            return process.ExitCode == 0;
+        }
+        if (queryFirst && !await Run("/Query", "/TN", name)) return false;
+        if (!await Run("/Run", "/TN", name)) throw new IOException($"Maintenance task {name} refused the request; no product fallback was started.");
+        return true;
     }
 
     private static string? TryGetString(JsonObject obj, string key)

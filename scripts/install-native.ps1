@@ -15,7 +15,7 @@
 #  - offline tests (test.ps1) unless -SkipTests
 # Runs under Windows PowerShell 5.1 and pwsh 7 (ASCII file: 5.1 reads a .ps1 without BOM in the ANSI code page).
 # Usage: pwsh -NoProfile -File install.ps1 [-SkipTests] [-SkipLaunch] [-Register]
-param([switch]$SkipTests, [switch]$SkipLaunch, [switch]$Register, [string]$PayloadRoot, [string]$ExpectedPayloadHash)
+param([switch]$SkipTests, [switch]$SkipLaunch, [switch]$Register, [switch]$UpdateOnly, [string]$PayloadRoot, [string]$ExpectedPayloadHash)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'runtime.ps1')
 . (Join-Path $PSScriptRoot 'Resolve-NexusToken.ps1')
@@ -43,6 +43,10 @@ function Write-Journal([string]$Text) {
 $version = (Get-Content (Join-Path $sourceRoot 'VERSION') -Raw).Trim()
 $previousExe = $nativeExe
 $pack = $env:NEXUS_PACK -eq '1'
+$previousBridgeTask = Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue
+$keepBridgeDisabled = $UpdateOnly -and $previousBridgeTask -and $previousBridgeTask.State -eq 'Disabled'
+$previousUpdateTask = Get-ScheduledTask -TaskName $updateTaskName -ErrorAction SilentlyContinue
+$keepUpdateDisabled = $UpdateOnly -and $previousUpdateTask -and $previousUpdateTask.State -eq 'Disabled'
 
 # --- 1. Engine: one immutable folder per build.
 $prebuilt = Join-Path $sourceRoot 'engine'
@@ -51,6 +55,7 @@ if ($PayloadRoot -and -not (Test-Path -LiteralPath $controlEngine)) { throw 'The
 if (Test-Path -LiteralPath (Join-Path $prebuilt 'NexusBrowser.exe')) {
     $candidate = $prebuilt
 } else {
+    if ($UpdateOnly) { throw 'UpdateOnly requires a prebuilt release; development checkouts are not built automatically.' }
     $candidate = Join-Path $buildRoot 'candidate'
     & (Join-Path $PSScriptRoot 'build-native.ps1') -OutputDirectory $candidate
 }
@@ -95,9 +100,10 @@ $bridgeArguments = "--bridge --token-file `"$tokenFile`" --log-file `"$(Join-Pat
 $action = New-ScheduledTaskAction -Execute $exe -Argument $bridgeArguments -WorkingDirectory $localRoot
 $settings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+if ($keepBridgeDisabled) { $settings.Enabled = $false }
 $oldBridges = @(Get-EngineProcesses '--bridge(\s|$)' | Where-Object { $_.ExecutablePath -ne $exe })
 $bridgeDeferred = $false
-if ($oldBridges.Count -and -not $busy -and -not $SkipLaunch) {
+if ($oldBridges.Count -and -not $busy -and -not $SkipLaunch -and -not $keepBridgeDisabled) {
     foreach ($oldBridge in $oldBridges) {
         $shutdown = Invoke-Native $controlExe @('--shutdown-bridge', '--expected-pid', "$($oldBridge.ProcessId)", '--wait-seconds', '10', '--token-file', $tokenFile) 20
         Write-Journal "Bridge $($oldBridge.ProcessId): $($shutdown.Output)"
@@ -134,6 +140,7 @@ if ((Test-Path -LiteralPath $publicApp) -and ((Resolve-Path -LiteralPath $source
         -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $updaterRoot 'scripts\self-update.ps1')`""
     $updateSettings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+    if ($keepUpdateDisabled) { $updateSettings.Enabled = $false }
     if (Get-ScheduledTask -TaskName $updateTaskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $updateTaskName -Confirm:$false }
     Register-ScheduledTask -TaskName $updateTaskName -Action $updateAction -Principal $principal -Settings $updateSettings `
         -Description 'NexusBrowser update, started by its bridge (POST /api/update), no trigger.' | Out-Null
@@ -158,7 +165,9 @@ foreach ($old in @((Join-Path $oldRoot 'bridge-token'), (Join-Path $oldRoot 'nat
 
 # --- 6. Shared MCP daemon (port 16182): one nexus-browser server for every session of Claude, Codex and Antigravity.
 $port = 16182
-$supervised = [bool](Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue)
+$supervisorTask = Get-ScheduledTask -TaskName 'Nexus MCP Daemons' -ErrorAction SilentlyContinue
+$supervised = [bool]$supervisorTask
+$keepSupervisorDisabled = $UpdateOnly -and $supervisorTask -and $supervisorTask.State -eq 'Disabled'
 # Nexus workstation token, shared by both PCs: created once by Sync-NexusPoste, never here.
 $mcpTokenFile = if ($env:OneDrive) { Join-Path $env:OneDrive 'Documents\NexusSecure\agents\nexus-mcp-token.txt' }
 $token = $null
@@ -179,7 +188,7 @@ if ($token) {
     foreach ($leftover in "$daemonSpec.runtime-switch", "$daemonSpec.pause", "$daemonSpec.installing") {
         if (Test-Path -LiteralPath $leftover) { Remove-Item -LiteralPath $leftover -Force }
     }
-    if ($daemonExes.Count -and -not $busy -and -not $SkipLaunch) {
+    if ($daemonExes.Count -and -not $busy -and -not $SkipLaunch -and -not $keepSupervisorDisabled) {
         foreach ($oldDaemon in $daemonExes) {
             $restart = Invoke-Native $controlExe @('--restart-daemon', '--expected-pid', "$($oldDaemon.ProcessId)", '--port', "$port",
                 '--mcp-token-file', $mcpTokenFile, '--request-file', $restartRequest, '--target-fingerprint', $fingerprint, '--wait-seconds', '10') 20
@@ -187,7 +196,7 @@ if ($token) {
             if ($restart.Code -ne 0) { Write-Warning 'Daemon upgrade deferred: valid sessions are preserved; legacy or unknown instances wait for natural exit.' }
         }
     }
-} elseif ($Register -and -not $supervised) {
+} elseif (($Register -or ($UpdateOnly -and (Get-ScheduledTask -TaskName $daemonTaskName -ErrorAction SilentlyContinue))) -and -not $supervised) {
     # Public install: ONE token per PC shared by every Nexus daemon (common rule). Its file: NEXUS_MCP_TOKEN_FILE when
     # set, else ~\.nexus\mcp-token.txt; reused when present, never regenerated; created exclusively otherwise, so that
     # installers run one after the other or together end with the same token. The user variable NEXUS_MCP_TOKEN mirrors
@@ -208,7 +217,7 @@ if ($token) {
     if ($existing -and ($existing.Actions.Execute -ne $exe)) {
         Set-ScheduledTask -TaskName $daemonTaskName -Action $daemonAction | Out-Null
     }
-    if ($existing -and -not $busy -and -not $SkipLaunch) {
+    if ($existing -and $existing.State -ne 'Disabled' -and -not $busy -and -not $SkipLaunch) {
         foreach ($oldDaemon in $daemonExes) {
             $restart = Invoke-Native $controlExe @('--restart-daemon', '--expected-pid', "$($oldDaemon.ProcessId)", '--port', "$port",
                 '--mcp-token-file', $sharedTokenFile, '--request-file', $restartRequest, '--target-fingerprint', $fingerprint, '--wait-seconds', '10') 20
@@ -220,7 +229,7 @@ if ($token) {
         Register-ScheduledTask -TaskName $daemonTaskName -Action $daemonAction -Trigger $trigger -Principal $principal -Settings $daemonSettings `
             -Description "NexusBrowser MCP daemon (127.0.0.1:$port) shared by the AI apps, bearer token NEXUS_MCP_TOKEN." | Out-Null
     }
-    if (-not $SkipLaunch -and (Get-ScheduledTask -TaskName $daemonTaskName).State -ne 'Running') { Start-ScheduledTask -TaskName $daemonTaskName }
+    if (-not $SkipLaunch -and (Get-ScheduledTask -TaskName $daemonTaskName).State -notin @('Running', 'Disabled')) { Start-ScheduledTask -TaskName $daemonTaskName }
     Write-Host "Task '$daemonTaskName' -> $exe --http $port"
 } elseif (-not $supervised) {
     Write-Warning 'No Nexus daemon supervisor and no -Register: shared daemon not installed (stdio servers still work).'
@@ -231,7 +240,7 @@ if ($token) {
 # --- 7. Antigravity (Nexus workstation): plugin nexus-browser on the shared daemon, its skill; one declaration only.
 $agyRoot = Join-Path $HOME '.gemini\config'
 $agyConfig = Join-Path $agyRoot 'mcp_config.json'
-if ($supervised -and $token -and (Test-Path $agyConfig)) {
+if (-not $UpdateOnly -and $supervised -and $token -and (Test-Path $agyConfig)) {
     $entry = [PSCustomObject]@{ serverUrl = "http://127.0.0.1:$port/mcp?agent=antigravity"; headers = [PSCustomObject]@{ Authorization = "Bearer $token" } }
     $plugin = Join-Path $agyRoot 'plugins\nexus-browser'
     foreach ($file in Get-ChildItem (Join-Path $sourceRoot 'plugins\nexus-browser') -File -Recurse) {
@@ -277,20 +286,22 @@ if ($supervised -and $token -and (Test-Path $agyConfig)) {
 }
 
 # --- 8. Public install: the AI clients found get the server (stdio, this engine).
-if ($Register) {
-    $registration = Invoke-Native $controlExe @('--register', '--engine-exe', $exe, '--source-root', $sourceRoot, '--backups', (Join-Path $localRoot 'backups')) 120
+if ($Register -or $UpdateOnly) {
+    $registrationArgs = @('--register', '--engine-exe', $exe, '--source-root', $sourceRoot, '--backups', (Join-Path $localRoot 'backups'))
+    if ($UpdateOnly) { $registrationArgs += '--update-only' }
+    $registration = Invoke-Native $controlExe $registrationArgs 120
     if (-not $pack) { Write-Host $registration.Output }
     if ($registration.Code) { throw 'Declaring the server to the AI clients failed (see above).' }
 }
 
-if (-not $SkipTests) {
+if (-not $SkipTests -and -not $UpdateOnly) {
     & (Join-Path $controllerRoot 'test.ps1')
     if ($LASTEXITCODE) { throw 'test.ps1 failed.' }
 }
 
 # --- 9. Bridge, extension and daemon checked.
 if (-not $SkipLaunch) {
-    if ((Get-ScheduledTask -TaskName $bridgeTaskName).State -ne 'Running') { Start-ScheduledTask -TaskName $bridgeTaskName }
+    if ((Get-ScheduledTask -TaskName $bridgeTaskName).State -notin @('Running', 'Disabled')) { Start-ScheduledTask -TaskName $bridgeTaskName }
     $wait = if ($pack) { 0 } else { 30 }
     if ($bridgeDeferred) { Write-Warning 'Bridge upgrade deferred: running instance kept until its next natural exit; the extension refresh has its own ownership check.' }
     $refresh = Invoke-Native $controlExe @('--refresh-extension', '--wait-ready', "$wait", '--source-root', $sourceRoot) 90
@@ -302,7 +313,7 @@ if (-not $SkipLaunch) {
     } elseif ($refresh.Code -eq 1) {
         Write-Warning 'The loaded extension is not this version yet: reload it in chrome://extensions.'
     }
-    if ($token -and -not $busy) {
+    if ($token -and -not $busy -and -not $UpdateOnly) {
         $deadline = [DateTime]::UtcNow.AddSeconds(60)
         $confirmed = $false
         do {
@@ -316,6 +327,10 @@ if (-not $SkipLaunch) {
         if ($confirmed) { Write-Host "Shared MCP daemon $version confirmed (pid $($health.pid))." }
         else { Write-Warning 'Daemon upgrade deferred: valid HTTP sessions and responses keep serving; legacy instances await natural exit.' }
     }
+}
+
+if ($UpdateOnly) {
+    & (Join-Path $PSScriptRoot 'update-receipt.ps1') -Published $version
 }
 
 # --- 10. Older builds no process runs any more, and the legacy fixed folder, are removed.

@@ -105,6 +105,78 @@ public sealed class ScriptTests : IDisposable
         Assert.StartsWith("refused Demon MCP Browser actif en version inconnue (PID 45), moteur installe 2.33.3", lines[3]);
     }
 
+    [Theory]
+    [InlineData(Shells.WindowsPowerShell)]
+    [InlineData(Shells.Pwsh)]
+    public async Task ActivationReceiptNeedsTheLoadedFingerprintAndVerifiedExtension(string shell)
+    {
+        string probe = _dir["activation.ps1"];
+        File.WriteAllText(probe,
+            "$ErrorActionPreference='Stop'\n$t=$null;$e=$null\n" +
+            $"$ast=[System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("scripts", "update-receipt.ps1"))},[ref]$t,[ref]$e)\n" +
+            "$f=$ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ActivationState'},$true)[0]\n" +
+            "$fn=Join-Path (Split-Path $PSCommandPath) 'activation-function.ps1';[IO.File]::WriteAllText($fn,$f.Extent.Text);. $fn\n" +
+            "$Published='2.33.5';$hash='a'*64;$current=[pscustomobject]@{version='2.33.5';fingerprint=$hash}\n" +
+            "$daemon=[pscustomobject]@{status='ok';service='nexus-browser';version='2.33.5';fingerprint=$hash;pid=1}\n" +
+            "$bridge=[pscustomobject]@{status='online';version='2.33.5';fingerprint=$hash;pid=2}\n" +
+            "$extension=[pscustomobject]@{verified=$true}\n" +
+            "(Get-ActivationState $current $daemon $bridge $extension)|ConvertTo-Json -Depth 5 -Compress\n" +
+            "$daemon.fingerprint='b'*64;(Get-ActivationState $current $daemon $bridge $extension)|ConvertTo-Json -Depth 5 -Compress\n" +
+            "$daemon.fingerprint=$hash;$extension.verified=$false;(Get-ActivationState $current $daemon $bridge $extension)|ConvertTo-Json -Depth 5 -Compress\n",
+            Encoding.ASCII);
+        var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
+        Assert.True(code == 0, stderr);
+        var receipts = Shells.Lines(stdout).Select(l => JsonNode.Parse(l)!).ToList();
+        Assert.Equal("done", (string?)receipts[0]["state"]);
+        Assert.Equal("2.33.5", (string?)receipts[0]["active"]);
+        Assert.Equal("deferred", (string?)receipts[1]["state"]);
+        Assert.Null(receipts[1]["active"]);
+        Assert.Equal("daemon-activation-pending", (string?)receipts[1]["reason"]);
+        Assert.Equal("extension-activation-pending", (string?)receipts[2]["reason"]);
+    }
+
+    [Theory]
+    [InlineData(Shells.WindowsPowerShell)]
+    [InlineData(Shells.Pwsh)]
+    public async Task AConcurrentInstallerDefersBeforeTouchingItsDownload(string shell)
+    {
+        string root = _dir["locked-install"];
+        Directory.CreateDirectory(root);
+        using var held = new FileStream(Path.Combine(root, "update.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var (code, stdout, stderr) = await Shells.FileAsync(shell, Repo.File("get.ps1"), ["-UpdateOnly"],
+            new Dictionary<string, string?> { ["NEXUS_BROWSER_ROOT"] = root });
+        Assert.True(code == 0, stdout + stderr);
+        Assert.Contains("\"reason\":\"maintenance-in-progress\"", stdout);
+        Assert.False(Directory.Exists(Path.Combine(root, "download")));
+        Assert.False(Directory.Exists(Path.Combine(root, "app.next")));
+    }
+
+    [Theory]
+    [InlineData(Shells.WindowsPowerShell)]
+    [InlineData(Shells.Pwsh)]
+    public async Task CachedActivationVerifiesTheWholePayloadWithoutExecutingItsScripts(string shell)
+    {
+        string payload = _dir["cached-payload"], probe = _dir["cache-verifier.ps1"];
+        Directory.CreateDirectory(payload);
+        File.WriteAllText(Path.Combine(payload, "get.ps1"), "throw 'must never execute cached code'");
+        File.WriteAllText(Path.Combine(payload, "engine.txt"), "verified engine");
+        File.WriteAllText(probe,
+            "$ErrorActionPreference='Stop'\n$t=$null;$e=$null\n" +
+            $"$ast=[System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("get.ps1"))},[ref]$t,[ref]$e)\n" +
+            "$f=$ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-CachedPayloadFingerprint'},$true)[0]\n" +
+            "$fn=Join-Path (Split-Path $PSCommandPath) 'cache-function.ps1';[IO.File]::WriteAllText($fn,$f.Extent.Text);. $fn\n" +
+            $"Get-CachedPayloadFingerprint {Shells.Quote(payload)}\n" +
+            $"& {Shells.Quote(Repo.File("scripts", "payload-integrity.ps1"))} -Path {Shells.Quote(payload)}\n" +
+            $"[IO.File]::WriteAllText({Shells.Quote(Path.Combine(payload, "get.ps1"))},'changed cached installer')\n" +
+            $"Get-CachedPayloadFingerprint {Shells.Quote(payload)}\n", Encoding.ASCII);
+        var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
+        Assert.True(code == 0, stderr);
+        var hashes = Shells.Lines(stdout);
+        Assert.Equal(3, hashes.Length);
+        Assert.Equal(hashes[0], hashes[1]);
+        Assert.NotEqual(hashes[0], hashes[2]);
+    }
+
     // ---------------------------------------------------------------------------------------------
     // get.ps1: latest tag without the API, SHA256SUMS.txt checked before unpacking, architecture
     // ---------------------------------------------------------------------------------------------
@@ -213,7 +285,7 @@ public sealed class ScriptTests : IDisposable
         Assert.Contains("Package checked against SHA256SUMS.txt.", stdout);
         Assert.Contains($"NexusBrowser {BridgeSecurity.Version} unpacked in", stdout);
         Assert.True(File.Exists(Path.Combine(root, "app", "engine", "NexusBrowser.exe")));
-        Assert.Equal(["app"], Directory.EnumerateFileSystemEntries(root).Select(Path.GetFileName));
+        Assert.Equal(["app", "update.lock"], Directory.EnumerateFileSystemEntries(root).Select(Path.GetFileName).Order());
     }
 
     [Fact]

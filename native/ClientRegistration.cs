@@ -370,7 +370,7 @@ public static partial class ClientRegistration
         return "declared";
     }
 
-    public static int Register(Context c, string? packTargets, bool pack, TextWriter output)
+    public static int Register(Context c, string? packTargets, bool pack, TextWriter output, bool updateOnly = false)
     {
         HashSet<string>? scope;
         try { scope = PackScope(packTargets); }
@@ -379,7 +379,7 @@ public static partial class ClientRegistration
         foreach (var (client, declare) in new (string, Func<Context, string?>)[] { ("Claude Code", ClaudeCode), ("Codex", Codex), ("Antigravity", Antigravity) })
         {
             if (scope is not null && !scope.Contains(client)) { results.Add((client, Skipped)); continue; }
-            try { results.Add((client, declare(c))); }
+            try { results.Add((client, updateOnly ? UpdateExisting(c, client) : declare(c))); }
             catch (Exception error) when (error is IOException or JsonException or InvalidDataException or UnauthorizedAccessException)
             { results.Add((client, $"failed: {error.Message}")); }
         }
@@ -388,7 +388,7 @@ public static partial class ClientRegistration
             if (scope is not null && !scope.Contains("Claude Desktop")) results.Add(("Claude Desktop", Skipped));
             else
             {
-                var desktops = ClaudeDesktop(c);
+                var desktops = updateOnly ? UpdateExistingDesktops(c) : ClaudeDesktop(c);
                 for (int i = 0; i < desktops.Count; i++) results.Add(("Claude Desktop" + (i > 0 ? $" ({i + 1})" : ""), desktops[i]));
             }
         }
@@ -431,7 +431,7 @@ public static partial class ClientRegistration
         return (process.ExitCode, stderr.Length > 0 ? stderr : stdout.Result);
     }
 
-    public static int Run(string? backups, string? engineExe = null, string? sourceRoot = null)
+    public static int Run(string? backups, string? engineExe = null, string? sourceRoot = null, bool updateOnly = false)
     {
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         string exe = engineExe ?? Environment.ProcessPath ?? throw new InvalidOperationException("executable path unknown");
@@ -443,6 +443,6 @@ public static partial class ClientRegistration
             exe, backups ?? Path.Combine(BridgeSecurity.DefaultDataDir(), "backups"), source,
             Which, RunProcess, () => Process.GetProcessesByName("Antigravity").Length > 0);
         Console.OutputEncoding = new UTF8Encoding(false);
-        return Register(context, Environment.GetEnvironmentVariable("NEXUS_PACK_TARGETS"), Environment.GetEnvironmentVariable("NEXUS_PACK") == "1", Console.Out);
+        return Register(context, Environment.GetEnvironmentVariable("NEXUS_PACK_TARGETS"), Environment.GetEnvironmentVariable("NEXUS_PACK") == "1", Console.Out, updateOnly);
     }
 }
