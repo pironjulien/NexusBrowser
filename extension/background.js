@@ -3252,8 +3252,8 @@ function chromeProtectedMessage(url) {
         where = ` (${/^https?:$/.test(u.protocol) ? u.origin : `${u.protocol}//${u.host}`})`;
     } catch (_) {}
     return `Page protected by Chrome${where}: no extension may read or drive it (Chrome Web Store, chrome:// pages). ` +
-        "Use a desktop screenshot instead (NexusWindows, Chrome window in front with the user's agreement), or the " +
-        "Chrome Web Store API.";
+        "Use NexusWindows to inspect the window or take a desktop screenshot in the background, or use the " +
+        "Chrome Web Store API. Foreground interaction is only needed if the desktop action requires it.";
 }
 
 /** Erreur brute de Chrome sur une page protégée : remplacée par le message clair (sinon renvoyée telle quelle). */

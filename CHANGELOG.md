@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Readiness verification compares the running daemon's version with the installed engine, and also checks the
   authenticated bridge version with `-Browser`. A deferred older process is reported with its version and PID
   instead of a false success; verification never stops it or interrupts its sessions.
+- Protected-page guidance points to NexusWindows background inspection and capture, or the Chrome Web Store API,
+  without incorrectly requiring the Chrome window to be brought to the foreground for observation.
 
 ## [2.33.3] - 2026-10-30
 
