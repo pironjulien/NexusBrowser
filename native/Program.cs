@@ -85,6 +85,11 @@ public static class Program
             return await BridgeShutdown.MainAsync(GetArgValue(args, "--expected-pid"), GetArgValue(args, "--wait-seconds"),
                 int.TryParse(GetArgValue(args, "--port"), out int shutdownPort) ? shutdownPort : 9225, tokenFile);
 
+        if (args.Contains("--restart-daemon", StringComparer.OrdinalIgnoreCase))
+            return await DaemonRestart.MainAsync(GetArgValue(args, "--expected-pid"), GetArgValue(args, "--wait-seconds"),
+                int.TryParse(GetArgValue(args, "--port"), out int daemonPort) ? daemonPort : 16182,
+                GetArgValue(args, "--mcp-token-file"), GetArgValue(args, "--request-file"), GetArgValue(args, "--target-fingerprint"));
+
         if (args.Contains("--bridge", StringComparer.OrdinalIgnoreCase))
         {
             logFile ??= Path.Combine(BridgeSecurity.DefaultDataDir(), "bridge.log");
@@ -140,6 +145,7 @@ public static class Program
         {
             if (a.Equals("--bridge", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--shutdown-bridge", StringComparison.OrdinalIgnoreCase) ||
+                a.Equals("--restart-daemon", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--mcp", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--http", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--rotate", StringComparison.OrdinalIgnoreCase) ||

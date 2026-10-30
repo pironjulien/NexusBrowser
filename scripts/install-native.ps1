@@ -6,7 +6,8 @@
 #    bridge starts on demand: first agent call, schtasks /Run)
 #  - shared MCP daemon (127.0.0.1:16182, bearer token): on a Nexus workstation declared to the daemon supervisor
 #    (~\.nexus\daemons\specs\nexus-browser.json, key exe, restart_request); a new build asks the running daemon to
-#    restart once no call is running. Public install (-Register) without that supervisor: task "Nexus Browser MCP" at
+#    restart once every valid HTTP session and response finishes. Legacy daemons defer until natural exit.
+#    Public install (-Register) without that supervisor: task "Nexus Browser MCP" at
 #    logon, token in the user variable NEXUS_MCP_TOKEN (created once, shared with the other Nexus products)
 #  - Antigravity (Nexus workstation): plugin nexus-browser pointing to the shared daemon
 #  - -Register (public install, get.ps1): server declared to the AI clients found (NexusBrowser.exe --register), then a
@@ -179,12 +180,11 @@ if ($token) {
         if (Test-Path -LiteralPath $leftover) { Remove-Item -LiteralPath $leftover -Force }
     }
     if ($daemonExes.Count -and -not $busy -and -not $SkipLaunch) {
-        # The running daemon stops itself once no call runs; the supervisor then starts this build.
-        [IO.File]::WriteAllText($restartRequest, "code sha256:$fingerprint", $utf8)
-        # Builds before 2.33.0 do not read restart requests: keep them until their natural exit.
-        $legacy = @($daemonExes | Where-Object { $_.ExecutablePath -eq $legacyExe })
-        if ($legacy.Count -and -not $busy -and -not $SkipLaunch) {
-            Write-Journal 'Legacy daemon has no cooperative restart support: new build prepared for its next natural start.'
+        foreach ($oldDaemon in $daemonExes) {
+            $restart = Invoke-Native $controlExe @('--restart-daemon', '--expected-pid', "$($oldDaemon.ProcessId)", '--port', "$port",
+                '--mcp-token-file', $mcpTokenFile, '--request-file', $restartRequest, '--target-fingerprint', $fingerprint, '--wait-seconds', '10') 20
+            Write-Journal "Daemon $($oldDaemon.ProcessId): $($restart.Output)"
+            if ($restart.Code -ne 0) { Write-Warning 'Daemon upgrade deferred: valid sessions are preserved; legacy or unknown instances wait for natural exit.' }
         }
     }
 } elseif ($Register -and -not $supervised) {
@@ -207,14 +207,13 @@ if ($token) {
     $existing = Get-ScheduledTask -TaskName $daemonTaskName -ErrorAction SilentlyContinue
     if ($existing -and ($existing.Actions.Execute -ne $exe)) {
         Set-ScheduledTask -TaskName $daemonTaskName -Action $daemonAction | Out-Null
-        if (-not $busy -and -not $SkipLaunch) {
-            foreach ($oldDaemon in $daemonExes) {
-                [IO.File]::WriteAllText($restartRequest, "code sha256:$fingerprint pid:$($oldDaemon.ProcessId)", $utf8)
-                $deadline = [DateTime]::UtcNow.AddSeconds(10)
-                do { $stillRunning = Get-Process -Id $oldDaemon.ProcessId -ErrorAction SilentlyContinue; if ($stillRunning) { Start-Sleep -Milliseconds 100 } }
-                while ($stillRunning -and [DateTime]::UtcNow -lt $deadline)
-                if ($stillRunning) { Write-Warning 'Previous daemon kept: a call is running or it does not support cooperative restart.' }
-            }
+    }
+    if ($existing -and -not $busy -and -not $SkipLaunch) {
+        foreach ($oldDaemon in $daemonExes) {
+            $restart = Invoke-Native $controlExe @('--restart-daemon', '--expected-pid', "$($oldDaemon.ProcessId)", '--port', "$port",
+                '--mcp-token-file', $sharedTokenFile, '--request-file', $restartRequest, '--target-fingerprint', $fingerprint, '--wait-seconds', '10') 20
+            Write-Journal "Daemon $($oldDaemon.ProcessId): $($restart.Output)"
+            if ($restart.Code -ne 0) { Write-Warning 'Previous daemon kept: a valid HTTP session remains, or this instance does not prove session-preserving restart.' }
         }
     }
     if (-not $existing) {
@@ -315,7 +314,7 @@ if (-not $SkipLaunch) {
             if (-not $confirmed) { Start-Sleep -Milliseconds 500 }
         } while (-not $confirmed -and [DateTime]::UtcNow -lt $deadline)
         if ($confirmed) { Write-Host "Shared MCP daemon $version confirmed (pid $($health.pid))." }
-        else { Write-Warning 'The shared daemon has not switched to this build yet (a call is running): it will once idle.' }
+        else { Write-Warning 'Daemon upgrade deferred: valid HTTP sessions and responses keep serving; legacy instances await natural exit.' }
     }
 }
 

@@ -66,7 +66,8 @@ self-contained for each Windows architecture (`NexusBrowser-win-x64.zip`, `Nexus
 `SHA256SUMS.txt` and build provenance (Sigstore: `gh attestation verify <file> --repo pironjulien/NexusBrowser`).
 Each build is installed once in `%LOCALAPPDATA%\NexusBrowser\versions\<fingerprint>` and never overwritten while it
 runs: an update leaves the running bridge and daemon alone while agents drive tabs, and asks the shared daemon to
-restart on the new build once no call is running (its restart request, `~\.nexus\nexus-browser\daemon-restart.request`).
+restart only after every valid HTTP session ends or expires and every admitted response finishes
+(`~\.nexus\nexus-browser\daemon-restart.request`). Idle conversations with no tabs remain protected.
 Existing Chrome windows and AI applications stay open.
 `verify.ps1 -Browser` checks the selected installation, the authenticated Chrome extension and native MCP health.
 `test.ps1 -Full` runs the offline tests, then checks the bridge and the loaded extension on this PC.
@@ -123,6 +124,8 @@ is prepared beside the working one and checked first; a failed update restores t
 the AI apps keep running. A bridge with running calls or agent-owned tabs keeps serving;
 the installer asks an idle bridge to exit cooperatively and never terminates it. Bridges older than 2.33.2 switch
 on their next natural start because they do not implement this protocol.
+The daemon has a separate session-preserving restart protocol from 2.33.3: older or unrecognized daemons keep
+serving until natural exit, and the installer writes no restart request for them.
 The bridge can also update a public install itself (the contract shared by the Nexus products): it writes
 `~\.nexus\status\browser.json` (`version`, `latest` read from the `releases/latest` redirect at most once a day,
 `state`, `message`), `GET /api/update` returns it and `POST /api/update` (bridge token) starts the "Nexus Browser

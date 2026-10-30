@@ -5,10 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.33.3] - 2026-10-30
+
 ### Added
 - Real HTTP regression coverage for MCP 2025-06-18 and 2025-11-25: expired session IDs remain HTTP 404, and
   a new initialize without the old ID creates an isolated session. This confirms the required protocol behavior;
-  no server behavior or native version changes.
+  expired IDs remain invalid and never inherit another conversation's tabs.
+
+### Fixed
+- Shared daemon upgrades preserve every valid HTTP session, including idle SDK clients with no tabs. Restart waits
+  for client DELETE or normal session expiry and for every admitted HTTP response to finish flushing. Admission,
+  session expiry and draining share one gate; initialize cannot return a session already lost to a pending restart.
+- The current installer and rollback controller authenticate the daemon's explicit session-preserving capability,
+  verify its PID and address the exact random instance. Unknown or older 2.33.0/2.33.2 daemons are deferred without
+  writing their unsafe restart flag. The new request format is deliberately inert to those older watchers.
 
 ## [2.33.2] - 2026-10-30
 

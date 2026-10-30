@@ -8,8 +8,9 @@ namespace NexusBrowser.Native;
 
 /// <summary>
 /// Restart request of the shared HTTP daemon (the spec's restart_request, same contract as NexusRelay): the installer
-/// writes "code sha256:&lt;fingerprint&gt;" (or "force") into the file once a new immutable build is installed; the
-/// running daemon takes it, and when it targets another build, stops as soon as no tool call is running, so that its
+/// writes "sessions-v1 code:&lt;fingerprint&gt; pid:&lt;n&gt; instance:&lt;id&gt;" after checking the authenticated capability.
+/// The supervisor's earlier "code sha256:&lt;fingerprint&gt;" and "force" requests remain supported. The
+/// running daemon takes it, and when it targets another build, waits for all valid sessions and HTTP responses, so its
 /// supervisor starts the new build. "pid:&lt;n&gt;" addresses one process only.
 /// </summary>
 public static partial class RestartRequest
@@ -47,7 +48,7 @@ public static partial class RestartRequest
     }
 
     /// <summary>Takes the request (never left half-read) and says whether this process must restart.</summary>
-    public static bool Wanted(string requestPath, string loadedFingerprint)
+    public static bool Wanted(string requestPath, string loadedFingerprint, string? instanceId = null)
     {
         try { if (TargetedElsewhere(File.ReadAllText(requestPath, Encoding.UTF8))) return false; }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return false; }
@@ -58,7 +59,18 @@ public static partial class RestartRequest
         try { content = File.ReadAllText(taken, Encoding.UTF8).Trim(); }
         catch (IOException) { GiveBack(taken, requestPath); throw; }
         if (TargetedElsewhere(content)) { GiveBack(taken, requestPath); return false; }
-        string? target = content.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+        var parts = content.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length > 0 && parts[0] == "sessions-v1")
+        {
+            // Deliberately no `force` or `sha256:` token: watchers before 2.33.3 must never act on this format.
+            string? instance = parts.FirstOrDefault(s => s.StartsWith("instance:", StringComparison.Ordinal))?[9..];
+            string? code = parts.FirstOrDefault(s => s.StartsWith("code:", StringComparison.Ordinal))?[5..];
+            bool safe = instanceId is not null && instance == instanceId && PidTarget().IsMatch(content) &&
+                code is { Length: 64 } && code.All(Uri.IsHexDigit) && !code.Equals(loadedFingerprint, StringComparison.OrdinalIgnoreCase);
+            try { File.Delete(taken); } catch (IOException) { }
+            return safe;
+        }
+        string? target = parts
             .FirstOrDefault(s => s.StartsWith("sha256:", StringComparison.Ordinal))?[7..];
         bool wanted = content.StartsWith("force", StringComparison.Ordinal) ||
             (target is not null && !target.Equals(loadedFingerprint, StringComparison.OrdinalIgnoreCase));

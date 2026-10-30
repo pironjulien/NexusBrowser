@@ -17,6 +17,7 @@ internal sealed class Daemon : IDisposable
     public ChildProcess Process { get; }
     public string Base { get; }
     public string Token { get; } = new('d', 64);
+    public string RestartPath { get; private init; } = "";
 
     private Daemon(ChildProcess process, string baseUrl)
     {
@@ -35,8 +36,9 @@ internal sealed class Daemon : IDisposable
             ["NEXUS_SHARED_HOME"] = dir["shared"],
             ["NEXUS_JOURNAL_HOME"] = dir["journal"],
             ["NEXUS_BROWSER_SESSION_IDLE_SECONDS"] = idleSeconds,
+            ["NEXUS_BROWSER_RESTART_REQUEST"] = dir["daemon-restart.request"],
         };
-        var daemon = new Daemon(new ChildProcess(NativeExe.Path, ["--http", port.ToString()], env), $"http://127.0.0.1:{port}");
+        var daemon = new Daemon(new ChildProcess(NativeExe.Path, ["--http", port.ToString()], env), $"http://127.0.0.1:{port}") { RestartPath = dir["daemon-restart.request"] };
         bool ready = false;
         try
         {

@@ -100,6 +100,14 @@ public sealed partial class McpServer : IDisposable
     private readonly ConcurrentDictionary<string, string> _sessionAgents = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, double> _sessionLastSeen = new(StringComparer.Ordinal);
     private readonly object _httpSessionsLock = new();
+    private readonly string _httpInstanceId = Guid.NewGuid().ToString("N");
+    private int _httpClients;
+    private bool _httpDraining;
+    private readonly Dictionary<string, int> _httpSessionResponses = new(StringComparer.Ordinal);
+    // Test seam at the actual transport boundary, after RPC completion and before any reply bytes are sent.
+    internal Func<Task>? BeforeHttpReplyAsync { get; set; }
+    internal double RestartPollSeconds { get; init; } = 2;
+    internal int ActiveHttpTransports { get { lock (_httpSessionsLock) return _httpClients; } }
     private readonly double _sessionIdleSeconds = HttpSessionIdleSeconds();
     private readonly ConcurrentDictionary<string, string> _statelessSessions = new(StringComparer.Ordinal);
     private CancellationTokenSource? _heartbeatCts;
@@ -177,6 +185,7 @@ public sealed partial class McpServer : IDisposable
             double cutoff = EmergencyStop.NowMonotonic() - _sessionIdleSeconds;
             foreach (var session in _sessionAgents)
                 if (_sessionLastSeen.TryGetValue(session.Key, out var seen) && seen < cutoff &&
+                    _httpSessionResponses.GetValueOrDefault(session.Key) == 0 &&
                     !_requests.Keys.Any(r => r.Session == SessionIdentity(session.Value, session.Key).Id))
                     CloseHttpSession(session.Key, session.Value, $"expired after {_sessionIdleSeconds:0} s idle");
         }
@@ -349,7 +358,7 @@ public sealed partial class McpServer : IDisposable
         var serverCt = linkedCts.Token;
 
         var sessionHeartbeatTask = Task.Run(() => RunDaemonHeartbeatsAsync(serverCt), serverCt);
-        var restartTask = Task.Run(() => WatchRestartRequestAsync(RestartRequest.DefaultPath(), linkedCts, serverCt), serverCt);
+        var restartTask = Task.Run(() => WatchRestartRequestAsync(RestartRequest.DefaultPath(), linkedCts, serverCt, RestartPollSeconds), serverCt);
 
         try
         {
@@ -369,11 +378,19 @@ public sealed partial class McpServer : IDisposable
                     continue;
                 }
 
+                lock (_httpSessionsLock)
+                {
+                    // Admission and the final restart decision share a gate. An accepted request holds the daemon
+                    // until its complete HTTP response has been flushed, even after DELETE removes its last SID.
+                    if (_httpDraining) { client.Dispose(); continue; }
+                    _httpClients++;
+                }
                 _ = Task.Run(async () =>
                 {
                     using var _ = client;
-                    await HandleHttpDaemonClientAsync(client, expectedAuth, serverCt);
-                }, serverCt);
+                    try { await HandleHttpDaemonClientAsync(client, expectedAuth, serverCt); }
+                    finally { lock (_httpSessionsLock) _httpClients--; }
+                });
             }
         }
         finally
@@ -387,8 +404,8 @@ public sealed partial class McpServer : IDisposable
     /// <summary>Number of tool calls running now (all sessions).</summary>
     internal int RunningCalls => _requests.Count;
 
-    /// <summary>A new build was installed: stop once no tool call is running, so the supervisor starts the new one.
-    /// Sessions see a short disconnection; their tabs stay theirs to take back (orphans).</summary>
+    /// <summary>Wait for every valid HTTP session and admitted response, including idle conversations with no tabs.
+    /// Admission and draining are atomic; the supervisor can then start the new build without breaking a client SID.</summary>
     internal async Task WatchRestartRequestAsync(string requestPath, CancellationTokenSource stop, CancellationToken ct, double pollSeconds = 2)
     {
         string loaded = RestartRequest.CodeFingerprint();
@@ -397,12 +414,17 @@ public sealed partial class McpServer : IDisposable
         {
             try
             {
-                wanted |= RestartRequest.Wanted(requestPath, loaded);
-                if (wanted && _requests.IsEmpty)
+                wanted |= RestartRequest.Wanted(requestPath, loaded, _httpInstanceId);
+                lock (_httpSessionsLock)
                 {
-                    Console.Error.WriteLine("NexusBrowser: restart requested by the installer; no call running, stopping for the new build.");
-                    stop.Cancel();
-                    return;
+                    ExpireHttpSessions();
+                    if (wanted && _sessionAgents.IsEmpty && _requests.IsEmpty && _httpClients == 0)
+                    {
+                        _httpDraining = true;
+                        Console.Error.WriteLine("NexusBrowser: restart requested; no valid HTTP session, call or response remains, stopping for the new build.");
+                        stop.Cancel();
+                        return;
+                    }
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -480,6 +502,7 @@ public sealed partial class McpServer : IDisposable
     private async Task HandleHttpDaemonClientAsync(Socket socket, string expectedAuth, CancellationToken ct)
     {
         using var stream = new NetworkStream(socket, ownsSocket: false);
+        string? responseSession = null;
         try
         {
             using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -544,6 +567,16 @@ public sealed partial class McpServer : IDisposable
             if (!BridgeAuth.Same(gotAuth ?? "", expectedAuth))
             {
                 await WriteHttpPlainAsync(stream, 401, "Token refused");
+                return;
+            }
+            if (requestPath == "/restart-capabilities" && method == "GET")
+            {
+                if (headers.ContainsKey("Origin")) { await WriteHttpPlainAsync(stream, 403, "Browser origins are not allowed"); return; }
+                await WriteHttpJsonAsync(stream, 200, new JsonObject
+                {
+                    ["service"] = ServerName, ["pid"] = _processPid, ["instance_id"] = _httpInstanceId,
+                    ["preserve_http_sessions"] = true, ["request_schema"] = 1,
+                });
                 return;
             }
             if (requestPath != "/mcp") { await WriteHttpPlainAsync(stream, 404, "Not Found"); return; }
@@ -657,7 +690,11 @@ public sealed partial class McpServer : IDisposable
                 // Register the request before DELETE can close its session and cancel it.
                 // A session removed while the HTTP body was being read must never be recreated implicitly.
                 if (string.IsNullOrEmpty(sessionId) || _sessionAgents.ContainsKey(sessionId))
+                {
+                    responseSession = activeSessionId;
+                    _httpSessionResponses[activeSessionId] = _httpSessionResponses.GetValueOrDefault(activeSessionId) + 1;
                     replyTask = HandleJsonRpcLineAsync(bodyJson, callIdentity, _processPid, ct);
+                }
             }
             if (replyTask is null) { await WriteHttpPlainAsync(stream, 404, "Session closed while reading the request"); return; }
             var replyObj = await replyTask;
@@ -667,6 +704,7 @@ public sealed partial class McpServer : IDisposable
             {
                 ["mcp-session-id"] = activeSessionId,
             };
+            if (BeforeHttpReplyAsync is { } beforeReply) await beforeReply();
 
             if (replyObj is null)
             {
@@ -680,6 +718,18 @@ public sealed partial class McpServer : IDisposable
         catch
         {
             // Ignore dropped HTTP connection
+        }
+        finally
+        {
+            lock (_httpSessionsLock)
+            {
+                if (responseSession is not null)
+                {
+                    if (_httpSessionResponses[responseSession] <= 1) _httpSessionResponses.Remove(responseSession);
+                    else _httpSessionResponses[responseSession]--;
+                    if (_sessionAgents.ContainsKey(responseSession)) _sessionLastSeen[responseSession] = EmergencyStop.NowMonotonic();
+                }
+            }
         }
     }
 

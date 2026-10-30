@@ -50,4 +50,22 @@ public sealed class RestartRequestTests : IDisposable
 
     [Fact]
     public void FingerprintIsTheRunningCode() => Assert.Matches("^[0-9a-f]{64}$", RestartRequest.CodeFingerprint());
+
+    [Theory]
+    [InlineData("0123456789abcdef0123456789abcdef", true)]
+    [InlineData("different-instance", false)]
+    [InlineData(null, false)]
+    public void SessionPreservingRequestTargetsOneInstanceAndIsInertToLegacyWatchers(string? instance, bool wanted)
+    {
+        const string actual = "0123456789abcdef0123456789abcdef";
+        string content = $"sessions-v1 code:{new string('a', 64)} pid:{Environment.ProcessId} instance:{actual}";
+        File.WriteAllText(Request, content);
+        // Exact old-watcher decision, not a version regex or an assumption about its request prefix.
+        string? legacyTarget = content.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(s => s.StartsWith("sha256:", StringComparison.Ordinal))?[7..];
+        Assert.False(content.StartsWith("force", StringComparison.Ordinal) || legacyTarget is not null && legacyTarget != "loaded");
+        Assert.Equal(wanted, RestartRequest.Wanted(Request, "loaded", instance));
+        File.WriteAllText(Request, content.Replace($"pid:{Environment.ProcessId}", $"pid:{Environment.ProcessId + 1}"));
+        Assert.False(RestartRequest.Wanted(Request, "loaded", actual));
+        Assert.True(File.Exists(Request));
+    }
 }
