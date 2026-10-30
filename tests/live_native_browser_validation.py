@@ -173,7 +173,7 @@ def main() -> int:
             try:
                 urllib.request.urlopen(request, timeout=3).close()
             except OSError:
-                pass
+                pass  # best effort: the daemon may already have dropped the session; terminate() follows
         process.terminate()
         try:
             process.wait(timeout=5)
