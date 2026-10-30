@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   The scheduled updater retains the current verified bootstrap independently of the restored payload, so a later
   update cannot reintroduce the retired process-termination behavior.
   An incomplete recovery retains the failed update's safe controller; a later update cannot discard that evidence.
+  A cached immutable engine must match the verified payload fingerprint before it is executed or reused.
 
 ## [2.33.0] - 2026-10-30
 

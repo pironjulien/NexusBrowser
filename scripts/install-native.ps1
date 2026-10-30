@@ -64,6 +64,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $versionDir 'NexusBrowser.exe'))) {
     Write-Journal "Engine $version installed in $versionDir."
 }
 $exe = Join-Path $versionDir 'NexusBrowser.exe'
+if ((Get-BuildFingerprint $versionDir) -cne $fingerprint) {
+    throw "Installed build cache does not match the verified payload: $versionDir. It was not executed or overwritten."
+}
 $controlExe = if ($controlEngine) { $controlEngine } else { $exe }
 $check = Invoke-Native $exe @('--version') 30
 if ($check.Code -or $check.Output -ne $version) { throw "Installed engine answers '$($check.Output)', expected $version." }
