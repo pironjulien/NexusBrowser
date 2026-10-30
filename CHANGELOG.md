@@ -40,8 +40,9 @@ The native engine (`NexusBrowser.exe`, C# .NET 10) is now the only one: no Pytho
 - The last session of an agent also announces its closure immediately, using a daemon identity that never owns or
   reclaims tabs. Failed announcements are retried when the bridge becomes available; a heartbeat already in flight
   cannot revive an explicitly closed session.
-- Token initialization holds one exclusive file handle across reading and writing, so concurrent installers share
-  one token even when the existing file is empty. A non-empty token is never replaced.
+- Token initialization holds one stable sibling lock across reading and writing, so concurrent installers share
+  one token even when the existing file is empty. Existing daemon readers remain compatible and a non-empty token
+  is never replaced.
 - `--bridge --port 0` lets Windows bind available WebSocket and HTTP ports atomically; the subprocess integration
   test reads its bound addresses instead of racing other tests for previously probed ports.
 - A refused tool argument (`timeout_ms` above the bridge limit) is refused before the page is read, so an accord is

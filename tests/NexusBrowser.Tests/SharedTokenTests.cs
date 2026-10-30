@@ -44,5 +44,7 @@ public sealed class SharedTokenTests : IDisposable
         File.WriteAllText(tokenFile, existing + "\n");
         Assert.Equal(existing, await Run());
         Assert.Equal(existing + "\n", File.ReadAllText(tokenFile));
+        using var reader = File.Open(tokenFile, FileMode.Open, FileAccess.Read, FileShare.Read);
+        Assert.Equal(existing, await Run()); // existing daemon readers remain compatible with installer serialization
     }
 }

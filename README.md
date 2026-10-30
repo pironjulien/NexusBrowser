@@ -163,18 +163,11 @@ Then load `extension\` once in `chrome://extensions` (developer mode, "Load unpa
 (`blcgddmjdkobmgakjffjpgiicjlflgjf`), the same on every PC and whatever the folder; it is the only origin the bridge
 and the native host accept.
 
-### The MCP server from PyPI
+### Native MCP clients
 
-Once the bridge and the extension are installed (above), any MCP client can also start the server straight from
-[PyPI](https://pypi.org/project/nexus-browser/), without the clone (the former Python server, 2.32.0 at most: new versions
-ship only as the native engine above):
-
-```bash
-claude mcp add nexus-browser --scope user -e NEXUS_BROWSER_AGENT=Claude -- uvx nexus-browser
-```
-
-[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_nexus--browser-0098FF?logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=nexus-browser&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22--python%22%2C%223.14%22%2C%22nexus-browser%22%5D%2C%22env%22%3A%7B%22NEXUS_BROWSER_AGENT%22%3A%22Copilot%22%7D%7D)
-[![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install_nexus--browser-24bfa5?logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=nexus-browser&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22--python%22%2C%223.14%22%2C%22nexus-browser%22%5D%2C%22env%22%3A%7B%22NEXUS_BROWSER_AGENT%22%3A%22Copilot%22%7D%7D&quality=insiders)
+Install the native engine through NexusSystem or the verified release installer above. The installer registers
+Claude Code, Claude Desktop, Codex and Antigravity automatically. The former PyPI package is retired; new versions
+are distributed through [GitHub releases](https://github.com/pironjulien/NexusBrowser/releases) and NexusSystem.
 
 Gemini CLI: `gemini extensions install https://github.com/pironjulien/NexusBrowser` (the shared local daemon of
 the one-time install, with the token of `NEXUS_MCP_TOKEN`, from `gemini-extension.json`).
