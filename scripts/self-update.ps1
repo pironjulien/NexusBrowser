@@ -60,7 +60,7 @@ try {
         Write-Log "Failed: exit code $code."
         exit 1
     }
-    $version = (Get-Content -LiteralPath (Join-Path $app 'VERSION') -Raw).Trim()
+    $version = (Get-Content -LiteralPath $currentFile -Raw | ConvertFrom-Json).version
     Set-Status 'done' "Updated to $version." $version
     Write-Log "Updated to $version."
 } catch {

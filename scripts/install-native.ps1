@@ -117,8 +117,17 @@ Write-Host "Task '$bridgeTaskName' -> $exe"
 #     it runs scripts\self-update.ps1 without a window. A clone updates through git.
 $publicApp = Join-Path $nativeRoot 'app'
 if ((Test-Path -LiteralPath $publicApp) -and ((Resolve-Path -LiteralPath $sourceRoot).Path -eq (Resolve-Path -LiteralPath $publicApp).Path)) {
+    # A rollback must not restore an old self-update script that would execute the retired unsafe installer later.
+    # Keep this verified updater (get.ps1 + its current helpers) separate from the payload being restored.
+    $updaterHash = (Get-FileHash -LiteralPath (Join-Path $controllerRoot 'get.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+    $updaterRoot = Join-Path $nativeRoot ('updaters\' + $updaterHash.Substring(0, 16))
+    New-Item -ItemType Directory -Force (Join-Path $updaterRoot 'scripts') | Out-Null
+    Copy-Item -LiteralPath (Join-Path $controllerRoot 'get.ps1') -Destination (Join-Path $updaterRoot 'get.ps1') -Force
+    foreach ($helper in 'self-update.ps1', 'runtime.ps1') {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $helper) -Destination (Join-Path $updaterRoot 'scripts') -Force
+    }
     $updateAction = New-ScheduledTaskAction -Execute 'conhost.exe' -WorkingDirectory $localRoot `
-        -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $publicApp 'scripts\self-update.ps1')`""
+        -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $updaterRoot 'scripts\self-update.ps1')`""
     $updateSettings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
     if (Get-ScheduledTask -TaskName $updateTaskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $updateTaskName -Confirm:$false }

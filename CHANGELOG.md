@@ -23,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   process rules. The old installer and script helpers are never run. Recovery accepts only the restored public
   app beside the failed update controller and verifies its complete payload hash before touching configuration.
   CI injects a failed update and an old-installer trap, then verifies restored configuration and client entries.
+  The scheduled updater retains the current verified bootstrap independently of the restored payload, so a later
+  update cannot reintroduce the retired process-termination behavior.
 
 ## [2.33.0] - 2026-10-30
 

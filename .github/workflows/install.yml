@@ -111,7 +111,7 @@ jobs:
           $root = Join-Path $env:LOCALAPPDATA 'NexusBrowser'
           $app = Join-Path $root 'app'
           function Assert-Working([string]$Case) {
-            $left = @(Get-ChildItem $root -Directory | Where-Object Name -notin 'app', 'versions' | ForEach-Object Name)
+            $left = @(Get-ChildItem $root -Directory | Where-Object Name -notin 'app', 'versions', 'updaters' | ForEach-Object Name)
             if ($left) { throw "$Case : folders left behind: $left" }
             if ((Get-Content (Join-Path $app 'install.ps1') -Raw) -match 'Injected failure') { throw "$Case : broken version installed" }
             $health = Invoke-RestMethod 'http://127.0.0.1:16182/health' -TimeoutSec 5
@@ -146,6 +146,8 @@ jobs:
           if (Test-Path $legacyTrap) { throw 'rollback executed the previous installer' }
           $restored = Get-Content (Join-Path $root 'current.json') -Raw | ConvertFrom-Json
           if ($restored.version -eq 'broken-update-fixture') { throw 'rollback did not restore the configuration' }
+          $updater = Get-ScheduledTask -TaskName 'Nexus Browser Update'
+          if ($updater.Actions.Arguments -notmatch '\\NexusBrowser\\updaters\\[0-9a-f]{16}\\scripts\\self-update\.ps1') { throw 'rollback restored a previous unsafe updater' }
           & pwsh -NoProfile -File .\tests\install-smoke.ps1 -EntriesOnly
           if ($LASTEXITCODE) { throw 'restored client entries or daemon do not match the previous payload' }
           Assert-Working 'failing installer'
