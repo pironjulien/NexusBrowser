@@ -1178,6 +1178,14 @@ public sealed class BridgeServer : IAsyncDisposable
 
                 headers.TryGetValue(BridgeSecurity.PidHeader.ToLowerInvariant(), out var pidHdr);
                 var gone = client.HasValue ? NoteSession(client.Value, BridgeSecurity.CheckPid(pidHdr)) : null;
+                // Sessions the MCP daemon closed (DELETE by the client, idle expiry): their tabs become orphans at once,
+                // for the same agent only (the extension reads "gone" in the caller's agent).
+                if (client.HasValue && headers.TryGetValue(BridgeSecurity.GoneHeader.ToLowerInvariant(), out var goneHdr))
+                {
+                    gone ??= [];
+                    foreach (var id in goneHdr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(32))
+                        if (id != client.Value.Id && BridgeSecurity.CheckIdentity(client.Value.Agent, id) is not null && !gone.Contains(id)) gone.Add(id);
+                }
 
                 try
                 {

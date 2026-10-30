@@ -56,7 +56,7 @@ bridge shared by several agents.
 | `skills/`, `plugins/` | Skill and Antigravity plugin; `install.ps1` copies the skill into that plugin only |
 | `tests/` | Engine tests (xUnit v3, `dotnet test`), extension tests (`node --test`), the clean-Windows install check |
 | `benchmarks/` | Token and success benchmark against Chrome DevTools MCP and Playwright MCP (results and method in its README) |
-| `mcpb/` | Claude Desktop extension (`nexus-browser.mcpb`, attached to every release: the self-contained engine itself, `--mcp`) |
+| `mcpb/` | Claude Desktop extension (`nexus-browser-win-x64.mcpb`, `nexus-browser-win-arm64.mcpb`, attached to every release: the self-contained engine itself, `--mcp`) |
 | `gemini-extension.json` | Gemini CLI extension: `gemini extensions install https://github.com/pironjulien/NexusBrowser` (the shared local daemon, token `NEXUS_MCP_TOKEN`) |
 
 ## The engine
@@ -180,7 +180,8 @@ Gemini CLI: `gemini extensions install https://github.com/pironjulien/NexusBrows
 the one-time install, with the token of `NEXUS_MCP_TOKEN`, from `gemini-extension.json`).
 
 Claude Desktop extension: download
-[`nexus-browser.mcpb`](https://github.com/pironjulien/NexusBrowser/releases/latest/download/nexus-browser.mcpb) and drop
+[`nexus-browser-win-x64.mcpb`](https://github.com/pironjulien/NexusBrowser/releases/latest/download/nexus-browser-win-x64.mcpb)
+(ARM64 PC: [`nexus-browser-win-arm64.mcpb`](https://github.com/pironjulien/NexusBrowser/releases/latest/download/nexus-browser-win-arm64.mcpb)) and drop
 it on Claude Desktop's window, or add it in **Settings > Extensions** (it carries the self-contained engine).
 
 Without the bridge, the server still starts and lists its 49 tools, and every call answers with a clear error that

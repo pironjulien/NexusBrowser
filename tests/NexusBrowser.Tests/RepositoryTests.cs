@@ -38,7 +38,7 @@ public sealed class RepositoryTests
     {
         var package = Json("server.json")["packages"]![0]!;
         Assert.Equal("mcpb", (string?)package["registryType"]);
-        Assert.EndsWith($"/v{Version}/nexus-browser.mcpb", (string?)package["identifier"]);
+        Assert.EndsWith($"/v{Version}/nexus-browser-win-x64.mcpb", (string?)package["identifier"]);
         Assert.StartsWith("https://github.com/pironjulien/NexusBrowser/releases/download/", (string?)package["identifier"]);
         Assert.Equal("stdio", (string?)package["transport"]?["type"]);
     }

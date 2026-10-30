@@ -21,6 +21,7 @@ public static class BridgeSecurity
     public const string AgentHeader = "X-Nexus-Browser-Agent";
     public const string ClientHeader = "X-Nexus-Browser-Client";
     public const string PidHeader = "X-Nexus-Browser-Pid";
+    public const string GoneHeader = "X-Nexus-Browser-Gone";
 
     private static readonly Regex AgentPattern = new(@"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,31}$", RegexOptions.Compiled);
     private static readonly Regex ClientPattern = new(@"^[A-Za-z0-9][A-Za-z0-9_.:-]{3,63}$", RegexOptions.Compiled);

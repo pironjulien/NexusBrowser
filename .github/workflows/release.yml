@@ -1,6 +1,7 @@
 # Release: on a vX.Y.Z tag, runs test.ps1, builds the self-contained engine for both Windows architectures
 # (NexusBrowser-win-x64.zip, NexusBrowser-win-arm64.zip: what get.ps1 installs), the Chrome Web Store package of the
-# extension, the Claude Desktop extension (nexus-browser.mcpb, server type binary) and get.ps1, lists their SHA-256 in
+# extension, the Claude Desktop extension for each architecture (nexus-browser-win-x64.mcpb, nexus-browser-win-arm64.mcpb,
+# server type binary) and get.ps1, lists their SHA-256 in
 # SHA256SUMS.txt, attests their build provenance (Sigstore, no key to manage: verify with
 # `gh attestation verify <file> --repo pironjulien/NexusBrowser`, or offline with the attached NexusBrowser-X.Y.Z.intoto.jsonl
 # and `--bundle`), and publishes them as the "NexusBrowser X.Y.Z" GitHub release, notes from CHANGELOG.md. Then
@@ -53,7 +54,7 @@ jobs:
         run: |
           New-Item -ItemType Directory dist | Out-Null
           ./scripts/package-release.ps1 -Runtime win-x64 -OutDir dist -Mcpb
-          ./scripts/package-release.ps1 -Runtime win-arm64 -OutDir dist
+          ./scripts/package-release.ps1 -Runtime win-arm64 -OutDir dist -Mcpb
           $store = ./scripts/store-package.ps1 -OutDir dist
           Copy-Item get.ps1 dist  # the installer too, for running it from a file (checked and attested like the packages)
           # The x64 package really installs and its engine answers (sandbox folder: nothing registered on the runner).
@@ -64,7 +65,7 @@ jobs:
           Get-ChildItem dist -File | ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } |
             Set-Content dist/SHA256SUMS.txt -Encoding utf8NoBOM
           Get-Content dist/SHA256SUMS.txt
-          "mcpb-sha256=$((Get-FileHash dist/nexus-browser.mcpb -Algorithm SHA256).Hash.ToLower())" >> $env:GITHUB_OUTPUT
+          "mcpb-sha256=$((Get-FileHash dist/nexus-browser-win-x64.mcpb -Algorithm SHA256).Hash.ToLower())" >> $env:GITHUB_OUTPUT
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         id: provenance
         with:
@@ -91,7 +92,7 @@ jobs:
           gh release create $env:TAG (Get-ChildItem dist -File).FullName --title "NexusBrowser $version" --notes-file notes.md --verify-tag --repo $env:GITHUB_REPOSITORY
 
   registry:
-    # server.json to the official MCP registry (namespace io.github.pironjulien), the mcpb package being the .mcpb just
+    # server.json to the official MCP registry (namespace io.github.pironjulien), the mcpb package being the x64 .mcpb just
     # attached (identifier: its release URL, fileSha256: its hash). mcp-publisher pinned by version and SHA-256.
     needs: release
     if: github.repository == 'pironjulien/NexusBrowser'
@@ -111,7 +112,7 @@ jobs:
           TAG: ${{ github.ref_name }}
           SHA: ${{ needs.release.outputs.mcpb-sha256 }}
         run: |
-          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/nexus-browser.mcpb"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/nexus-browser-win-x64.mcpb"
           jq --arg url "$url" --arg sha "$SHA" '.packages[0].identifier = $url | .packages[0].fileSha256 = $sha' server.json > server.release.json
           cat server.release.json
       - name: Install mcp-publisher (pinned, checksum verified)

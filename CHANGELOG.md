@@ -12,12 +12,13 @@ The native engine (`NexusBrowser.exe`, C# .NET 10) is now the only one: no Pytho
   `NexusBrowser-win-arm64.zip` (engine, extension, installer), with `SHA256SUMS.txt`, the Chrome Web Store package of
   the extension and a Sigstore build provenance (`gh attestation verify <file> --repo pironjulien/NexusBrowser`, or the
   attached `NexusBrowser-<version>.intoto.jsonl`). A `vX.Y.Z` tag builds and publishes them (`release.yml`).
-- `get.ps1` installs that package without Python or .NET: it picks the zip for the PC's architecture, checks it
+- `get.ps1` (attached to the release, run as a file, never piped into PowerShell) installs that package without Python or .NET: it picks the zip for the PC's architecture, checks it
   against `SHA256SUMS.txt` before unpacking, then runs `install.ps1 -Register`. Test variables: `NEXUS_BROWSER_SOURCE`
   (local zip or folder), `NEXUS_BROWSER_TAG`, `NEXUS_BROWSER_ROOT` (unpack into a test folder, nothing registered).
 - Public install without the Nexus supervisor: the shared MCP daemon (`127.0.0.1:16182`) runs as the task
-  "Nexus Browser MCP" (at logon), with the bearer token of the user variable `NEXUS_MCP_TOKEN` (created once, kept when
-  another Nexus product already set it).
+  "Nexus Browser MCP" (at logon). Its bearer token is the one shared by every Nexus daemon: the file
+  `NEXUS_MCP_TOKEN_FILE`, else `~\.nexus\mcp-token.txt`, reused when present and created exclusively otherwise, mirrored
+  in the user variable `NEXUS_MCP_TOKEN`.
 - Each engine build is installed once in `%LOCALAPPDATA%\NexusBrowser\versions\<fingerprint>` and never overwritten
   while it runs. On a Nexus workstation the daemon spec names it with the `exe` key and declares a `restart_request`:
   the running daemon restarts on the new build as soon as no tool call is running, instead of being stopped by the
@@ -29,8 +30,18 @@ The native engine (`NexusBrowser.exe`, C# .NET 10) is now the only one: no Pytho
   by the release workflow over GitHub OIDC.
 - CI: `Security` workflow with gitleaks (whole history) and zizmor on every push and pull request.
 
+### Fixed
+- A pause of more than 161.8 s expired the client's session in the shared HTTP daemon: its next call got 404, the
+  client reconnected with a new session, and the tabs it had just opened stayed refused ("driven by Claude in another
+  session") until the extension's silence delay. Daemon sessions now live 1618 s idle, and a session closed by its
+  client (DELETE) or expired releases its tabs at once: the daemon tells the bridge (`X-Nexus-Browser-Gone`), the
+  extension makes them orphans the same agent can adopt. The daemon logs each session opened, closed, expired or
+  unknown (404) on stderr, kept by the supervisor in `~\.nexus\daemons\nexus-browser.log`.
+- A refused tool argument (`timeout_ms` above the bridge limit) is refused before the page is read, so an accord is
+  never spent on a call that cannot run.
+- `get.ps1` leaves no download folder behind when a package is refused.
 ### Changed
-- `nexus-browser.mcpb` (Claude Desktop) carries the self-contained engine (server type `binary`) instead of installing
+- `nexus-browser-win-x64.mcpb` and `nexus-browser-win-arm64.mcpb` (Claude Desktop) carry the self-contained engine (server type `binary`) instead of installing
   the Python package with uv. The Gemini CLI extension uses the shared local daemon (`NEXUS_MCP_TOKEN`) instead of uvx.
 - Tests are C#: xUnit v3 (`dotnet test`, Microsoft Testing Platform, `global.json`) for the engine, the former
   self-test, client registration, scripts and repository checks; `node --test` for the extension. `test.ps1` runs

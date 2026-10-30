@@ -210,6 +210,7 @@ internal sealed class FakeBridge : IDisposable
     private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
     private readonly CancellationTokenSource _stop = new();
     private readonly List<JsonObject> _commands = [];
+    private readonly List<BridgeRequest> _requests = [];
     private readonly Func<string, JsonObject, JsonNode?> _answer;
     private readonly TempDir _dir = new();
     private int _unauthorized;
@@ -229,6 +230,22 @@ internal sealed class FakeBridge : IDisposable
 
     public List<JsonObject> Commands { get { lock (_commands) return _commands.Select(c => (JsonObject)c.DeepClone()).ToList(); } }
     public List<string> Actions => Commands.Select(c => (string)c["action"]!).ToList();
+
+    /// <summary>Every authenticated request, heartbeats included, with its headers (lower-case names).</summary>
+    public List<BridgeRequest> Requests { get { lock (_requests) return [.. _requests]; } }
+
+    /// <summary>Waits until a request matching the predicate has arrived (polling, 20 ms).</summary>
+    public async Task<BridgeRequest> WaitForAsync(Func<BridgeRequest, bool> match, TimeSpan timeout)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            var found = Requests.FirstOrDefault(match);
+            if (found is not null) return found;
+            if (clock.Elapsed > timeout) throw new TimeoutException($"no matching bridge request in {timeout.TotalSeconds} s; got: {string.Join(" | ", Requests.Select(r => r.ToString()))}");
+            await Task.Delay(20);
+        }
+    }
 
     private async Task AcceptLoopAsync()
     {
@@ -273,6 +290,7 @@ internal sealed class FakeBridge : IDisposable
             {
                 var request = (JsonObject)JsonNode.Parse(body)!;
                 string action = (string)request["action"]!;
+                lock (_requests) _requests.Add(new BridgeRequest(action, (JsonObject)request.DeepClone(), headers));
                 var parameters = request["params"] as JsonObject ?? new JsonObject();
                 if (action == "heartbeat")
                     response = new JsonObject { ["success"] = true, ["data"] = new JsonObject() };
@@ -305,6 +323,13 @@ internal sealed class FakeBridge : IDisposable
         _listener.Stop();
         _dir.Dispose();
     }
+}
+
+internal sealed record BridgeRequest(string Action, JsonObject Body, IReadOnlyDictionary<string, string> Headers)
+{
+    public string? Header(string name) => Headers.TryGetValue(name.ToLowerInvariant(), out var value) ? value : null;
+    public string[] Gone => Header(NexusBrowser.Native.BridgeSecurity.GoneHeader)?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+    public override string ToString() => $"{Action} client={Header(NexusBrowser.Native.BridgeSecurity.ClientHeader)} gone={Header(NexusBrowser.Native.BridgeSecurity.GoneHeader)}";
 }
 
 /// <summary>Simulated Chrome extension end of the authenticated WebSocket (nexus-browser/1).</summary>

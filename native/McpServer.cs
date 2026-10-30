@@ -110,25 +110,65 @@ public sealed partial class McpServer : IDisposable
 
     private static double HttpSessionIdleSeconds()
     {
-        const double maximum = 161.8; // The same idle lifetime as the Python MCP SDK configuration.
+        // An idle conversation keeps its session: at 161.8 s (the former Python SDK value) a pause of the user expired it,
+        // and the client's next call got 404, reconnected and lost its tabs to the old, still "alive" identity.
+        const double maximum = 1618;
         string? configured = Environment.GetEnvironmentVariable("NEXUS_BROWSER_SESSION_IDLE_SECONDS");
         if (string.IsNullOrEmpty(configured)) return maximum;
         if (!double.TryParse(configured, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds) || !double.IsFinite(seconds) || seconds <= 0 || seconds > maximum)
-            throw new ArgumentException("NEXUS_BROWSER_SESSION_IDLE_SECONDS must be positive and at most 161.8 seconds");
+            throw new ArgumentException("NEXUS_BROWSER_SESSION_IDLE_SECONDS must be positive and at most 1618 seconds");
         return seconds;
     }
 
-    private void CloseHttpSession(string sessionId, string agent)
+    private void CloseHttpSession(string sessionId, string agent, string why = "closed")
     {
+        string identity;
         lock (_httpSessionsLock)
         {
-            _sessionAgents.TryRemove(sessionId, out _);
+            if (!_sessionAgents.TryRemove(sessionId, out _)) return;
             _sessionLastSeen.TryRemove(sessionId, out _);
-            string identity = SessionIdentity(agent, sessionId).Id;
+            identity = SessionIdentity(agent, sessionId).Id;
             _sessionAccords.TryRemove(identity, out _);
             foreach (var request in _requests.Where(r => r.Key.Session == identity))
                 try { request.Value.Cancel(); } catch (ObjectDisposedException) { }
+            // Its tabs are released at once (orphans for the same agent), not after the extension's silence delay.
+            _goneSessions.GetOrAdd(agent, _ => new ConcurrentDictionary<string, double>(StringComparer.Ordinal))[identity] = EmergencyStop.NowMonotonic();
         }
+        DaemonLog($"session {Short(sessionId)} ({agent}) {why}");
+        _ = Task.Run(() => AnnounceGoneAsync(agent));
+    }
+
+    // agent -> closed session identities, reported to the bridge (X-Nexus-Browser-Gone) until the extension's own
+    // silence delay would have declared them dead anyway.
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, double>> _goneSessions = new(StringComparer.Ordinal);
+    private const double GoneReportSeconds = 1.618 * 60 * 2;
+
+    internal string? PendingGone(string agent, string callerId)
+    {
+        if (!_goneSessions.TryGetValue(agent, out var ids)) return null;
+        double cutoff = EmergencyStop.NowMonotonic() - GoneReportSeconds;
+        foreach (var old in ids.Where(p => p.Value < cutoff).Select(p => p.Key).ToList()) ids.TryRemove(old, out _);
+        var list = ids.Keys.Where(id => id != callerId).Take(32).ToList();
+        return list.Count > 0 ? string.Join(",", list) : null;
+    }
+
+    /// <summary>Tells the bridge now, through a live session of the same agent; without one, the next call of that
+    /// agent carries it.</summary>
+    private async Task AnnounceGoneAsync(string agent)
+    {
+        string? live;
+        lock (_httpSessionsLock) live = _sessionAgents.FirstOrDefault(p => p.Value == agent).Key;
+        if (live is null) return;
+        try { await CallBridgeRawAsync("heartbeat", new JsonObject { ["reclaim"] = false }, 5.0, SessionIdentity(agent, live), _processPid, CancellationToken.None, recover: false); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { DaemonLog($"gone sessions of {agent} not announced yet: {ex.Message}"); }
+    }
+
+    private static string Short(string sessionId) => sessionId.Length > 8 ? sessionId[..8] : sessionId;
+
+    /// <summary>One line on stderr: the supervisor writes it, timestamped, to ~\.nexus\daemons\nexus-browser.log.</summary>
+    private static void DaemonLog(string message)
+    {
+        try { Console.Error.WriteLine($"NexusBrowser: {message}"); } catch (IOException) { }
     }
 
     private void ExpireHttpSessions()
@@ -139,7 +179,7 @@ public sealed partial class McpServer : IDisposable
             foreach (var session in _sessionAgents)
                 if (_sessionLastSeen.TryGetValue(session.Key, out var seen) && seen < cutoff &&
                     !_requests.Keys.Any(r => r.Session == SessionIdentity(session.Value, session.Key).Id))
-                    CloseHttpSession(session.Key, session.Value);
+                    CloseHttpSession(session.Key, session.Value, $"expired after {_sessionIdleSeconds:0} s idle");
         }
     }
 
@@ -286,7 +326,10 @@ public sealed partial class McpServer : IDisposable
         string token = Environment.GetEnvironmentVariable("NEXUS_MCP_TOKEN") ?? "";
         if (string.IsNullOrEmpty(token))
         {
-            var tokenPath = Environment.GetEnvironmentVariable("NEXUS_MCP_TOKEN_FILE");
+            // The token shared by every Nexus daemon: NEXUS_MCP_TOKEN_FILE, else ~\.nexus\mcp-token.txt (common rule).
+            var tokenPath = Environment.GetEnvironmentVariable("NEXUS_MCP_TOKEN_FILE") is { Length: > 0 } configured
+                ? configured
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nexus", "mcp-token.txt");
             if (!string.IsNullOrWhiteSpace(tokenPath) && File.Exists(tokenPath))
                 token = File.ReadAllText(tokenPath, Encoding.UTF8).Trim();
         }
@@ -530,6 +573,7 @@ public sealed partial class McpServer : IDisposable
             }
             if (unknownSession)
             {
+                DaemonLog($"unknown session {Short(sessionId!)} ({agentDisplay}): 404, the client starts a new one");
                 await WriteHttpPlainAsync(stream, 404, "Unknown session for this agent");
                 return;
             }
@@ -538,7 +582,7 @@ public sealed partial class McpServer : IDisposable
             {
                 if (!string.IsNullOrEmpty(sessionId))
                 {
-                    CloseHttpSession(sessionId, agentDisplay);
+                    CloseHttpSession(sessionId, agentDisplay, "closed by the client (DELETE)");
                 }
                 await WriteHttpPlainAsync(stream, 200, "");
                 return;
@@ -587,6 +631,7 @@ public sealed partial class McpServer : IDisposable
                     _sessionAgents[activeSessionId] = agentDisplay;
                     _sessionLastSeen[activeSessionId] = EmergencyStop.NowMonotonic();
                 }
+                DaemonLog($"session {Short(activeSessionId)} ({agentDisplay}) opened");
             }
             else
             {
@@ -2284,6 +2329,7 @@ public sealed partial class McpServer : IDisposable
             request.Headers.TryAddWithoutValidation(BridgeSecurity.AgentHeader, identity.Agent);
             request.Headers.TryAddWithoutValidation(BridgeSecurity.ClientHeader, identity.Id);
             if (pid.HasValue) request.Headers.TryAddWithoutValidation(BridgeSecurity.PidHeader, pid.Value.ToString(CultureInfo.InvariantCulture));
+            if (PendingGone(identity.Agent, identity.Id) is { } goneIds) request.Headers.TryAddWithoutValidation(BridgeSecurity.GoneHeader, goneIds);
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeout + 2));
             HttpResponseMessage response;

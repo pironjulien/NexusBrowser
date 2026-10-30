@@ -28,7 +28,7 @@
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/pironjulien/NexusBrowser/releases/download/v2.33.0/nexus-browser.mcpb",
+      "identifier": "https://github.com/pironjulien/NexusBrowser/releases/download/v2.33.0/nexus-browser-win-x64.mcpb",
       "version": "2.33.0",
       "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "transport": {
