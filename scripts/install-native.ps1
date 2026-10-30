@@ -336,4 +336,6 @@ if ((Test-Path -LiteralPath $oldVenv) -and -not (Get-CimInstance Win32_Process |
     if (-not (Test-Path -LiteralPath $oldVenv)) { Write-Journal "Former Python environment removed: $oldVenv" }
 }
 if ($Register -and $pack) { Write-Host $registration.Output }  # the NEXUS_PACK_RESULT line stays the last
+elseif ($bridgeDeferred) { Write-Host "NexusBrowser $version prepared; the running bridge is kept until its next natural exit." }
 else { Write-Host "NexusBrowser $version installed." }
+exit 0  # a reported cooperative deferral is successful preparation, not the last probe's exit code

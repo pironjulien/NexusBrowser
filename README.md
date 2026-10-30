@@ -121,7 +121,7 @@ Windows 10 or 11 and Google Chrome. No admin rights, nothing else to install fir
 Run it again to update: the folder stays the same, so Chrome keeps the extension and reloads it. The new version
 is prepared beside the working one and checked first; a failed update restores the previous version. Chrome and
 the AI apps keep running. A bridge with running calls or agent-owned tabs keeps serving;
-the installer asks an idle bridge to exit cooperatively and never terminates it. Bridges older than 2.33.1 switch
+the installer asks an idle bridge to exit cooperatively and never terminates it. Bridges older than 2.33.2 switch
 on their next natural start because they do not implement this protocol.
 The bridge can also update a public install itself (the contract shared by the Nexus products): it writes
 `~\.nexus\status\browser.json` (`version`, `latest` read from the `releases/latest` redirect at most once a day,
