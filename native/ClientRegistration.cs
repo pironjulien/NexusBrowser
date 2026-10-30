@@ -228,45 +228,6 @@ public static partial class ClientRegistration
         return (kept.ToString(), ours.Length > 0 ? ours.ToString() : null);
     }
 
-    /// <summary>Structural TOML check, enough never to rewrite a file Codex could not read: each top-level line is blank,
-    /// a comment, a table header or "key = value"; strings (basic, literal, multi-line), arrays and inline tables close.
-    /// </summary>
-    public static bool TomlLooksValid(string text)
-    {
-        int depth = 0;
-        string? open = null; // the delimiter of the string being read
-        bool lineStart = true;
-        for (int i = 0; i < text.Length; i++)
-        {
-            char c = text[i];
-            if (open is not null)
-            {
-                if (open.Length == 1 && c == '\n') return false; // single-line string not closed
-                if (open == "\"" || open == "\"\"\"") { if (c == '\\') { i++; continue; } }
-                if (string.CompareOrdinal(text, i, open, 0, open.Length) == 0) { i += open.Length - 1; open = null; }
-                continue;
-            }
-            if (lineStart && depth == 0)
-            {
-                int end = text.IndexOf('\n', i); if (end < 0) end = text.Length;
-                string line = text[i..end].Trim();
-                if (line.Length > 0 && line[0] != '#' && !Regex.IsMatch(line, @"^\[.+\]\s*(#[^""']*)?$") &&
-                    !Regex.IsMatch(line, @"^(""[^""]*""|'[^']*'|[A-Za-z0-9_-]+)(\s*\.\s*(""[^""]*""|'[^']*'|[A-Za-z0-9_-]+))*\s*=\s*\S"))
-                    return false;
-                if (line.Length > 0 && line[0] == '[') { i = end - 1; lineStart = false; continue; }
-            }
-            lineStart = c == '\n';
-            switch (c)
-            {
-                case '#': { int end = text.IndexOf('\n', i); i = (end < 0 ? text.Length : end) - 1; break; }
-                case '"': open = string.CompareOrdinal(text, i, "\"\"\"", 0, 3) == 0 ? "\"\"\"" : "\""; i += open.Length - 1; break;
-                case '\'': open = string.CompareOrdinal(text, i, "'''", 0, 3) == 0 ? "'''" : "'"; i += open.Length - 1; break;
-                case '[': case '{': depth++; break;
-                case ']': case '}': if (--depth < 0) return false; break;
-            }
-        }
-        return open is null && depth == 0;
-    }
     public static string CodexBlock(string exe) =>
         $"[mcp_servers.{Name}]\ncommand = {TomlString(exe)}\nargs = [\"--mcp\"]\n\n[mcp_servers.{Name}.env]\nNEXUS_BROWSER_AGENT = \"Codex\"\n";
 
