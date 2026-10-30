@@ -3,6 +3,13 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Real HTTP regression coverage for MCP 2025-06-18 and 2025-11-25: expired session IDs remain HTTP 404, and
+  a new initialize without the old ID creates an isolated session. This confirms the required protocol behavior;
+  no server behavior or native version changes.
+
 ## [2.33.2] - 2026-10-30
 
 ### Fixed
