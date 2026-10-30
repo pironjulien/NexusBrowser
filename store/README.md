@@ -3,6 +3,14 @@
 Source text and assets for the Chrome Web Store dashboard. Use the verified release ZIP, check the resulting
 draft version after import, update the listing and submit the finished draft for review.
 
+## Submission status
+
+- 2026-10-30: version **2.33.4** submitted for Chrome Web Store review, with the Nexus medallion icon and updated
+  installation/privacy description. Google confirmed receipt. Automatic publication after approval is enabled;
+  submission does not mean the update has been approved or published.
+- Submitted ZIP: `nexus-browser-extension-2.33.4.zip`, SHA-256
+  `33bc8f50e4c260312690f107bbdd19c11c2643fa281afec3bd7bd497513c53d3` (official GitHub release asset).
+
 ## Package
 
 ```powershell
