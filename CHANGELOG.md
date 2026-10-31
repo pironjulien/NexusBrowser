@@ -14,9 +14,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   standard 404 and new initialize.
 - The engine binary carries the product version (read from `VERSION`) instead of 1.0.0.
 
-### Changed
-- CI restores the engine's packages in locked mode: the build fails if `packages.lock.json` is out of date.
-
 ## [2.33.12] - 2026-10-31
 
 ### Fixed
