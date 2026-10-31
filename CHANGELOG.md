@@ -3,6 +3,12 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Release: a push whose version is not released yet becomes the stable release right after its development build
+  (same files); "Run workflow" still promotes by hand. CodeQL and OpenSSF Scorecard workflows removed.
+
 ## [2.33.10] - 2026-10-31
 
 ### Changed

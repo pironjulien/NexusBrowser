@@ -6,7 +6,8 @@
 #   get.ps1 and SHA256SUMS.txt. product-dev-release attests them (Sigstore: `gh attestation verify <file> --repo
 #   pironjulien/NexusBrowser`, or offline with the attached NexusBrowser-X.Y.Z.intoto.jsonl and `--bundle`) and
 #   publishes the pre-release vX.Y.Z-dev.N (NexusSystem's development channel, through NEXUS_RELEASE_TAG).
-# - Stable: "Run workflow" (promote: a vX.Y.Z-dev.N, or empty for the newest) runs product-promote: the SAME files
+# - Stable: right after that build when its version is not released yet, or "Run workflow" (promote: a vX.Y.Z-dev.N,
+#   or empty for the newest), product-promote runs: the SAME files
 #   become the release "NexusBrowser X.Y.Z" with the CHANGELOG section, then server.json goes to the official MCP
 #   registry (mcpb package: the attached nexus-browser-win-x64.mcpb, its SHA-256), GitHub OIDC, no token.
 #   registry: only re-send a stable release's server.json. get.ps1 installs from releases/latest.
@@ -105,20 +106,22 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    uses: pironjulien/NexusSystem/.github/workflows/product-dev-release.yml@a409925bafd1184acc207dd90ca4a43ba987d0e3  # v1.6.39
+    uses: pironjulien/NexusSystem/.github/workflows/product-dev-release.yml@9cf03f2ac93e207307351b393130ff1cfe2aef7b  # v1.6.40
     with:
       product: NexusBrowser
       version: ${{ needs.build.outputs.version }}
 
   promote:
-    if: github.event_name == 'workflow_dispatch'
+    # Right after the push that built a new version (same files), or by hand ("Run workflow").
+    needs: dev
+    if: always() && (needs.dev.result == 'success' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: write
       id-token: write
-    uses: pironjulien/NexusSystem/.github/workflows/product-promote.yml@a409925bafd1184acc207dd90ca4a43ba987d0e3  # v1.6.39
+    uses: pironjulien/NexusSystem/.github/workflows/product-promote.yml@9cf03f2ac93e207307351b393130ff1cfe2aef7b  # v1.6.40
     with:
       product: NexusBrowser
-      promote: ${{ inputs.promote }}
+      promote: ${{ inputs.promote || needs.dev.outputs.tag }}
       registry-only: ${{ inputs.registry }}
       mcp-package: nexus-browser-win-x64.mcpb
 
@@ -127,7 +130,7 @@ jobs:
     # account is declared in the developer dashboard (Settings > Service account). Google's review then decides when
     # users get the new version.
     needs: promote
-    if: needs.promote.result == 'success' && needs.promote.outputs.tag != ''
+    if: always() && needs.promote.result == 'success' && needs.promote.outputs.tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: read
