@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.33.12] - 2026-10-31
+
+### Fixed
+- Shared daemon upgrades no longer wait forever: with Antigravity, Claude and Codex all connected, some HTTP session
+  was always valid, so a prepared build never started (2.33.5 still served after 2.33.11 was installed). Idle sessions
+  are now waited for during a 161.8 s grace period only; after it, the daemon stops as soon as no call or response is
+  in flight. An idle client's next call gets 404 and initializes again, as MCP Streamable HTTP requires.
+
 ### Security
 - CodeQL (GitHub default setup) and the OpenSSF Scorecard workflow run again on every push to main.
 

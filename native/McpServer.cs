@@ -107,6 +107,7 @@ public sealed partial class McpServer : IDisposable
     // Test seam at the actual transport boundary, after RPC completion and before any reply bytes are sent.
     internal Func<Task>? BeforeHttpReplyAsync { get; set; }
     internal double RestartPollSeconds { get; init; } = 2;
+    internal double RestartGraceSeconds { get; init; } = 161.8;
     internal int ActiveHttpTransports { get { lock (_httpSessionsLock) return _httpClients; } }
     private readonly double _sessionIdleSeconds = HttpSessionIdleSeconds();
     private readonly ConcurrentDictionary<string, string> _statelessSessions = new(StringComparer.Ordinal);
@@ -402,23 +403,34 @@ public sealed partial class McpServer : IDisposable
     internal int RunningCalls => _requests.Count;
 
     /// <summary>Wait for every valid HTTP session and admitted response, including idle conversations with no tabs.
-    /// Admission and draining are atomic; the supervisor can then start the new build without breaking a client SID.</summary>
+    /// Admission and draining are atomic; the supervisor can then start the new build without breaking a client SID.
+    /// Three agents keep sessions open all day, so idle sessions are only waited for during a grace period: after it,
+    /// the daemon stops as soon as no call or response is in flight; an idle client's next call gets 404, initializes
+    /// again (MCP Streamable HTTP) and its tabs are taken back as orphans.</summary>
     internal async Task WatchRestartRequestAsync(string requestPath, CancellationTokenSource stop, CancellationToken ct, double pollSeconds = 2)
     {
         string loaded = RestartRequest.CodeFingerprint();
         bool wanted = false;
+        double wantedSince = 0;
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                wanted |= RestartRequest.Wanted(requestPath, loaded, _httpInstanceId);
+                if (!wanted && RestartRequest.Wanted(requestPath, loaded, _httpInstanceId))
+                {
+                    wanted = true;
+                    wantedSince = EmergencyStop.NowMonotonic();
+                }
                 lock (_httpSessionsLock)
                 {
                     ExpireHttpSessions();
-                    if (wanted && _sessionAgents.IsEmpty && _requests.IsEmpty && _httpClients == 0)
+                    bool graceOver = wanted && EmergencyStop.NowMonotonic() - wantedSince >= RestartGraceSeconds;
+                    if (wanted && (_sessionAgents.IsEmpty || graceOver) && _requests.IsEmpty && _httpClients == 0)
                     {
                         _httpDraining = true;
-                        Console.Error.WriteLine("NexusBrowser: restart requested; no valid HTTP session, call or response remains, stopping for the new build.");
+                        Console.Error.WriteLine(_sessionAgents.IsEmpty
+                            ? "NexusBrowser: restart requested; no valid HTTP session, call or response remains, stopping for the new build."
+                            : $"NexusBrowser: restart requested {RestartGraceSeconds:0} s ago; no call or response in flight, stopping for the new build ({_sessionAgents.Count} idle session(s) will initialize again).");
                         stop.Cancel();
                         return;
                     }

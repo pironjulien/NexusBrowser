@@ -184,6 +184,28 @@ public sealed class HttpRestartRaceTests : IDisposable
     }
 
     [Fact]
+    public async Task AnIdleSessionDelaysRestartOnlyForTheGracePeriod()
+    {
+        using var bridge = new FakeBridge((_, _) => new JsonArray());
+        using var env = new EnvScope(("NEXUS_MCP_TOKEN", new string('r', 64)), ("NEXUS_BROWSER_RESTART_REQUEST", _dir["restart.request"]));
+        using var server = new McpServer("Codex", bridge.Port, bridge.TokenFile) { RestartPollSeconds = 0.02, RestartGraceSeconds = 0.5 };
+        using var stop = new CancellationTokenSource();
+        int port = Ports.Free(); string url = $"http://127.0.0.1:{port}";
+        var running = server.RunHttpAsync(port, stop.Token);
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            using var open = Rpc(url, "initialize"); using var opened = await http.SendAsync(open, TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.OK, opened.StatusCode);
+            File.WriteAllText(_dir["restart.request"], "force");
+            await Task.Delay(200, TestContext.Current.CancellationToken); // the idle session is still waited for
+            Assert.False(running.IsCompleted);
+            await running.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        }
+        finally { stop.Cancel(); await running; }
+    }
+
+    [Fact]
     public async Task InitializeAlreadyAdmittedButStillReadingItsBodyWinsAgainstDrainAndKeepsItsSid()
     {
         using var bridge = new FakeBridge((_, _) => new JsonArray());
