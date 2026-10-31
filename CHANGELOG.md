@@ -3,6 +3,13 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.33.8] - 2026-10-31
+
+### Changed
+- The guide says what to do on pages Chrome protects from every extension (Chrome Web Store, `chrome://`): opening
+  them in the agent's tab still works; reading or acting on them goes through NexusWindows when it is installed, with
+  the user's agreement for the brief foreground input it needs.
+
 ## [2.33.7] - 2026-10-31
 
 ### Changed

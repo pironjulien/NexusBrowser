@@ -1,6 +1,6 @@
 {
   "name": "nexus-browser",
-  "version": "2.33.7",
+  "version": "2.33.8",
   "description": "Your real Chrome, with your sessions, driven in background tabs: forms, network, dialogs, cross-origin iframes, exports, downloads. Needs the one-time NexusBrowser install (Windows: get.ps1, Chrome extension, local bridge and shared daemon, token in NEXUS_MCP_TOKEN).",
   "mcpServers": {
     "nexus-browser": {
