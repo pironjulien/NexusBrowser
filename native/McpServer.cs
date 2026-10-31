@@ -1020,7 +1020,8 @@ public sealed partial class McpServer : IDisposable
                     new JsonObject
                     {
                         ["type"] = "text",
-                        ["text"] = errPayload.ToJsonString(CompactJson),
+                        // A failure raised before the call (outward-gesture check) says its outcome too.
+                        ["text"] = WithOutcome(errPayload.ToJsonString(CompactJson), IsIdempotentTool(name)),
                     },
                 },
                 ["isError"] = true,
@@ -2228,7 +2229,7 @@ public sealed partial class McpServer : IDisposable
             double stepStarted = EmergencyStop.NowMonotonic();
             string stepRaw;
             try { stepRaw = await ExecuteToolAsync(toolName, stepArgs, identity, pid, appel, ct); }
-            catch (Exception ex) when (ex is not OperationCanceledException) { stepRaw = ErrorJson(ex.Message); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { stepRaw = WithOutcome(ErrorJson(ex.Message), IsIdempotentTool(toolName)); }
             var stepParsed = JsonNode.Parse(stepRaw) as JsonObject ?? new JsonObject { ["status"] = "error", ["error"] = "unreadable step answer" };
             WriteJournalLine(toolName, stepArgs, stepParsed, failed: false, stepStarted, appel, identity);
 

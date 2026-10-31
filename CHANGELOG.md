@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.33.16] - 2026-10-31
+
+### Fixed
+- A gesture refused by its outward-action check (target not found: "Nothing was done") now also says `outcome`
+  `not_done` and `retry_safe`, like every other failure; so does a batch step that fails the same way.
+
 ## [2.33.15] - 2026-10-31
 
 ### Fixed

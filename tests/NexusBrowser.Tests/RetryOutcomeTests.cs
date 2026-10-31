@@ -77,6 +77,8 @@ public sealed class RetryOutcomeTests
         {
             "navigate" => throw new InvalidOperationException("Command 'navigate' timed out after 20s."),
             "axtree" => new JsonObject { ["echo"] = p.DeepClone() },
+            "cdp-send" => new JsonObject { ["result"] = new JsonObject { ["value"] = new JsonObject
+                { ["notFound"] = true, ["reason"] = "No element matches the locator" } } },
             _ => new JsonObject(),
         });
         using var server = new McpServer("Codex", bridge.Port, bridge.TokenFile);
@@ -95,6 +97,14 @@ public sealed class RetryOutcomeTests
         Assert.False((bool)navigate["retry_safe"]!);
         var invalid = await Call("browser_navigate", new JsonObject { ["tab_id"] = "three", ["url"] = "https://example.com/" });
         Assert.Equal("not_done", (string?)invalid["outcome"]);
+        // A click whose target is missing fails in the outward-gesture check, before the bridge call: same outcome.
+        var missing = await Call("browser_click", new JsonObject
+        {
+            ["tab_id"] = 3, ["locator"] = new JsonObject { ["role"] = "button", ["name"] = "Absent" }, ["timeout_ms"] = 100,
+        });
+        Assert.Equal("error", (string?)missing["status"]);
+        Assert.Equal("not_done", (string?)missing["outcome"]);
+        Assert.True((bool)missing["retry_safe"]!);
         var snapshot = await Call("browser_axtree", new JsonObject
         {
             ["tab_id"] = 3, ["mode"] = "snapshot", ["selector"] = "form#checkout", ["changes_only"] = true,
