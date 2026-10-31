@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.33.18] - 2026-10-31
+
+### Fixed
+- Antigravity's plugin manifest and guide now follow every engine install. `install.ps1` without `-Register` (an
+  update or a development checkout) skipped the AI clients, so the plugin stayed one version behind the engine. Every
+  install now refreshes what is already installed (`--update-only`): Antigravity's manifest and guide, exact stdio
+  routes; transports, custom routes and disabled choices are kept.
+
 ## [2.33.17] - 2026-10-31
 
 ### Fixed

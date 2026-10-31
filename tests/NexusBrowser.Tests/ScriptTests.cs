@@ -177,6 +177,20 @@ public sealed class ScriptTests : IDisposable
         Assert.NotEqual(hashes[0], hashes[2]);
     }
 
+    [Fact]
+    public void EveryInstallRefreshesTheExistingClientsOfTheNewEngine()
+    {
+        // A development install (install.ps1 without -Register) must not leave Antigravity's plugin manifest and guide,
+        // or an exact stdio route, one version behind: it refreshes what is already installed, nothing more.
+        string install = File.ReadAllText(Repo.File("scripts", "install-native.ps1"));
+        Assert.Contains("if (-not $Register) { $registrationArgs += '--update-only' }", install);
+        Assert.DoesNotContain("if ($Register -or $UpdateOnly) {\n    $registrationArgs", install.Replace("\r\n", "\n"));
+        int section = install.IndexOf("# --- 8.", StringComparison.Ordinal);
+        int call = install.IndexOf("Invoke-Native $controlExe $registrationArgs", StringComparison.Ordinal);
+        Assert.True(section > 0 && call > section, $"section={section} call={call}");
+        Assert.DoesNotMatch(@"\n\s*if \([^)]*\$Register[^)]*\) \{\s*\n\s*\$registrationArgs", install[section..call].Replace("\r\n", "\n"));
+    }
+
     // ---------------------------------------------------------------------------------------------
     // get.ps1: latest tag without the API, SHA256SUMS.txt checked before unpacking, architecture
     // ---------------------------------------------------------------------------------------------

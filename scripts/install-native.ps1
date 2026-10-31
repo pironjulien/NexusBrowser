@@ -278,14 +278,14 @@ if ($Register -and -not $UpdateOnly -and $supervised -and $token -and (Test-Path
     Write-Host 'Antigravity: nexus-browser declared (plugin only).'
 }
 
-# --- 8. Public install: the AI clients found get the server (stdio, this engine).
-if ($Register -or $UpdateOnly) {
-    $registrationArgs = @('--register', '--engine-exe', $exe, '--source-root', $sourceRoot, '--backups', (Join-Path $localRoot 'backups'))
-    if ($UpdateOnly) { $registrationArgs += '--update-only' }
-    $registration = Invoke-Native $controlExe $registrationArgs 120
-    if (-not $pack) { Write-Host $registration.Output }
-    if ($registration.Code) { throw 'Declaring the server to the AI clients failed (see above).' }
-}
+# --- 8. AI clients. Public install: the clients found get the server (stdio, this engine). Every other install
+#        (update, development checkout): only what is already installed follows this engine, Antigravity's plugin
+#        manifest and guide included; transports, custom routes and disabled choices are kept.
+$registrationArgs = @('--register', '--engine-exe', $exe, '--source-root', $sourceRoot, '--backups', (Join-Path $localRoot 'backups'))
+if (-not $Register) { $registrationArgs += '--update-only' }
+$registration = Invoke-Native $controlExe $registrationArgs 120
+if (-not $pack) { Write-Host $registration.Output }
+if ($registration.Code) { throw 'Declaring the server to the AI clients failed (see above).' }
 
 if (-not $SkipTests -and -not $UpdateOnly) {
     & (Join-Path $controllerRoot 'test.ps1')
