@@ -6,12 +6,12 @@
 #   get.ps1 and SHA256SUMS.txt. product-dev-release attests them (Sigstore: `gh attestation verify <file> --repo
 #   pironjulien/NexusBrowser`, or offline with the attached NexusBrowser-X.Y.Z.intoto.jsonl and `--bundle`) and
 #   publishes the pre-release vX.Y.Z-dev.N (NexusSystem's development channel, through NEXUS_RELEASE_TAG).
-# - Stable: "Run workflow" (promote: a vX.Y.Z-dev.N, or empty for the newest) runs product-promote: the SAME files
+# - Stable: right after that build when its version is not released yet, or "Run workflow" (promote: a vX.Y.Z-dev.N,
+#   or empty for the newest), product-promote runs: the SAME files
 #   become the release "NexusBrowser X.Y.Z" with the CHANGELOG section, then server.json goes to the official MCP
 #   registry (mcpb package: the attached nexus-browser-win-x64.mcpb, its SHA-256), GitHub OIDC, no token.
 #   registry: only re-send a stable release's server.json. get.ps1 installs from releases/latest.
-# The stable release's extension zip then goes to the Chrome Web Store (upload and submission for review) as the
-# cws-publisher service account, by GitHub OIDC and workload identity federation: no key or secret is stored.
+# The Chrome Web Store is not sent from here: scripts/publish-store.ps1 sends a stable release's extension on request.
 # Actions and shared workflows pinned by commit SHA; Dependabot (github-actions) keeps them up to date.
 name: Release
 
@@ -105,69 +105,22 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    uses: pironjulien/NexusSystem/.github/workflows/product-dev-release.yml@a409925bafd1184acc207dd90ca4a43ba987d0e3  # v1.6.39
+    uses: pironjulien/NexusSystem/.github/workflows/product-dev-release.yml@9cf03f2ac93e207307351b393130ff1cfe2aef7b  # v1.6.40
     with:
       product: NexusBrowser
       version: ${{ needs.build.outputs.version }}
 
   promote:
-    if: github.event_name == 'workflow_dispatch'
+    # Right after the push that built a new version (same files), or by hand ("Run workflow").
+    needs: dev
+    if: always() && (needs.dev.result == 'success' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: write
       id-token: write
-    uses: pironjulien/NexusSystem/.github/workflows/product-promote.yml@a409925bafd1184acc207dd90ca4a43ba987d0e3  # v1.6.39
+    uses: pironjulien/NexusSystem/.github/workflows/product-promote.yml@9cf03f2ac93e207307351b393130ff1cfe2aef7b  # v1.6.40
     with:
       product: NexusBrowser
-      promote: ${{ inputs.promote }}
+      promote: ${{ inputs.promote || needs.dev.outputs.tag }}
       registry-only: ${{ inputs.registry }}
       mcp-package: nexus-browser-win-x64.mcpb
 
-  chrome-web-store:
-    # Google accepts this token only from this workflow on main (workload identity provider condition); the service
-    # account is declared in the developer dashboard (Settings > Service account). Google's review then decides when
-    # users get the new version.
-    needs: promote
-    if: needs.promote.result == 'success' && needs.promote.outputs.tag != ''
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
-        id: google
-        with:
-          workload_identity_provider: projects/231466153916/locations/global/workloadIdentityPools/github/providers/nexusbrowser
-          service_account: cws-publisher@antigravity-493509.iam.gserviceaccount.com
-          token_format: access_token
-          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
-      - name: Upload the extension and submit it for review
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.promote.outputs.tag }}
-          TOKEN: ${{ steps.google.outputs.access_token }}
-          ITEM: fjapmaccbgdfneoccclmlpgknbbfkaco
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          gh release download "$TAG" --repo "$REPOSITORY" --pattern 'nexus-browser-extension-*.zip' --dir cws
-          zips=(cws/*.zip)
-          [[ ${#zips[@]} -eq 1 ]] || { echo "Expected one extension zip in $TAG"; exit 1; }
-          upload=$(curl -sS -X PUT -H "Authorization: Bearer $TOKEN" -H "x-goog-api-version: 2" -T "${zips[0]}"             "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$ITEM")
-          echo "$upload"
-          state=$(jq -r '.uploadState // "FAILURE"' <<<"$upload")
-          if [[ "$state" != SUCCESS && "$state" != IN_PROGRESS ]]; then
-            # The same extension version is already in the store (only the engine changed), or Google is still
-            # reviewing an earlier submission: nothing to submit now; the next stable release submits again.
-            if jq -e '[.itemError[]?.error_detail // ""] | any(test("version"; "i"))' <<<"$upload" >/dev/null; then
-              echo "::notice::The Chrome Web Store already has this extension version; nothing submitted."
-              exit 0
-            fi
-            if jq -e '[.itemError[]?.error_detail // ""] | any(test("pending review|ready to publish"; "i"))' <<<"$upload" >/dev/null; then
-              echo "::warning::The Chrome Web Store is still reviewing an earlier submission; this version was not submitted."
-              exit 0
-            fi
-            exit 1
-          fi
-          publish=$(curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "x-goog-api-version: 2" -H "Content-Length: 0"             "https://www.googleapis.com/chromewebstore/v1.1/items/$ITEM/publish")
-          echo "$publish"
-          jq -e '.status | map(test("OK|PENDING_REVIEW")) | any' <<<"$publish" >/dev/null
