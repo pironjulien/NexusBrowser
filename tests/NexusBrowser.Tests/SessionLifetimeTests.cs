@@ -131,15 +131,15 @@ public sealed class SessionLifetimeTests : IDisposable
     {
         using var bridge = new FakeBridge((_, _) => new JsonArray());
         using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "1");
-        string session = await daemon.OpenSessionAsync("claude");
-        await daemon.WaitForStderrAsync($"NexusBrowser: session {session[..8]} (Claude) opened", TimeSpan.FromSeconds(3));
-        Assert.Equal(HttpStatusCode.OK, await daemon.ListToolsAsync("claude", session));
+        string session = await daemon.OpenSessionAsync("codex");
+        await daemon.WaitForStderrAsync($"NexusBrowser: session {session[..8]} (Codex) opened", TimeSpan.FromSeconds(3));
+        Assert.Equal(HttpStatusCode.OK, await daemon.ListToolsAsync("codex", session));
 
         // The daemon's 1 s tick expires it once idle for more than the configured second.
-        await daemon.WaitForStderrAsync($"NexusBrowser: session {session[..8]} (Claude) expired after 1 s idle", TimeSpan.FromSeconds(5));
-        await bridge.WaitForAsync(r => r.Gone.Contains(Identity("Claude", session)), TimeSpan.FromSeconds(3));
-        Assert.Equal(HttpStatusCode.NotFound, await daemon.ListToolsAsync("claude", session));
-        await daemon.WaitForStderrAsync($"NexusBrowser: unknown session {session[..8]} (Claude): 404, the client starts a new one", TimeSpan.FromSeconds(3));
+        await daemon.WaitForStderrAsync($"NexusBrowser: session {session[..8]} (Codex) expired after 1 s idle", TimeSpan.FromSeconds(5));
+        await bridge.WaitForAsync(r => r.Gone.Contains(Identity("Codex", session)), TimeSpan.FromSeconds(3));
+        Assert.Equal(HttpStatusCode.NotFound, await daemon.ListToolsAsync("codex", session));
+        await daemon.WaitForStderrAsync($"NexusBrowser: unknown session {session[..8]} (Codex): 404, the client starts a new one", TimeSpan.FromSeconds(3));
     }
 
     [Fact]

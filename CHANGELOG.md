@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.33.17] - 2026-10-31
+
+### Fixed
+- Claude Code keeps its tabs after a daemon restart or a long pause. On a 404 it initialized again once per call in
+  flight, so parallel calls left several live sessions and a tab it had just opened was refused as "driven by Claude
+  in another session". Its own stale session id is now opened again, as for Antigravity. A session id its client
+  closed (DELETE) is never resumed; Codex keeps the standard 404 and new initialize.
+
 ## [2.33.16] - 2026-10-31
 
 ### Fixed

@@ -101,6 +101,8 @@ public sealed partial class McpServer : IDisposable
     private readonly ConcurrentDictionary<(string Session, int TabId), string> _tabDomains = new();
     private readonly ConcurrentDictionary<string, string> _sessionAgents = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, double> _sessionLastSeen = new(StringComparer.Ordinal);
+    // Session ids their client closed (DELETE): never resumed; forgotten after the idle lease.
+    private readonly ConcurrentDictionary<string, double> _closedByClient = new(StringComparer.Ordinal);
     private readonly object _httpSessionsLock = new();
     private readonly string _httpInstanceId = Guid.NewGuid().ToString("N");
     private int _httpClients;
@@ -175,7 +177,10 @@ public sealed partial class McpServer : IDisposable
 
     private static string Short(string sessionId) => sessionId.Length > 8 ? sessionId[..8] : sessionId;
 
-    internal static bool ResumesStaleSessions(string agent) => agent == "Antigravity";
+    /// <summary>Clients whose stale session id is opened again instead of a 404. Antigravity never initializes again
+    /// after a 404; Claude Code does, but once per call in flight, so parallel calls left several live sessions and the
+    /// conversation lost its own tabs to a sibling session ("driven by Claude in another session").</summary>
+    internal static bool ResumesStaleSessions(string agent) => agent is "Antigravity" or "Claude";
 
     /// <summary>The daemon's own session id format (Guid "N"): only such ids are opened again.</summary>
     private static bool IsSessionId(string sessionId) => sessionId.Length == 32 && sessionId.All(char.IsAsciiHexDigitLower);
@@ -627,9 +632,9 @@ public sealed partial class McpServer : IDisposable
                 if (!string.IsNullOrEmpty(sessionId))
                 {
                     unknownSession = !_sessionAgents.TryGetValue(sessionId, out var owner) || owner != agentDisplay;
-                    // Antigravity's MCP client never initializes again after a 404 ("session not found" until the app
-                    // restarts), so its own expired or pre-restart session id is opened again instead.
-                    if (unknownSession && owner is null && method == "POST" && ResumesStaleSessions(agentDisplay) && IsSessionId(sessionId))
+                    // Its own expired or pre-restart session id is opened again instead of a 404 (ResumesStaleSessions).
+                    if (unknownSession && owner is null && method == "POST" && ResumesStaleSessions(agentDisplay) && IsSessionId(sessionId) &&
+                        !_closedByClient.ContainsKey(sessionId))
                     {
                         _sessionAgents[sessionId] = agentDisplay;
                         if (_goneSessions.TryGetValue(agentDisplay, out var gone)) gone.TryRemove(SessionIdentity(agentDisplay, sessionId).Id, out _);
@@ -639,7 +644,7 @@ public sealed partial class McpServer : IDisposable
                     if (!unknownSession) _sessionLastSeen[sessionId] = EmergencyStop.NowMonotonic();
                 }
             }
-            if (resumed) DaemonLog($"session {Short(sessionId!)} ({agentDisplay}) resumed: its client never initializes again after a 404");
+            if (resumed) DaemonLog($"session {Short(sessionId!)} ({agentDisplay}) resumed instead of a 404");
             if (unknownSession)
             {
                 DaemonLog($"unknown session {Short(sessionId!)} ({agentDisplay}): 404, the client starts a new one");
@@ -651,6 +656,9 @@ public sealed partial class McpServer : IDisposable
             {
                 if (!string.IsNullOrEmpty(sessionId))
                 {
+                    double now = EmergencyStop.NowMonotonic();
+                    foreach (var old in _closedByClient.Where(p => now - p.Value > _sessionIdleSeconds).Select(p => p.Key).ToList()) _closedByClient.TryRemove(old, out _);
+                    _closedByClient[sessionId] = now;
                     CloseHttpSession(sessionId, agentDisplay, "closed by the client (DELETE)");
                 }
                 await WriteHttpPlainAsync(stream, 200, "");
