@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "nexus-browser",
   "display_name": "NexusBrowser",
-  "version": "2.33.13",
+  "version": "2.33.14",
   "description": "Your real Chrome, driven by Claude in background tabs: navigation, forms, captures, exports, downloads.",
   "long_description": "Lets Claude drive your real Chrome (your sessions) in background tabs, without taking your mouse or keyboard: open pages, read and export them (Google Docs, Sheets, Slides, YouTube transcripts), fill forms, click, capture, follow the network, download files. Tabs are grouped per agent; your own tabs are never touched unless you ask. Sending, paying, publishing and other outward gestures need your explicit yes. Needs the NexusBrowser Chrome extension and its local bridge, installed once on Windows with the NexusSystem app from the Microsoft Store, or with get.ps1 from the latest release (checked, then run as a file); the tools explain each step until then.",
   "author": {

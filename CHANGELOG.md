@@ -5,6 +5,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.33.14] - 2026-10-31
+
+### Added
+- Snapshot marks are stable: a control keeps its `[#N]` from one `browser_axtree(mode="snapshot")` to the next of
+  the same page. `changes_only=True` returns only the added and removed lines (`changes`: none, diff or full) and
+  `selector` snapshots one part of the page (CSS selector, main frame).
+- A mark whose element the page re-rendered is retargeted to the only element with the same role and name, said in
+  the answer (`recovered_mark`); none or several: an error naming them, nothing sent, accord kept.
+- Every failed call says whether resending it is safe: `retry_safe`, and for a tool that changes the page `outcome`
+  `not_done` (nothing reached the page), `unknown` (it may have acted: check the page first) or `partial` (a batch
+  stopped after earlier steps ran). Ideas from vercel-labs/agent-browser.
+
 ## [2.33.13] - 2026-10-31
 
 ### Fixed

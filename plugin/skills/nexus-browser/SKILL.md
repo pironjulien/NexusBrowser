@@ -28,7 +28,14 @@ Do not create a question card just to report progress.
 - `browser_interactive_map(tab_id)`: visible interactive elements with `mark` numbers (far fewer tokens than HTML).
 - `browser_axtree(tab_id, mode="snapshot")`: the whole page as compact lines (`- button "Send" [#4]`), like
   Playwright MCP's snapshot; each `[#N]` is a mark for `browser_click(mark=N)`, `browser_fill(mark=N)`... Lighter
-  than the map for forms, heavier for a long page.
+  than the map for forms, heavier for a long page. Numbers stay the same from one snapshot to the next of the same
+  page: after an action, `changes_only=True` returns only the added and removed lines (or `changes="none"`), and
+  `selector="form#checkout"` reads one part of the page.
+- A mark whose element the page re-rendered is retargeted to the only element with the same role and name
+  (`recovered_mark` in the answer); otherwise the gesture fails with nothing sent.
+- A failed call carries `retry_safe`: `outcome="not_done"` means nothing reached the page (fix and resend);
+  `outcome="unknown"` means it may have acted (check the page before resending); `"partial"`: a batch stopped after
+  earlier steps ran.
 - `browser_export(tab_id)`: main content as Markdown. Avoid `browser_content(mode="html")` and the raw
   `browser_axtree` (default `mode="full"`) on heavy pages.
 - Chrome Web Store and `chrome://` pages are protected by Chrome: no extension can read them (`protected_page`).

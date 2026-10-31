@@ -769,6 +769,7 @@ if (chrome.tabs?.onRemoved?.addListener) {
         pendingDialogs.delete(tabId);
         attachedDebuggers.delete(tabId);
         tabConsoleLogs.delete(tabId);
+        snapshotStates.delete(tabId);
         tabInFlightRequests.delete(tabId);
         tabNetwork.delete(tabId);
         lastActionAt.delete(tabId);
@@ -1413,6 +1414,8 @@ function agyMouseKit(spec, textKit, locatorKit) {
     const lk = locatorKit || win0.__nexusBrowserLocatorKit || null;
     // Échec détaillé du dernier locate() (localisateur ambigu, aucun élément...).
     let locateFailure = null;
+    // Mark périmée retrouvée par son rôle et son nom (dit dans la réponse du geste).
+    let recoveredMark = null;
     let store = win0.__nexusBrowserMouse;
     if (!store || !store.probes || typeof store.probes.get !== "function") {
         store = { probes: new Map(), seq: 0 };
@@ -1492,6 +1495,31 @@ function agyMouseKit(spec, textKit, locatorKit) {
         if (!lk) throw new Error("Locator engine unavailable in this context");
         return lk.query(doc0, loc.locator, loc.axToken ? axPool(loc.axToken) : null);
     }
+    // Élément d'une mark remplacé par la page (rendu React, Vue...) : l'unique élément qui porte encore le rôle et le
+    // nom relevés à la pose de la mark le remplace ; aucun ou plusieurs : échec sans geste.
+    function recoverMark(mark) {
+        const meta = win0.__nexus_som_meta;
+        const m = meta && typeof meta.get === "function" ? meta.get(mark) : null;
+        const stale = "Mark #" + mark + " is stale: the page replaced its element";
+        const again = ": run browser_interactive_map or browser_axtree again.";
+        if (!lk || !m || !m.role || !m.name) {
+            locateFailure = { notFound: true, stale: true, error: stale + again };
+            return null;
+        }
+        let list = [];
+        try { list = lk.query(doc0, { role: m.role, name: m.name, exact: true }).matches; } catch (_) {}
+        if (list.length !== 1) {
+            const what = m.role + " " + JSON.stringify(m.name);
+            locateFailure = {
+                notFound: true, stale: true,
+                error: stale + (list.length ? " and " + list.length + " elements are now " + what : " and no " + what + " is left") + again
+            };
+            return null;
+        }
+        win0.__nexus_som_elements.set(mark, list[0].el);
+        recoveredMark = { mark, role: m.role, name: m.name };
+        return list[0].el;
+    }
     function locate(loc) {
         if (!loc) return null;
         locateFailure = null;
@@ -1536,12 +1564,14 @@ function agyMouseKit(spec, textKit, locatorKit) {
         }
         const som = win0.__nexus_som_elements;
         if (loc.mark !== undefined && loc.mark !== null) {
-            return som && typeof som.get === "function" ? (som.get(Number(loc.mark)) || null) : null;
+            const el = som && typeof som.get === "function" ? (som.get(Number(loc.mark)) || null) : null;
+            return el && el.isConnected === false ? recoverMark(Number(loc.mark)) : el;
         }
         if (loc.selector) {
             const sel = String(loc.selector);
             if (/^#[0-9]+$/.test(sel) && som && typeof som.has === "function" && som.has(Number(sel.slice(1)))) {
-                return som.get(Number(sel.slice(1)));
+                const el = som.get(Number(sel.slice(1)));
+                return el && el.isConnected === false ? recoverMark(Number(sel.slice(1))) : el;
             }
             return findDeep(doc0, sel, loc.index || 0);
         }
@@ -1931,7 +1961,8 @@ function agyMouseKit(spec, textKit, locatorKit) {
             hit: describe(chosen.hit),
             frameDepth: chosen.depth,
             draggable: !!(el.draggable === true || (typeof el.getAttribute === "function" && el.getAttribute("draggable") === "true")),
-            devicePixelRatio: win0.devicePixelRatio || 1
+            devicePixelRatio: win0.devicePixelRatio || 1,
+            recoveredMark: recoveredMark || undefined
         };
     }
 
@@ -2263,6 +2294,28 @@ const TEXT_KIT_SOURCE = agyTextKit.toString();
 const LOCATOR_KIT_SOURCE = agyLocatorKit.toString();
 // Moteur de localisation aussi utilisé côté extension (motifs, comparaison des noms renvoyés par l'arbre AX).
 const LK = agyLocatorKit();
+// Rôle et nom de chaque mark, relevés à sa pose et gardés dans la page (monde isolé) : une mark dont la page a remplacé
+// l'élément est retrouvée par eux quand un seul élément les porte encore (recoverMark du kit souris).
+const SOM_META_SCRIPT = `(() => {
+    const lk = (${LOCATOR_KIT_SOURCE})();
+    const meta = new Map();
+    const old = window.__nexus_som_meta instanceof Map ? window.__nexus_som_meta : null;
+    const som = window.__nexus_som_elements;
+    if (som instanceof Map) for (const [mark, el] of som) {
+        // Élément déjà remplacé (mark gardée d'un instantané précédent) : son rôle et son nom relevés à la pose.
+        if (el && el.isConnected === false) {
+            if (old && old.has(mark)) meta.set(mark, old.get(mark));
+            continue;
+        }
+        try {
+            const role = lk.roleOf(el);
+            const name = lk.norm(lk.accessibleName(el));
+            if (role && name) meta.set(mark, { role, name });
+        } catch (_) {}
+    }
+    window.__nexus_som_meta = meta;
+    return meta.size;
+})()`;
 const MOUSE_BUTTON_MASK = { none: 0, left: 1, right: 2, middle: 4 };
 // Événement de confiance qui prouve l'effet d'un clic, selon le bouton.
 const MOUSE_PROOF_EVENT = { left: "click", right: "contextmenu", middle: "auxclick" };
@@ -3199,6 +3252,7 @@ async function performMouseAction(params, options) {
         coordinates: { x, y },
         frameDepth: prep.frameDepth
     };
+    if (prep.recoveredMark) report.recovered_mark = prep.recoveredMark;
     if (root.key !== "top") Object.assign(report, { frame: prep.frame, crossOriginFrame: true });
     if (kind !== "hover") Object.assign(report, { button, clickCount });
     if (run.dialog) {
@@ -4049,8 +4103,11 @@ function snapshotQuote(text) {
     return JSON.stringify(String(text));
 }
 
-/** Arbre réduit aux nœuds utiles ; les candidats à un numéro (contrôles actifs) sont listés dans l'ordre du document. */
-function snapshotTree(raw, byId, masked) {
+/**
+ * Arbre réduit aux nœuds utiles ; les candidats à un numéro (contrôles actifs) sont listés dans l'ordre du document.
+ * scopeNode (backendNodeId) : seulement le sous-arbre de cet élément.
+ */
+function snapshotTree(raw, byId, masked, scopeNode = null) {
     const candidates = [];
     const build = (id, depth, parentName) => {
         const n = byId.get(id);
@@ -4090,7 +4147,8 @@ function snapshotTree(raw, byId, masked) {
         if (!name && !value && !node.backendNodeId && !node.children.length && role !== "img" && role !== "separator") return [];
         return [node];
     };
-    const root = raw.find(n => n.role?.value === "RootWebArea") || raw[0];
+    const root = scopeNode ? raw.find(n => n.backendDOMNodeId === scopeNode)
+        : (raw.find(n => n.role?.value === "RootWebArea") || raw[0]);
     return { tree: root ? build(root.nodeId, 0, "") : [], candidates };
 }
 
@@ -4124,7 +4182,7 @@ function renderSnapshot(tree, maxLines) {
  * Numéros des contrôles de l'instantané : chaque nœud DOM est résolu dans le monde isolé de l'extension et rangé dans
  * __nexus_som_elements (la table de browser_interactive_map), donc visé par tous les gestes par mark.
  */
-async function registerSnapshotRefs(target, candidates) {
+async function registerSnapshotRefs(target, candidates, numbering) {
     const root = rootOf(target);
     for (let attempt = 0; ; attempt++) {
         try {
@@ -4138,15 +4196,28 @@ async function registerSnapshotRefs(target, candidates) {
                     if (res?.object?.objectId) handles.push({ node, objectId: res.object.objectId });
                 } catch (_) {}
             }
+            // Un élément déjà numéroté par l'instantané précédent du même document garde son numéro ; les nouveaux
+            // prennent la suite (numbering.refs : backendNodeId -> numéro).
+            const refs = handles.map(h => {
+                let ref = numbering.refs.get(h.node.backendNodeId);
+                if (!ref) {
+                    ref = numbering.next++;
+                    numbering.refs.set(h.node.backendNodeId, ref);
+                }
+                return ref;
+            });
             await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
                 executionContextId: contextId,
-                functionDeclaration: "function(...els) { if (!(window.__nexus_som_elements instanceof Map)) " +
-                    "window.__nexus_som_elements = new Map(); window.__nexus_som_elements.clear(); " +
-                    "els.forEach((el, i) => window.__nexus_som_elements.set(i + 1, el)); return els.length; }",
-                arguments: handles.map(h => ({ objectId: h.objectId })),
+                functionDeclaration: "function(refs, clear, ...els) { if (!(window.__nexus_som_elements instanceof Map)) " +
+                    "window.__nexus_som_elements = new Map(); if (clear) window.__nexus_som_elements.clear(); " +
+                    "els.forEach((el, i) => window.__nexus_som_elements.set(refs[i], el)); return els.length; }",
+                arguments: [{ value: refs }, { value: numbering.clear }, ...handles.map(h => ({ objectId: h.objectId }))],
                 returnByValue: true
             });
-            handles.forEach((h, i) => { h.node.ref = i + 1; });
+            await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
+                expression: SOM_META_SCRIPT, contextId, returnByValue: true
+            });
+            handles.forEach((h, i) => { h.node.ref = refs[i]; });
             markRoots.delete(target.tabId);
             return handles.length;
         } catch (error) {
@@ -4156,17 +4227,82 @@ async function registerSnapshotRefs(target, candidates) {
     }
 }
 
+// tabId -> dernier instantané : document (url), zone (selector), numéros (backendNodeId -> [#N]) et lignes rendues.
+// Effacé par browser_interactive_map et vision_inspect, qui renumérotent les marks à partir de 1.
+const snapshotStates = new Map();
+// Numéros gardés au plus pour un document (application monopage ouverte longtemps) ; au-delà, renumérotés de 1.
+const SNAPSHOT_MAX_REFS = 5000;
+
+/** Nœud DOM (backendNodeId) du premier élément du sélecteur CSS dans le cadre principal. */
+async function snapshotScopeNode(target, selector) {
+    const { root } = await chrome.debugger.sendCommand(target, "DOM.getDocument", { depth: 0 });
+    let nodeId = 0;
+    try {
+        ({ nodeId } = await chrome.debugger.sendCommand(target, "DOM.querySelector", { nodeId: root.nodeId, selector }));
+    } catch (error) {
+        throw new Error(`Invalid selector ${JSON.stringify(selector)}: ${error.message || error}`);
+    }
+    if (!nodeId) throw new Error(`No element matches the selector ${JSON.stringify(selector)} in the main frame`);
+    const { node } = await chrome.debugger.sendCommand(target, "DOM.describeNode", { nodeId });
+    return node.backendNodeId;
+}
+
+/**
+ * Lignes ajoutées et retirées depuis l'instantané précédent, comptées comme des multiensembles (une ligne répétée
+ * compte autant de fois), dans l'ordre de chaque instantané. Les numéros [#N] étant stables, une ligne inchangée
+ * reste identique.
+ */
+function snapshotChanges(before, after) {
+    const count = new Map();
+    for (const line of before) count.set(line, (count.get(line) || 0) + 1);
+    const added = [];
+    for (const line of after) {
+        const n = count.get(line) || 0;
+        if (n) count.set(line, n - 1);
+        else added.push(line);
+    }
+    const removed = [];
+    for (const line of before) {
+        const n = count.get(line) || 0;
+        if (n) { count.set(line, n - 1); removed.push(line); }
+    }
+    return { added, removed };
+}
+
 async function getAccessibilitySnapshot(tabId, params = {}) {
     const target = await ensureDebugger(tabId);
+    const selector = typeof params.selector === "string" && params.selector.trim() ? params.selector.trim() : "";
+    const scopeNode = selector ? await snapshotScopeNode(target, selector) : null;
     const { raw, byId, masked } = await maskedAxNodes(target);
-    const { tree, candidates } = snapshotTree(raw, byId, masked);
-    // Toujours enregistré, même vide : la table et les racines de l'instantané précédent ne doivent pas survivre.
-    const refs = await registerSnapshotRefs(target, candidates);
-    const maxLines = Math.max(20, Math.min(2000, parseInt(params.maxLines ?? params.max_lines, 10) || SNAPSHOT_MAX_LINES));
+    const { tree, candidates } = snapshotTree(raw, byId, masked, scopeNode);
+    if (scopeNode && !raw.some(n => n.backendDOMNodeId === scopeNode)) {
+        throw new Error(`The element of ${JSON.stringify(selector)} is not in the accessibility tree (hidden or empty)`);
+    }
     let url = "";
     let title = "";
     try { ({ url = "", title = "" } = await chrome.tabs.get(tabId)); } catch (_) {}
-    return { data: { url, title, refs, snapshot: renderSnapshot(tree, maxLines) } };
+    // Même document : numéros gardés. Autre document : table repartie de 1 (les marks d'avant sont mortes).
+    const prev = snapshotStates.get(tabId);
+    const same = !!prev && prev.url === url && prev.refs.size < SNAPSHOT_MAX_REFS;
+    // Instantané de toute la page : seules ses marks restent ; d'une zone : celles d'ailleurs sont gardées.
+    const numbering = same ? { refs: prev.refs, next: prev.next, clear: !selector } : { refs: new Map(), next: 1, clear: true };
+    const refs = await registerSnapshotRefs(target, candidates, numbering);
+    const maxLines = Math.max(20, Math.min(2000, parseInt(params.maxLines ?? params.max_lines, 10) || SNAPSHOT_MAX_LINES));
+    const snapshot = renderSnapshot(tree, maxLines);
+    const lines = snapshot.split("\n");
+    snapshotStates.set(tabId, { url, selector, refs: numbering.refs, next: numbering.next, lines });
+    const data = { url, title, refs };
+    if (selector) data.selector = selector;
+    const wantChanges = params.changesOnly === true || params.changes_only === true;
+    if (wantChanges && same && prev.selector === selector) {
+        const { added, removed } = snapshotChanges(prev.lines, lines);
+        if (!added.length && !removed.length) return { data: { ...data, changes: "none" } };
+        const delta = { added: added.join("\n"), removed: removed.join("\n") };
+        // Différence plus longue que l'instantané : l'instantané entier, plus lisible.
+        if (delta.added.length + delta.removed.length < snapshot.length) return { data: { ...data, changes: "diff", ...delta } };
+    }
+    if (wantChanges) data.changes = "full";
+    return { data: { ...data, snapshot } };
 }
 
 async function getAccessibilityTree(params = {}) {
@@ -4628,7 +4764,8 @@ async function typeWithDebugger(target, locate, opts) {
     };
     const base = {
         tagName: prep.tagName, id: prep.id, replace: opts.replace,
-        ...(root.key !== "top" ? { frame: prep.frame, crossOriginFrame: true } : {})
+        ...(root.key !== "top" ? { frame: prep.frame, crossOriginFrame: true } : {}),
+        ...(prep.recoveredMark ? { recovered_mark: prep.recoveredMark } : {})
     };
     const finish = async (data) => {
         await releaseMouseProbes(root, [prep.probeId]);
@@ -5352,6 +5489,7 @@ async function visionInspect(params = {}) {
 
     // 1. Inject SoM markers and register elements in page context
     markRoots.delete(tabId);  // marqueurs de vision : cadre principal seulement
+    snapshotStates.delete(tabId);  // marks renumérotées de 1 : l'instantané suivant repart de zéro
     const markerData = await evaluateIsolated({
         tabId,
         code: `(() => {
@@ -5446,6 +5584,7 @@ async function visionInspect(params = {}) {
                 });
                 markerId++;
             }
+            ${SOM_META_SCRIPT};
 
             return { markers, title: document.title, url: window.location.href, devicePixelRatio: window.devicePixelRatio };
         })()`
@@ -6635,6 +6774,7 @@ async function getInteractiveMap(params = {}) {
             markId++;
             if (results.length >= ${budget}) break;
         }
+        ${SOM_META_SCRIPT};
 
         return {
             title: typeof document !== "undefined" && document.title ? document.title : "",
@@ -6647,6 +6787,7 @@ async function getInteractiveMap(params = {}) {
 
     const top = await evaluateIsolated({ tabId, code: buildScript(1, maxElements) });
     markRoots.delete(tabId);
+    snapshotStates.delete(tabId);  // marks renumérotées de 1 : l'instantané suivant repart de zéro
     if (!top?.data || top.data.dialogOpened || !Array.isArray(top.data.elements)) return top;
     // Cadres d'une autre origine : marqueurs à la suite, boîtes ramenées au viewport principal, cadre indiqué.
     const elements = top.data.elements;

@@ -4912,6 +4912,12 @@ function snapshotAx() {
     ];
 }
 
+// Runtime.callFunctionOn de registerSnapshotRefs exécuté pour de vrai dans le monde isolé (numéros, effacement).
+function registerInWorld(world, params, byObject) {
+    const args = params.arguments.map(a => ('objectId' in a ? (byObject[a.objectId] || {}) : a.value));
+    return vm.runInContext(`(${params.functionDeclaration})`, world.context).apply(null, args);
+}
+
 test('axtree snapshot : lignes compactes façon Playwright, carte masquée, références [#N] cliquables par mark', async () => {
     let ref = null;
     const dom = {11: {nodeName: 'INPUT', attributes: ['autocomplete', 'cc-number']}, 12: {nodeName: 'BUTTON', attributes: []}, 14: {nodeName: 'INPUT', attributes: ['type', 'checkbox']}};
@@ -4923,8 +4929,7 @@ test('axtree snapshot : lignes compactes façon Playwright, carte masquée, réf
             const world = ref.worlds.get(params.executionContextId);
             assert.ok(world, 'monde isolé de l\'extension, jamais celui de la page');
             const byObject = {'obj-12': ref.element};
-            world.window.__nexus_som_elements = new Map(params.arguments.map((a, i) => [i + 1, byObject[a.objectId] || {}]));
-            return {result: {value: params.arguments.length}};
+            return {result: {value: registerInWorld(world, params, byObject)}};
         }
         return undefined;
     }});
@@ -4986,8 +4991,7 @@ test('axtree snapshot vide : anciens numéros oubliés, click(mark=1) ne vise pl
         if (method === 'Runtime.callFunctionOn') {
             const world = ref.worlds.get(params.executionContextId);
             const byObject = {'obj-11': ref.element};
-            world.window.__nexus_som_elements = new Map(params.arguments.map((a, i) => [i + 1, byObject[a.objectId] || {}]));
-            return {result: {value: params.arguments.length}};
+            return {result: {value: registerInWorld(world, params, byObject)}};
         }
         return undefined;
     }});
@@ -5003,6 +5007,87 @@ test('axtree snapshot vide : anciens numéros oubliés, click(mark=1) ne vise pl
     const clicked = await h.run('click', {tabId: 1, mark: 1});
     assert.equal(h.clicks, 0, 'aucun clic sur l\'ancien élément');
     assert.ok(clicked.error, 'erreur claire : numéro inconnu');
+});
+
+// Instantané : numéros stables d'un instantané à l'autre du même document, seulement les changements sur demande,
+// limité à une zone (sélecteur CSS).
+test('axtree snapshot : numéros stables, changes_only (aucun, différence, complet), zone par sélecteur', async () => {
+    let ref = null;
+    let nodes = snapshotAx();
+    const h = harness({}, {debuggerSendCommand: async (target, method, params) => {
+        if (method === 'Accessibility.getFullAXTree') return {nodes};
+        if (method === 'DOM.getDocument') return {root: {nodeId: 1}};
+        if (method === 'DOM.querySelector') return {nodeId: params.selector === '#form' ? 30 : 0};
+        if (method === 'DOM.describeNode') return {node: params.nodeId === 30 ? {backendNodeId: 20}
+            : (params.backendNodeId === 11 ? {nodeName: 'INPUT', attributes: ['autocomplete', 'cc-number']} : {nodeName: 'BUTTON', attributes: []})};
+        if (method === 'DOM.resolveNode') return {object: {objectId: `obj-${params.backendNodeId}`}};
+        if (method === 'Runtime.callFunctionOn') return {result: {value: registerInWorld(ref.worlds.get(params.executionContextId), params, {})}};
+        return undefined;
+    }});
+    ref = h;
+    const first = await h.run('axtree', {tabId: 1, mode: 'snapshot', changesOnly: true});
+    assert.equal(first.data.changes, 'full');
+    assert.match(first.data.snapshot, /button "Valider" \[#2\]/);
+    const same = await h.run('axtree', {tabId: 1, mode: 'snapshot', changesOnly: true});
+    assert.equal(same.data.changes, 'none');
+    assert.equal(same.data.snapshot, undefined);
+    // La page retire « Valider » et ajoute « Payer » : les autres gardent leur numéro, le nouveau prend la suite.
+    nodes = snapshotAx().map(n => (n.nodeId === '6' ? {nodeId: '6', role: {value: 'button'}, name: {value: 'Payer'}, backendDOMNodeId: 15} : n));
+    const diff = await h.run('axtree', {tabId: 1, mode: 'snapshot', changesOnly: true});
+    assert.equal(diff.data.changes, 'diff');
+    assert.equal(diff.data.added, '  - button "Payer" [#4]');
+    assert.equal(diff.data.removed, '  - button "Valider" [#2]');
+    const som = h.isolatedWindow().__nexus_som_elements;
+    assert.deepEqual([...som.keys()].sort(), [1, 3, 4]);  // toute la page : #2 disparu n'est plus une mark
+    // Zone : le sous-arbre de l'élément du sélecteur, mêmes numéros.
+    nodes = nodes.map(n => (n.nodeId === '3' ? {...n, backendDOMNodeId: 20} : n));
+    const scoped = await h.run('axtree', {tabId: 1, mode: 'snapshot', selector: '#form'});
+    assert.equal(scoped.data.selector, '#form');
+    assert.equal(scoped.data.snapshot, ['- textbox "Carte" [#1]: "[masked value]"', '- button "Payer" [#4]', '- button "Annuler" [disabled]'].join('\n'));
+    assert.match((await h.run('axtree', {tabId: 1, mode: 'snapshot', selector: '#absent'})).error, /No element matches the selector "#absent"/);
+    // Une carte des éléments renumérote de 1 : l'instantané suivant repart de zéro (changes_only = complet).
+    h.evalInContext('snapshotStates.delete(1)');
+    assert.equal((await h.run('axtree', {tabId: 1, mode: 'snapshot', changesOnly: true})).data.changes, 'full');
+});
+
+// Mark dont la page a remplacé l'élément (rendu React...) : retrouvée par son rôle et son nom si un seul élément les
+// porte encore ; sinon refus explicite, aucun clic.
+function replaceButton(dom, oldId, newId, label) {
+    const old = dom.byId(oldId);
+    const fresh = dom.h('button', {id: newId}, label);
+    fresh.parentNode = old.parentNode;
+    fresh.rect = {...old.rect};
+    const kids = old.parentNode.childNodes;
+    kids[kids.indexOf(old)] = fresh;
+    old.isConnected = false;
+    old.parentNode = null;
+    return fresh;
+}
+
+test('mark périmée : élément remplacé retrouvé par rôle et nom, dit dans la réponse', async () => {
+    const {h, dom} = richHarness((h) => [h('button', {id: 'save'}, 'Enregistrer'), h('button', {id: 'cancel'}, 'Annuler')]);
+    const map = await h.run('interactive_map', {tabId: 1, viewportOnly: false});
+    const mark = map.data.elements.find(e => e.label === 'Enregistrer').mark;
+    replaceButton(dom, 'save', 'save2', 'Enregistrer');
+    const res = await h.run('click', {tabId: 1, mark});
+    assert.equal(res.error, undefined);
+    assert.deepEqual(plain(res.data.recovered_mark), {mark, role: 'button', name: 'Enregistrer'});
+    assert.deepEqual(dom.trusted.filter(t => t.type === 'click').map(t => t.el.id), ['save2']);
+});
+
+test('mark périmée : homonymes ou élément disparu = refus sans clic, « Nothing was sent »', async () => {
+    const {h, dom} = richHarness((h) => [h('button', {id: 'a'}, 'Enregistrer'), h('button', {id: 'b'}, 'Enregistrer'), h('button', {id: 'c'}, 'Fermer')]);
+    const map = await h.run('interactive_map', {tabId: 1, viewportOnly: false});
+    const [first] = map.data.elements.filter(e => e.label === 'Enregistrer').map(e => e.mark);
+    const close = map.data.elements.find(e => e.label === 'Fermer').mark;
+    replaceButton(dom, 'a', 'a2', 'Enregistrer');
+    const twins = await h.run('click', {tabId: 1, mark: first, timeoutMs: 100});
+    assert.match(twins.error, new RegExp(`Mark #${first} is stale: the page replaced its element and 2 elements are now button "Enregistrer"`));
+    assert.match(twins.error, /Nothing was sent\.$/);
+    replaceButton(dom, 'c', 'c2', 'Quitter');
+    const gone = await h.run('click', {tabId: 1, mark: close, timeoutMs: 100});
+    assert.match(gone.error, /and no button "Fermer" is left: run browser_interactive_map or browser_axtree again/);
+    assert.equal(dom.trusted.filter(t => t.type === 'click').length, 0);
 });
 
 // Relecture de Codex du 28/10 sur les correctifs CodeQL : un span de code d'un tableau garde ses antislashs, et les

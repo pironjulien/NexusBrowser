@@ -337,12 +337,15 @@ public sealed partial class ToolContractTests
         Assert.False(scrolled.ContainsKey("structuredContent"));
         Assert.True(JsonNode.DeepEquals(new JsonObject { ["status"] = "success", ["data"] = new JsonObject { ["scrolled"] = true } }, Payload(scrolled)));
         fail = true;
-        foreach (var (name, args) in new[] { ("browser_list_tabs", new JsonObject()), ("browser_scroll", Args("""{"tab_id":3}""")) })
+        // An idempotent read says it is safe to resend; an unrecognized failure of an action is not guessed.
+        foreach (var (name, args, safe) in new[] { ("browser_list_tabs", new JsonObject(), true), ("browser_scroll", Args("""{"tab_id":3}"""), false) })
         {
             var failed = await session.CallAsync(name, args);
             Assert.True((bool)failed["isError"]!, name);
             Assert.False(failed.ContainsKey("structuredContent"), name);
-            Assert.True(JsonNode.DeepEquals(new JsonObject { ["status"] = "error", ["error"] = "Bridge unreachable" }, Payload(failed)), Payload(failed).ToJsonString());
+            var expected = new JsonObject { ["status"] = "error", ["error"] = "Bridge unreachable" };
+            if (safe) expected["retry_safe"] = true;
+            Assert.True(JsonNode.DeepEquals(expected, Payload(failed)), Payload(failed).ToJsonString());
         }
     }
 
