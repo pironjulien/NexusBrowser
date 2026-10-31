@@ -156,7 +156,7 @@ public sealed partial class ToolContractTests
                      """[{"mark":1,"value":["a"]}]""", """[{"mark":1,"option":" "}]""" })
             AssertEnglishError(await session.CallAsync("browser_fill_form", Args($$"""{"tab_id":1,"fields":{{fields}}}""")));
         AssertEnglishError(await session.CallAsync("browser_fill_form", Args("""{"tab_id":0,"fields":[{"mark":1,"value":"x"}]}""")));
-        AssertEnglishError(await session.CallAsync("browser_upload", Args($$"""{"tab_id":1,"files":[{{JsonValue.Create(Path.Combine(BridgeSecurity.HomeDir(), ".ssh", "id_ed25519"))!.ToJsonString()}}]}""")));
+        AssertEnglishError(await session.CallAsync("browser_upload", Args($$"""{"tab_id":1,"files":[{{JsonValue.Create(Path.Join(BridgeSecurity.HomeDir(), ".ssh", "id_ed25519"))!.ToJsonString()}}]}""")));
         AssertEnglishError(await session.CallAsync("browser_upload", Args("""{"tab_id":1,"files":[]}""")));
         Assert.Empty(session.Commands);
     }
@@ -250,7 +250,7 @@ public sealed partial class ToolContractTests
         ["url"] = "https://example.invalid/",
         ["gone"] = true,
         ["text"] = "Welcome",
-        ["output_path"] = Path.Combine(TestEnvironment.Root, "read-only-sample.pdf"),
+        ["output_path"] = Path.Join(TestEnvironment.Root, "read-only-sample.pdf"),
     };
 
     [Fact]
@@ -402,7 +402,7 @@ public sealed partial class ToolContractTests
     public async Task EachCommandCarriesTheTabIdGivenByTheAgent()
     {
         int next = 11;
-        string upload = Path.Combine(TestEnvironment.Root, "rapport.pdf");
+        string upload = Path.Join(TestEnvironment.Root, "rapport.pdf");
         File.WriteAllText(upload, "%PDF");
         using var session = new EngineSession((action, parameters) => action switch
         {

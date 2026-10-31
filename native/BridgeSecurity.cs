@@ -13,9 +13,9 @@ using System.Text.RegularExpressions;
 
 namespace NexusBrowser.Native;
 
-public static class BridgeSecurity
+public static partial class BridgeSecurity
 {
-    public const string Version = "2.33.9";
+    public const string Version = "2.33.10";
     public const string TokenFileName = "bridge-token";
     public const string TokenHeader = "X-Nexus-Browser-Token";
     public const string AgentHeader = "X-Nexus-Browser-Agent";
@@ -114,14 +114,16 @@ public static class BridgeSecurity
         return pid;
     }
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial IntPtr OpenProcess(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr hObject);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseHandle(IntPtr hObject);
 
     public static bool ProcessRunning(long pid)
     {
@@ -135,7 +137,7 @@ public static class BridgeSecurity
                 using var proc = Process.GetProcessById((int)pid);
                 return !proc.HasExited;
             }
-            catch
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
             {
                 return false;
             }
@@ -173,7 +175,7 @@ public static class BridgeSecurity
 
     public static string DefaultDataDir()
     {
-        return Path.Combine(HomeDir(), ".nexus", "nexus-browser");
+        return Path.Join(HomeDir(), ".nexus", "nexus-browser");
     }
 
     public static string TokenPath(string? explicitPath = null)
@@ -183,7 +185,7 @@ public static class BridgeSecurity
         var envOverride = Environment.GetEnvironmentVariable("NEXUS_BROWSER_TOKEN_FILE");
         if (!string.IsNullOrWhiteSpace(envOverride))
             return Path.GetFullPath(envOverride);
-        return Path.Combine(DefaultDataDir(), TokenFileName);
+        return Path.Join(DefaultDataDir(), TokenFileName);
     }
 
     private static string? CurrentUserSid()
@@ -209,8 +211,9 @@ public static class BridgeSecurity
             var sid = parts[^1].Trim().Trim('"');
             return sid.StartsWith("S-1-", StringComparison.Ordinal) ? sid : null;
         }
-        catch
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
+            // whoami missing, blocked or too slow: no SID
             return null;
         }
     }
@@ -242,7 +245,7 @@ public static class BridgeSecurity
         }
         catch
         {
-            // Best-effort ACL hardening
+            // Deliberate best-effort boundary: ACL hardening must never block token creation
         }
     }
 
@@ -290,7 +293,7 @@ public static class BridgeSecurity
 
         var token = BridgeAuth.ToBase64Url(RandomNumberGenerator.GetBytes(48));
         var randHex = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
-        var tmp = Path.Combine(dir ?? ".", $".{Path.GetFileName(target)}-{randHex}.tmp");
+        var tmp = Path.Join(dir ?? ".", $".{Path.GetFileName(target)}-{randHex}.tmp");
         try
         {
             File.WriteAllText(tmp, token + "\n", Encoding.ASCII);
@@ -305,9 +308,9 @@ public static class BridgeSecurity
                 if (File.Exists(tmp))
                     File.Delete(tmp);
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // Ignore
+                // Ignore cleanup failure
             }
         }
         return token;
@@ -331,15 +334,12 @@ public static class BridgeSecurity
         }
         if (@params != null && @params["steps"] is JsonArray steps)
         {
-            foreach (var item in steps)
+            foreach (var step in steps.OfType<JsonObject>())
             {
-                if (item is JsonObject step)
-                {
-                    var stepAction = step["action"] is JsonValue av && av.TryGetValue<string>(out var s) ? s : null;
-                    var stepParams = step["params"] as JsonObject ?? step;
-                    if (IsUploadAction(stepAction, stepParams))
-                        return true;
-                }
+                var stepAction = step["action"] is JsonValue av && av.TryGetValue<string>(out var s) ? s : null;
+                var stepParams = step["params"] as JsonObject ?? step;
+                if (IsUploadAction(stepAction, stepParams))
+                    return true;
             }
         }
         return false;
@@ -351,7 +351,7 @@ public static class BridgeSecurity
         if (LocalHosts.Contains(host) || host.StartsWith("127.", StringComparison.Ordinal))
             return true;
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        try { names.Add(Dns.GetHostName()); } catch { }
+        try { names.Add(Dns.GetHostName()); } catch (System.Net.Sockets.SocketException) { /* no host name: the names below still apply */ }
         var comp = Environment.GetEnvironmentVariable("COMPUTERNAME")?.Trim();
         if (!string.IsNullOrEmpty(comp)) names.Add(comp);
         if (!string.IsNullOrEmpty(Environment.MachineName)) names.Add(Environment.MachineName);
@@ -362,27 +362,27 @@ public static class BridgeSecurity
     {
         var home = HomeDir();
         var appDataEnv = Environment.GetEnvironmentVariable("APPDATA")?.Trim();
-        var appData = !string.IsNullOrEmpty(appDataEnv) ? appDataEnv : Path.Combine(home, "AppData", "Roaming");
+        var appData = !string.IsNullOrEmpty(appDataEnv) ? appDataEnv : Path.Join(home, "AppData", "Roaming");
         var localEnv = Environment.GetEnvironmentVariable("LOCALAPPDATA")?.Trim();
-        var local = !string.IsNullOrEmpty(localEnv) ? localEnv : Path.Combine(home, "AppData", "Local");
+        var local = !string.IsNullOrEmpty(localEnv) ? localEnv : Path.Join(home, "AppData", "Local");
 
         var roots = new List<string>();
         foreach (var name in ProtectedHomeRelatives)
-            roots.Add(Path.Combine(home, name));
+            roots.Add(Path.Join(home, name));
 
-        roots.Add(Path.Combine(appData, "gcloud"));
-        roots.Add(Path.Combine(appData, "Microsoft", "Credentials"));
-        roots.Add(Path.Combine(appData, "Microsoft", "Protect"));
-        roots.Add(Path.Combine(local, "Microsoft", "Credentials"));
-        roots.Add(Path.Combine(local, "Google", "Chrome", "User Data"));
-        roots.Add(Path.Combine(home, "Documents", "NexusSecure"));
-        roots.Add(Path.Combine(home, "OneDrive", "Documents", "NexusSecure"));
+        roots.Add(Path.Join(appData, "gcloud"));
+        roots.Add(Path.Join(appData, "Microsoft", "Credentials"));
+        roots.Add(Path.Join(appData, "Microsoft", "Protect"));
+        roots.Add(Path.Join(local, "Microsoft", "Credentials"));
+        roots.Add(Path.Join(local, "Google", "Chrome", "User Data"));
+        roots.Add(Path.Join(home, "Documents", "NexusSecure"));
+        roots.Add(Path.Join(home, "OneDrive", "Documents", "NexusSecure"));
 
         foreach (var variable in new[] { "OneDrive", "OneDriveConsumer", "OneDriveCommercial" })
         {
             var baseDir = Environment.GetEnvironmentVariable(variable)?.Trim();
             if (!string.IsNullOrEmpty(baseDir))
-                roots.Add(Path.Combine(baseDir, "Documents", "NexusSecure"));
+                roots.Add(Path.Join(baseDir, "Documents", "NexusSecure"));
         }
 
         return roots;
@@ -392,7 +392,7 @@ public static class BridgeSecurity
     {
         if (raw is null)
             throw new ArgumentException("invalid file path (null)");
-        var text = (raw ?? "").Trim().Trim('"');
+        var text = raw.Trim().Trim('"');
         if (text.Contains('\0'))
             throw new ArgumentException("invalid file path (null character)");
 
@@ -463,10 +463,10 @@ public static class BridgeSecurity
                 current = parent;
             }
             while (suffixParts.Count > 0)
-                current = Path.Combine(current, suffixParts.Pop());
+                current = Path.Join(current, suffixParts.Pop());
             return Path.GetFullPath(current);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             return fullPath;
         }
@@ -514,7 +514,7 @@ public static class BridgeSecurity
             {
                 roots.Add((root, CanonicalPath(root)));
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
                 // Ignore unreadable root
             }
@@ -527,7 +527,7 @@ public static class BridgeSecurity
             {
                 key = CanonicalPath(item);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
                 return $"Upload refused: unreadable path '{item}' ({ex.Message}).";
             }

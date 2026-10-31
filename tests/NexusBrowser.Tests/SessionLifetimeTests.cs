@@ -50,7 +50,7 @@ internal sealed class Daemon : IDisposable
                     using var health = await daemon._http.GetAsync(daemon.Base + "/health");
                     if (health.IsSuccessStatusCode) { ready = true; return daemon; }
                 }
-                catch (HttpRequestException) { }
+                catch (HttpRequestException) { /* not listening yet: retry */ }
                 if (daemon.Process.Process.HasExited || clock.Elapsed > TimeSpan.FromSeconds(10))
                     throw new InvalidOperationException($"daemon not ready; stderr={daemon.Process.Stderr}");
                 await Task.Delay(50);
@@ -302,6 +302,6 @@ public sealed class BridgeGoneHeaderTests : IDisposable
         Assert.Empty(onlyMine["gone"] as JsonArray ?? []);
 
         responder.Cancel();
-        try { await responderTask; } catch (OperationCanceledException) { }
+        try { await responderTask; } catch (OperationCanceledException) { /* stopped on purpose */ }
     }
 }

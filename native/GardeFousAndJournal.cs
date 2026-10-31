@@ -36,8 +36,8 @@ public sealed class EmergencyStop
     {
         var shared = Environment.GetEnvironmentVariable("NEXUS_SHARED_HOME");
         if (!string.IsNullOrWhiteSpace(shared))
-            return Path.Combine(shared.Trim(), "stop");
-        return Path.Combine(BridgeSecurity.HomeDir(), ".nexus", "stop");
+            return Path.Join(shared.Trim(), "stop");
+        return Path.Join(BridgeSecurity.HomeDir(), ".nexus", "stop");
     }
 
     public static string Message(double left) =>
@@ -56,7 +56,7 @@ public sealed class EmergencyStop
             lastWriteUtc = File.GetLastWriteTimeUtc(path);
             content = File.ReadAllText(path, Encoding.UTF8);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return;
         }
@@ -172,15 +172,12 @@ public static class GardeFous
         var contexts = new List<ContextRule>();
         if (root["confirmation"]?["contextes"] is JsonArray ctxArr)
         {
-            foreach (var item in ctxArr)
+            foreach (var c in ctxArr.OfType<JsonObject>())
             {
-                if (item is JsonObject c)
-                {
-                    contexts.Add(new ContextRule(
-                        c["titre"]?.GetValue<string>() ?? "",
-                        c["verbes"]?.GetValue<string>() ?? "",
-                        c["quoi"]?.GetValue<string>() ?? ""));
-                }
+                contexts.Add(new ContextRule(
+                    c["titre"]?.GetValue<string>() ?? "",
+                    c["verbes"]?.GetValue<string>() ?? "",
+                    c["quoi"]?.GetValue<string>() ?? ""));
             }
         }
 
@@ -204,6 +201,14 @@ public static class GardeFous
             or UnicodeCategory.Format;
     }
 
+    // One visible character folded: confusable upper case, lower case, then confusable lower case.
+    private static char Fold(char ch)
+    {
+        char c = ConfusablesUpper.TryGetValue(ch, out char up) ? up : ch;
+        c = char.ToLowerInvariant(c);
+        return ConfusablesLower.TryGetValue(c, out char low) ? low : c;
+    }
+
     public static string Plain(string? text)
     {
         if (string.IsNullOrEmpty(text))
@@ -215,16 +220,8 @@ public static class GardeFous
             .Replace("¥", " jpy ");
 
         var sb = new StringBuilder(decomposed.Length);
-        foreach (char ch in decomposed)
-        {
-            if (IsInvisible(ch))
-                continue;
-            char c = ConfusablesUpper.TryGetValue(ch, out char up) ? up : ch;
-            c = char.ToLowerInvariant(c);
-            if (ConfusablesLower.TryGetValue(c, out char low))
-                c = low;
+        foreach (char c in decomposed.Where(ch => !IsInvisible(ch)).Select(Fold))
             sb.Append(c);
-        }
 
         string bare = NonAlphaNumRegex.Replace(sb.ToString(), " ").Trim();
         return string.Join(" ", bare.Split(' ', StringSplitOptions.RemoveEmptyEntries));
@@ -267,10 +264,8 @@ public static class GardeFous
 
         string text = Plain(label);
         string heading = Plain(title);
-        foreach (var ctx in Policy.Value.Contexts)
+        foreach (var ctx in Policy.Value.Contexts.Where(ctx => ctx.Quoi.Contains("paiement", StringComparison.Ordinal)))
         {
-            if (!ctx.Quoi.Contains("paiement", StringComparison.Ordinal))
-                continue;
             var found = Regex.Match(text, @"\b(" + ctx.Verbes + @")\b");
             if (found.Success && Regex.IsMatch(heading, @"\b(" + ctx.Titre + @")\b"))
                 return $"{found.Value} (fenêtre de {ctx.Quoi})";
@@ -288,10 +283,10 @@ public static class GardeFous
             return "";
         bool formUnknown = data?["formUnknown"] is JsonValue fv && fv.GetValueKind() == JsonValueKind.True;
         bool hasForm = data?["form"] is JsonValue fm && fm.GetValueKind() == JsonValueKind.True;
-        if (formUnknown || !hasForm)
+        if (data is null || formUnknown || !hasForm)
             return $"{match.Value} (form whose contents could not be read)";
 
-        bool entered = (data?["recipients"] as JsonArray)?.Count > 0 || (data?["attachments"] as JsonArray)?.Count > 0;
+        bool entered = (data["recipients"] as JsonArray)?.Count > 0 || (data["attachments"] as JsonArray)?.Count > 0;
         foreach (var f in fields)
         {
             string kind = (f["type"]?.GetValue<string>() ?? "").ToLowerInvariant();
@@ -411,16 +406,12 @@ public static class GardeFous
             return found;
         foreach (var pattern in Policy.Value.InjectionPatterns)
         {
-            foreach (Match m in Regex.Matches(flat, pattern))
+            foreach (string snippet in Regex.Matches(flat, pattern).Select(m => m.Value.Trim()).Select(s => s.Length > 80 ? s[..80] : s)
+                         .Where(s => !string.IsNullOrEmpty(s) && !found.Contains(s, StringComparer.Ordinal)))
             {
-                string snippet = m.Value.Trim();
-                if (snippet.Length > 80) snippet = snippet[..80];
-                if (!string.IsNullOrEmpty(snippet) && !found.Contains(snippet, StringComparer.Ordinal))
-                {
-                    found.Add(snippet);
-                    if (found.Count >= limit)
-                        return found;
-                }
+                found.Add(snippet);
+                if (found.Count >= limit)
+                    return found;
             }
         }
         return found;
@@ -502,11 +493,9 @@ public sealed class Accords
         if (!string.IsNullOrEmpty(flat))
         {
             var numbers = new HashSet<string>(StringComparer.Ordinal);
-            foreach (Match m in Regex.Matches(text ?? "", @"\+?\d[\d .()-]{6,}\d"))
+            foreach (string digits in Regex.Matches(text ?? "", @"\+?\d[\d .()-]{6,}\d").Select(m => Regex.Replace(m.Value, @"\D", "")).Where(d => d.Length >= 6))
             {
-                string digits = Regex.Replace(m.Value, @"\D", "");
-                if (digits.Length >= 6)
-                    numbers.Add(digits.Length > 9 ? digits[^9..] : digits);
+                numbers.Add(digits.Length > 9 ? digits[^9..] : digits);
             }
             lock (_lock)
             {
@@ -722,9 +711,9 @@ public static class Journal
     {
         var forced = Environment.GetEnvironmentVariable("NEXUS_JOURNAL_HOME");
         if (!string.IsNullOrWhiteSpace(forced))
-            return Path.Combine(forced.Trim(), "browser");
+            return Path.Join(forced.Trim(), "browser");
         // ~\.nexus\journal, never AppData: an MSIX host (Claude Desktop) redirects AppData writes to its private copy.
-        return Path.Combine(BridgeSecurity.HomeDir(), ".nexus", "journal", "browser");
+        return Path.Join(BridgeSecurity.HomeDir(), ".nexus", "journal", "browser");
     }
 
     public static string? ErreurPropre(string? texte)
@@ -790,7 +779,7 @@ public static class Journal
                 host = idn.GetAscii(host).ToLowerInvariant();
             }
         }
-        catch
+        catch (Exception ex) when (ex is ArgumentException or FormatException)
         {
             return "invalid";
         }
@@ -841,11 +830,10 @@ public static class Journal
             {
                 return "=";
             }
-            if ((data["verified"] is JsonValue vf && vf.GetValueKind() == JsonValueKind.False) ||
-                (data.ContainsKey("trusted_click") && (data["trusted_click"] is not JsonValue tc || tc.GetValueKind() != JsonValueKind.True)))
-            {
+            if (data["verified"] is JsonValue vf && vf.GetValueKind() == JsonValueKind.False)
                 return "~";
-            }
+            if (data.TryGetPropertyValue("trusted_click", out JsonNode? trusted) && (trusted is not JsonValue tc || tc.GetValueKind() != JsonValueKind.True))
+                return "~";
         }
         return "✓";
     }
@@ -866,7 +854,7 @@ public static class Journal
                 record[kv.Key] = kv.Value?.DeepClone();
 
             var now = DateTimeOffset.UtcNow;
-            string chemin = Path.Combine(Racine(), nom, $"{now:yyyy-MM}.jsonl");
+            string chemin = Path.Join(Racine(), nom, $"{now:yyyy-MM}.jsonl");
             var dir = Path.GetDirectoryName(chemin);
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
@@ -878,7 +866,7 @@ public static class Journal
         }
         catch
         {
-            // Never block tool execution on journal failure
+            // Deliberate boundary: never block tool execution on journal failure
         }
     }
 }

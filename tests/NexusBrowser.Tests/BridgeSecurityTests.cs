@@ -45,12 +45,12 @@ public sealed class BridgeSecurityTests
         string home = BridgeSecurity.HomeDir();
         return new TheoryData<string>
         {
-            Path.Combine(home, ".ssh", "id_ed25519"),
-            Path.Combine(home, ".ssh.", "id_ed25519"),
-            Path.Combine(home, ".nexus", "nexus-browser", "bridge-token"),
-            Path.Combine(home, "Documents", "NexusSecure", "secret.txt"),
-            @"\\127.0.0.1\c$" + Path.Combine(home, ".ssh", "id_rsa")[2..],
-            @"\\?\" + Path.Combine(home, ".codex", "auth.json"),
+            Path.Join(home, ".ssh", "id_ed25519"),
+            Path.Join(home, ".ssh.", "id_ed25519"),
+            Path.Join(home, ".nexus", "nexus-browser", "bridge-token"),
+            Path.Join(home, "Documents", "NexusSecure", "secret.txt"),
+            @"\\127.0.0.1\c$" + Path.Join(home, ".ssh", "id_rsa")[2..],
+            @"\\?\" + Path.Join(home, ".codex", "auth.json"),
         };
     }
 
@@ -65,7 +65,7 @@ public sealed class BridgeSecurityTests
 
     [Fact]
     public void UploadFromTempIsAllowed() =>
-        Assert.Null(BridgeSecurity.UploadRefusal([Path.Combine(Path.GetTempPath(), "safe-upload.txt")]));
+        Assert.Null(BridgeSecurity.UploadRefusal([Path.Join(Path.GetTempPath(), "safe-upload.txt")]));
 }
 
 /// <summary>Chrome startup on the installed Default profile (former --selftest ChromeLauncher checks). No real

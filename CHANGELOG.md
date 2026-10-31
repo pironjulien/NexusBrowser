@@ -3,6 +3,16 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.33.10] - 2026-10-31
+
+### Changed
+- Code quality pass on the CodeQL findings, behaviour unchanged: paths are joined with `Path.Join` (kept
+  `Path.Combine` only where a later segment may be rooted), exception handlers catch the exception types the code
+  can actually raise (deliberate broad boundaries, such as never-crash loops and best-effort cleanup, are commented),
+  dictionary lookups avoid a second `ContainsKey` search, loops filter and map with LINQ, nested conditions are
+  merged, the process-liveness P/Invoke uses `LibraryImport`, and the stdio transport disposes the console reader and
+  writer it creates. Tests dispose their HTTP request contents.
+
 ## [2.33.9] - 2026-10-31
 
 ### Fixed

@@ -58,8 +58,11 @@ public sealed class DaemonRestartTests : IDisposable
             Requests++; Authorization = request.Headers.Authorization?.ToString();
             Assert.Equal(HttpMethod.Get, request.Method);
             Assert.EndsWith("/restart-capabilities", request.RequestUri!.AbsolutePath);
-            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(json) });
+            return Task.FromResult(Answer());
         }
+
+        // The caller (HttpClient) owns and disposes the response.
+        private HttpResponseMessage Answer() => new(status) { Content = new StringContent(json) };
     }
 
     [Theory]

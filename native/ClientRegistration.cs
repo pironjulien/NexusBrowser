@@ -87,7 +87,7 @@ public static partial class ClientRegistration
         if (!File.Exists(path)) return;
         Directory.CreateDirectory(backups);
         string parent = Path.GetFileName(Path.GetDirectoryName(path)) ?? "";
-        File.Copy(path, Path.Combine(backups, $"{parent}-{Path.GetFileName(path)}-{DateTime.Now:yyyyMMdd-HHmmss}"), overwrite: true);
+        File.Copy(path, Path.Join(backups, $"{parent}-{Path.GetFileName(path)}-{DateTime.Now:yyyyMMdd-HHmmss}"), overwrite: true);
     }
 
     public static void WriteAtomic(string path, string text)
@@ -128,7 +128,7 @@ public static partial class ClientRegistration
     {
         try
         {
-            if (ReadJson(Path.Combine(home, ".claude", "settings.json"))["enabledPlugins"] is not JsonObject enabled) return false;
+            if (ReadJson(Path.Join(home, ".claude", "settings.json"))["enabledPlugins"] is not JsonObject enabled) return false;
             return enabled.Any(p => p.Key.Split('@')[0] == Name && p.Value is JsonValue v && v.TryGetValue<bool>(out bool on) && on);
         }
         catch (Exception ex) when (ex is IOException or JsonException or InvalidDataException) { return false; }
@@ -137,7 +137,7 @@ public static partial class ClientRegistration
     public static string? ClaudeCode(Context c)
     {
         string? cli = c.Which("claude");
-        string config = Path.Combine(c.Home, ".claude.json");
+        string config = Path.Join(c.Home, ".claude.json");
         JsonNode? Current() => File.Exists(config) ? (ReadJson(config)["mcpServers"] as JsonObject)?[Name] : null;
         if (ClaudePluginEnabled(c.Home))
         {
@@ -171,12 +171,12 @@ public static partial class ClientRegistration
 
     public static bool McpbInstalled(string folder)
     {
-        string extensions = Path.Combine(folder, "Claude Extensions");
+        string extensions = Path.Join(folder, "Claude Extensions");
         if (!Directory.Exists(extensions)) return false;
-        foreach (string manifest in Directory.EnumerateDirectories(extensions).Select(d => Path.Combine(d, "manifest.json")).Where(File.Exists))
+        foreach (string manifest in Directory.EnumerateDirectories(extensions).Select(d => Path.Join(d, "manifest.json")).Where(File.Exists))
         {
             try { if (ReadJson(manifest)["name"]?.ToString() == Name) return true; }
-            catch (Exception ex) when (ex is IOException or JsonException or InvalidDataException) { }
+            catch (Exception ex) when (ex is IOException or JsonException or InvalidDataException) { /* unreadable manifest: not ours */ }
         }
         return false;
     }
@@ -185,18 +185,17 @@ public static partial class ClientRegistration
     {
         // Classic install; the Store (MSIX) one, whose AppData is redirected into its package; and the Store one that
         // reads %LOCALAPPDATA%\Claude-Data\<package>. A folder it left (.user-data-left.*) is skipped.
-        var folders = new List<string> { Path.Combine(c.RoamingAppData, "Claude") };
-        string packages = Path.Combine(c.LocalAppData, "Packages");
+        var folders = new List<string> { Path.Join(c.RoamingAppData, "Claude") };
+        string packages = Path.Join(c.LocalAppData, "Packages");
         if (Directory.Exists(packages))
             folders.AddRange(Directory.EnumerateDirectories(packages, "*Claude_*").Order(StringComparer.Ordinal)
-                .Select(p => Path.Combine(p, "LocalCache", "Roaming", "Claude")));
-        string data = Path.Combine(c.LocalAppData, "Claude-Data");
+                .Select(p => Path.Join(p, "LocalCache", "Roaming", "Claude")));
+        string data = Path.Join(c.LocalAppData, "Claude-Data");
         if (Directory.Exists(data)) folders.AddRange(Directory.EnumerateDirectories(data).Order(StringComparer.Ordinal));
         var results = new List<string>();
-        foreach (string folder in folders)
+        foreach (string folder in folders.Where(folder => Directory.Exists(folder) && !Directory.EnumerateFileSystemEntries(folder, ".user-data-left.*").Any()))
         {
-            if (!Directory.Exists(folder) || Directory.EnumerateFileSystemEntries(folder, ".user-data-left.*").Any()) continue;
-            string config = Path.Combine(folder, "claude_desktop_config.json");
+            string config = Path.Join(folder, "claude_desktop_config.json");
             if (McpbInstalled(folder))
                 results.Add(Mcpb + (RemoveJsonServer(config, c.Backups) ? " (the installer's own entry removed)" : ""));
             else
@@ -274,7 +273,7 @@ public static partial class ClientRegistration
         try
         {
             string path = JsonSerializer.Deserialize<string>(command.Groups[1].Value)!;
-            string relative = Path.GetRelativePath(Path.Combine(localAppData, "NexusBrowser"), Path.GetFullPath(path)).Replace('\\', '/');
+            string relative = Path.GetRelativePath(Path.Join(localAppData, "NexusBrowser"), Path.GetFullPath(path)).Replace('\\', '/');
             bool installed = Regex.IsMatch(relative, @"^versions/[0-9a-f]{16}/NexusBrowser\.exe$", RegexOptions.IgnoreCase) ||
                 relative.Equals("app/engine/NexusBrowser.exe", StringComparison.OrdinalIgnoreCase) ||
                 relative.Equals("native/NexusBrowser.exe", StringComparison.OrdinalIgnoreCase);
@@ -286,9 +285,9 @@ public static partial class ClientRegistration
 
     public static string? Codex(Context c)
     {
-        string folder = Path.Combine(c.Home, ".codex");
+        string folder = Path.Join(c.Home, ".codex");
         if (!Directory.Exists(folder) && c.Which("codex") is null) return null;
-        string config = Path.Combine(folder, "config.toml");
+        string config = Path.Join(folder, "config.toml");
         string text = File.Exists(config) ? File.ReadAllText(config, Encoding.UTF8).TrimStart('﻿').Replace("\r\n", "\n") : "";
         TomlTable data;
         try { data = ReadCodexToml(text); }
@@ -324,26 +323,25 @@ public static partial class ClientRegistration
     public static string? Antigravity(Context c)
     {
         // Antigravity has used both folders; the one that exists is the one it reads.
-        foreach (string folder in new[] { Path.Combine(c.Home, ".gemini", "config"), Path.Combine(c.Home, ".gemini", "antigravity") })
+        foreach (string folder in new[] { Path.Join(c.Home, ".gemini", "config"), Path.Join(c.Home, ".gemini", "antigravity") }.Where(Directory.Exists))
         {
-            if (!Directory.Exists(folder)) continue;
-            string plugin = Path.Combine(folder, "plugins", Name);
-            string pluginConfig = Path.Combine(plugin, "mcp_config.json");
+            string plugin = Path.Join(folder, "plugins", Name);
+            string pluginConfig = Path.Join(plugin, "mcp_config.json");
             if (File.Exists(pluginConfig))
             {
                 var current = (ReadJson(pluginConfig)["mcpServers"] as JsonObject)?[Name];
                 if (current is not null && !Ours(current)) // a plugin of the user's own (e.g. the shared daemon)
-                    return RemoveJsonServer(Path.Combine(folder, "mcp_config.json"), c.Backups) ? Removed : Plugin;
+                    return RemoveJsonServer(Path.Join(folder, "mcp_config.json"), c.Backups) ? Removed : Plugin;
             }
-            string source = Path.Combine(c.SourceRoot, "plugin");
-            var manifest = ReadJson(Path.Combine(source, "plugin.json"));
-            WriteAtomic(Path.Combine(plugin, "plugin.json"), Json(manifest));
+            string source = Path.Join(c.SourceRoot, "plugin");
+            var manifest = ReadJson(Path.Join(source, "plugin.json"));
+            WriteAtomic(Path.Join(plugin, "plugin.json"), Json(manifest));
             string logo = manifest["logo"]?.ToString() ?? "logo.png";
             File.Copy(Path.Combine(source, logo), Path.Combine(plugin, logo), overwrite: true);
             WriteAtomic(pluginConfig, Json(new JsonObject { ["mcpServers"] = new JsonObject { [Name] = Entry(c.Exe, "Antigravity") } }));
-            WriteAtomic(Path.Combine(plugin, "skills", Name, "SKILL.md"), File.ReadAllText(Path.Combine(source, "skills", Name, "SKILL.md"), Encoding.UTF8));
-            RemoveJsonServer(Path.Combine(folder, "mcp_config.json"), c.Backups); // global entry of an earlier version
-            string app = Path.Combine(folder, "config.json");
+            WriteAtomic(Path.Join(plugin, "skills", Name, "SKILL.md"), File.ReadAllText(Path.Join(source, "skills", Name, "SKILL.md"), Encoding.UTF8));
+            RemoveJsonServer(Path.Join(folder, "mcp_config.json"), c.Backups); // global entry of an earlier version
+            string app = Path.Join(folder, "config.json");
             if (File.Exists(app) && !c.AntigravityRunning())
             {
                 var data = ReadJson(app);
@@ -408,9 +406,8 @@ public static partial class ClientRegistration
     private static string? Which(string name)
     {
         foreach (string dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-            foreach (string ext in new[] { ".exe", ".cmd", ".bat", "" })
+            foreach (string candidate in new[] { ".exe", ".cmd", ".bat", "" }.Select(ext => Path.Join(dir.Trim('"'), name + ext)))
             {
-                string candidate = Path.Combine(dir.Trim('"'), name + ext);
                 if (File.Exists(candidate)) return candidate;
             }
         return null;
@@ -440,7 +437,7 @@ public static partial class ClientRegistration
         var context = new Context(home,
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            exe, backups ?? Path.Combine(BridgeSecurity.DefaultDataDir(), "backups"), source,
+            exe, backups ?? Path.Join(BridgeSecurity.DefaultDataDir(), "backups"), source,
             Which, RunProcess, () => Process.GetProcessesByName("Antigravity").Length > 0);
         Console.OutputEncoding = new UTF8Encoding(false);
         return Register(context, Environment.GetEnvironmentVariable("NEXUS_PACK_TARGETS"), Environment.GetEnvironmentVariable("NEXUS_PACK") == "1", Console.Out, updateOnly);

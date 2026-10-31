@@ -23,7 +23,7 @@ public sealed class BridgeEndToEndTests : IDisposable
 
     public BridgeEndToEndTests()
     {
-        _env = new EnvScope(("NEXUS_JOURNAL_HOME", Path.Combine(_dir.Path, "journal")), ("NEXUS_SHARED_HOME", Path.Combine(_dir.Path, "shared")));
+        _env = new EnvScope(("NEXUS_JOURNAL_HOME", Path.Join(_dir.Path, "journal")), ("NEXUS_SHARED_HOME", Path.Join(_dir.Path, "shared")));
         _tokenFile = _dir["bridge-token"];
         _token = BridgeSecurity.LoadOrCreateToken(_tokenFile);
     }
@@ -83,7 +83,8 @@ public sealed class BridgeEndToEndTests : IDisposable
         var ct = TestContext.Current.CancellationToken;
 
         // Pairing over HTTP, then the WebSocket "pair" handshake derives the paired key.
-        using var pairResponse = await http.PostAsync($"http://127.0.0.1:{bridge.HttpPort}/api/pair", new StringContent("{}", Encoding.UTF8, "application/json"), ct);
+        using var pairBody = new StringContent("{}", Encoding.UTF8, "application/json");
+        using var pairResponse = await http.PostAsync($"http://127.0.0.1:{bridge.HttpPort}/api/pair", pairBody, ct);
         Assert.Equal(HttpStatusCode.OK, pairResponse.StatusCode);
         string pairSecret = (string)JsonNode.Parse(await pairResponse.Content.ReadAsStringAsync(ct))!["secret"]!;
         string pairedKey;
@@ -159,11 +160,11 @@ public sealed class BridgeEndToEndTests : IDisposable
         lock (received)
             Assert.Contains(received, c => (string?)c["action"] == "create_tab" && (string?)c["params"]?["url"] == "https://example.com");
 
-        string journal = Path.Combine(_dir.Path, "journal", "browser", "claude");
+        string journal = Path.Join(_dir.Path, "journal", "browser", "claude");
         Assert.True(Directory.Exists(journal) && Directory.GetFiles(journal, "*.jsonl").Length > 0, $"no journal in {journal}");
 
         responder.Cancel();
-        try { await responderTask; } catch (OperationCanceledException) { }
+        try { await responderTask; } catch (OperationCanceledException) { /* stopped on purpose */ }
     }
 
     [Fact]
@@ -177,7 +178,7 @@ public sealed class BridgeEndToEndTests : IDisposable
             Content = new StringContent(new JsonObject
             {
                 ["action"] = "upload",
-                ["params"] = new JsonObject { ["files"] = new JsonArray(Path.Combine(BridgeSecurity.HomeDir(), ".ssh", "id_ed25519")), ["tab_id"] = 7 },
+                ["params"] = new JsonObject { ["files"] = new JsonArray(Path.Join(BridgeSecurity.HomeDir(), ".ssh", "id_ed25519")), ["tab_id"] = 7 },
                 ["timeout"] = 5.0,
             }.ToJsonString(), Encoding.UTF8, "application/json"),
         };
@@ -197,11 +198,11 @@ public sealed class BridgeUpdateTests : IDisposable
     private readonly EnvScope _env;
     private readonly string _tokenFile;
     private readonly string _token;
-    private string StatusFile => Path.Combine(_dir.Path, "status", "browser.json");
+    private string StatusFile => Path.Join(_dir.Path, "status", "browser.json");
 
     public BridgeUpdateTests()
     {
-        _env = new EnvScope(("NEXUS_STATUS_DIR", Path.Combine(_dir.Path, "status")));
+        _env = new EnvScope(("NEXUS_STATUS_DIR", Path.Join(_dir.Path, "status")));
         _tokenFile = _dir["bridge-token"];
         _token = BridgeSecurity.LoadOrCreateToken(_tokenFile);
     }

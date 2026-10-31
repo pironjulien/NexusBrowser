@@ -31,16 +31,23 @@ public sealed class BridgeShutdownTests : IDisposable
         var otherResponder = FakeExtension.RespondAsync(otherProfile, otherChannel, [], _ => new JsonArray(), stop.Token);
         using var http = new HttpClient();
         string url = $"http://127.0.0.1:{bridge.HttpPort}";
-        using (var anonymous = await http.PostAsync(url + "/api/shutdown", new StringContent("{}"), TestContext.Current.CancellationToken))
+        using (var empty = new StringContent("{}"))
+        using (var anonymous = await http.PostAsync(url + "/api/shutdown", empty, TestContext.Current.CancellationToken))
             Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
         http.DefaultRequestHeaders.Add(BridgeSecurity.TokenHeader, token);
         var state = JsonNode.Parse(await http.GetStringAsync(url + "/api/status", TestContext.Current.CancellationToken))!;
-        async Task<HttpResponseMessage> Shutdown(string instance) => await http.PostAsync(url + "/api/shutdown",
-            new StringContent(new JsonObject { ["pid"] = Environment.ProcessId, ["instance_id"] = instance }.ToJsonString(), Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
-        foreach (string malformed in new[] { "[]", "{}", "{\"instance_id\":4,\"pid\":\"x\"}" })
+        async Task<HttpResponseMessage> Shutdown(string instance)
         {
-            using var refused = await http.PostAsync(url + "/api/shutdown", new StringContent(malformed), TestContext.Current.CancellationToken);
-            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+            using var body = new StringContent(new JsonObject { ["pid"] = Environment.ProcessId, ["instance_id"] = instance }.ToJsonString(), Encoding.UTF8, "application/json");
+            return await http.PostAsync(url + "/api/shutdown", body, TestContext.Current.CancellationToken);
+        }
+        foreach (var body in new[] { "[]", "{}", "{\"instance_id\":4,\"pid\":\"x\"}" }.Select(malformed => new StringContent(malformed)))
+        {
+            using (body)
+            {
+                using var refused = await http.PostAsync(url + "/api/shutdown", body, TestContext.Current.CancellationToken);
+                Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+            }
         }
         using (var wrong = await Shutdown("another-instance")) Assert.Equal(HttpStatusCode.Conflict, wrong.StatusCode);
         using (var busy = await Shutdown(state["instance_id"]!.ToString())) Assert.Equal(HttpStatusCode.Conflict, busy.StatusCode);
@@ -83,7 +90,8 @@ public sealed class BridgeShutdownTests : IDisposable
         try
         {
             await arrived.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-            using var refusal = await http.PostAsync(url + "/api/shutdown", new StringContent(new JsonObject { ["pid"] = Environment.ProcessId, ["instance_id"] = state["instance_id"]!.ToString() }.ToJsonString(), Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+            using var body = new StringContent(new JsonObject { ["pid"] = Environment.ProcessId, ["instance_id"] = state["instance_id"]!.ToString() }.ToJsonString(), Encoding.UTF8, "application/json");
+            using var refusal = await http.PostAsync(url + "/api/shutdown", body, TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.Conflict, refusal.StatusCode);
             Assert.False(bridge.ShutdownRequested.IsCompleted);
         }
@@ -138,8 +146,11 @@ public sealed class BridgeShutdownTests : IDisposable
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (request.Method == HttpMethod.Post) Posts++;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"status":"online","version":"2.33.0"}""") });
+            return Task.FromResult(Online());
         }
+
+        // The caller (HttpClient) owns and disposes the response.
+        private static HttpResponseMessage Online() => new(HttpStatusCode.OK) { Content = new StringContent("""{"status":"online","version":"2.33.0"}""") };
     }
 
     [Fact]

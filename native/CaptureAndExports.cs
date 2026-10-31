@@ -65,7 +65,7 @@ public sealed partial class McpServer
         if ((long)info.Width * info.Height > 40_000_000)
             return ErrorJson($"Capture too large to attach ({info.Width}x{info.Height} px): write it to a file (inline=False).");
         using var source = SKBitmap.Decode(input) ?? throw new InvalidDataException("Invalid capture image");
-        double scale = Math.Min(1, Math.Min((double)MaxImageSide / Math.Max(source.Width, source.Height), Math.Sqrt((double)MaxImagePixels / ((long)source.Width * source.Height))));
+        double scale = Math.Min(1, Math.Min((double)MaxImageSide / Math.Max(source.Width, source.Height), Math.Sqrt((double)MaxImagePixels / ((double)source.Width * source.Height))));
         byte[] webp; string encoding; int widthOut, heightOut; byte[] fingerprint;
         while (true)
         {
@@ -147,8 +147,8 @@ public sealed partial class McpServer
         string stem = Regex.Replace(Path.GetFileNameWithoutExtension(filename), "[<>:\"/\\\\|?*\\x00-\\x1f]+", "_").Trim(' ', '.', '_');
         if (stem.Length > 100) stem = stem[..100];
         if (stem.Length == 0) stem = "export";
-        string directory = Path.Combine(BridgeSecurity.DefaultDataDir(), "exports"); Directory.CreateDirectory(directory);
-        string destination = Path.Combine(directory, $"{stem}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid():N}.{extension}");
+        string directory = Path.Join(BridgeSecurity.DefaultDataDir(), "exports"); Directory.CreateDirectory(directory);
+        string destination = Path.Join(directory, $"{stem}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid():N}.{extension}");
         string temporary = destination + ".tmp";
         try { await File.WriteAllBytesAsync(temporary, content, ct); File.Move(temporary, destination); }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }

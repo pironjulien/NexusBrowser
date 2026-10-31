@@ -48,7 +48,7 @@ public static partial class ExtensionRefresh
         return reader.ReadToEnd();
     }
 
-    public static bool Matches(JsonNode? ping, string version, string[] features)
+    public static bool Matches([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] JsonNode? ping, string version, string[] features)
     {
         if (ping is not JsonObject o || o["version"]?.GetValue<string>() != version) return false;
         var loaded = (o["features"] as JsonArray ?? []).Select(f => f?.GetValue<string>() ?? "").Order(StringComparer.Ordinal);
@@ -120,14 +120,14 @@ public static partial class ExtensionRefresh
         }
         if (Matches(ping, version, features))
             return (Current, new JsonObject { ["connected"] = true, ["verified"] = true, ["reloaded"] = false, ["version"] = version,
-                ["installation_type"] = ping?["installation_type"]?.DeepClone(), ["extension_id"] = ping?["extension_id"]?.DeepClone() });
+                ["installation_type"] = ping["installation_type"]?.DeepClone(), ["extension_id"] = ping["extension_id"]?.DeepClone() });
         if ((tabs as JsonArray ?? []).Any(t => t is JsonObject o && o["owner"] is JsonNode owner && owner.ToString().Length > 0))
             return (Busy, new JsonObject { ["connected"] = true, ["busy"] = true, ["verified"] = false });
         if (checkOnly)
             return (Stale, new JsonObject { ["connected"] = true, ["verified"] = false, ["stale"] = true, ["version"] = ping?["version"]?.DeepClone() });
         if (ping?["installation_type"]?.GetValue<string>() is not ("store" or "development"))
             return (Stale, new JsonObject { ["verified"] = false, ["deferred"] = true, ["reason"] = "extension-installation-type-unverified" });
-        if (ping?["installation_type"]?.GetValue<string>() == "store")
+        if (ping["installation_type"]?.GetValue<string>() == "store")
         {
             if (ping["update_check"]?.GetValue<bool>() != true)
                 return (Stale, new JsonObject { ["verified"] = false, ["deferred"] = true, ["reason"] = "legacy-store-extension-awaiting-Chrome-update" });
@@ -160,8 +160,8 @@ public static partial class ExtensionRefresh
         if (waitReady is not null && !double.TryParse(waitReady, NumberStyles.Float, CultureInfo.InvariantCulture, out wait))
             throw new ArgumentException("--wait-ready must be a number of seconds");
         var (version, features) = sourceRoot is null ? Expected() :
-            (JsonNode.Parse(File.ReadAllText(Path.Combine(sourceRoot, "extension", "manifest.json")))?["version"]?.GetValue<string>() ?? throw new InvalidDataException("Payload extension version missing"),
-             Features(File.ReadAllText(Path.Combine(sourceRoot, "extension", "background.js"))));
+            (JsonNode.Parse(File.ReadAllText(Path.Join(sourceRoot, "extension", "manifest.json")))?["version"]?.GetValue<string>() ?? throw new InvalidDataException("Payload extension version missing"),
+             Features(File.ReadAllText(Path.Join(sourceRoot, "extension", "background.js"))));
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         var (code, report) = await RunAsync(HttpBridge(http, httpPort, tokenFile), checkOnly, wait, version, features);
         Console.WriteLine(report.ToJsonString());
