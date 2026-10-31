@@ -201,6 +201,14 @@ public static class GardeFous
             or UnicodeCategory.Format;
     }
 
+    // One visible character folded: confusable upper case, lower case, then confusable lower case.
+    private static char Fold(char ch)
+    {
+        char c = ConfusablesUpper.TryGetValue(ch, out char up) ? up : ch;
+        c = char.ToLowerInvariant(c);
+        return ConfusablesLower.TryGetValue(c, out char low) ? low : c;
+    }
+
     public static string Plain(string? text)
     {
         if (string.IsNullOrEmpty(text))
@@ -212,14 +220,8 @@ public static class GardeFous
             .Replace("¥", " jpy ");
 
         var sb = new StringBuilder(decomposed.Length);
-        foreach (char ch in decomposed.Where(ch => !IsInvisible(ch)))
-        {
-            char c = ConfusablesUpper.TryGetValue(ch, out char up) ? up : ch;
-            c = char.ToLowerInvariant(c);
-            if (ConfusablesLower.TryGetValue(c, out char low))
-                c = low;
+        foreach (char c in decomposed.Where(ch => !IsInvisible(ch)).Select(Fold))
             sb.Append(c);
-        }
 
         string bare = NonAlphaNumRegex.Replace(sb.ToString(), " ").Trim();
         return string.Join(" ", bare.Split(' ', StringSplitOptions.RemoveEmptyEntries));
@@ -404,14 +406,12 @@ public static class GardeFous
             return found;
         foreach (var pattern in Policy.Value.InjectionPatterns)
         {
-            foreach (string snippet in Regex.Matches(flat, pattern).Select(m => m.Value.Trim()).Select(s => s.Length > 80 ? s[..80] : s))
+            foreach (string snippet in Regex.Matches(flat, pattern).Select(m => m.Value.Trim()).Select(s => s.Length > 80 ? s[..80] : s)
+                         .Where(s => !string.IsNullOrEmpty(s) && !found.Contains(s, StringComparer.Ordinal)))
             {
-                if (!string.IsNullOrEmpty(snippet) && !found.Contains(snippet, StringComparer.Ordinal))
-                {
-                    found.Add(snippet);
-                    if (found.Count >= limit)
-                        return found;
-                }
+                found.Add(snippet);
+                if (found.Count >= limit)
+                    return found;
             }
         }
         return found;
@@ -493,10 +493,9 @@ public sealed class Accords
         if (!string.IsNullOrEmpty(flat))
         {
             var numbers = new HashSet<string>(StringComparer.Ordinal);
-            foreach (string digits in Regex.Matches(text ?? "", @"\+?\d[\d .()-]{6,}\d").Select(m => Regex.Replace(m.Value, @"\D", "")))
+            foreach (string digits in Regex.Matches(text ?? "", @"\+?\d[\d .()-]{6,}\d").Select(m => Regex.Replace(m.Value, @"\D", "")).Where(d => d.Length >= 6))
             {
-                if (digits.Length >= 6)
-                    numbers.Add(digits.Length > 9 ? digits[^9..] : digits);
+                numbers.Add(digits.Length > 9 ? digits[^9..] : digits);
             }
             lock (_lock)
             {

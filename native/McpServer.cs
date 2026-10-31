@@ -596,10 +596,10 @@ public sealed partial class McpServer : IDisposable
                 query = rawTarget[(qIdx + 1)..];
 
             string? queryAgent = null;
-            foreach (var kv in query.Split('&', StringSplitOptions.RemoveEmptyEntries).Select(part => part.Split('=', 2)))
+            foreach (var kv in query.Split('&', StringSplitOptions.RemoveEmptyEntries).Select(part => part.Split('=', 2))
+                         .Where(kv => kv.Length == 2 && string.Equals(kv[0], "agent", StringComparison.OrdinalIgnoreCase)))
             {
-                if (kv.Length == 2 && string.Equals(kv[0], "agent", StringComparison.OrdinalIgnoreCase))
-                    queryAgent = Uri.UnescapeDataString(kv[1]);
+                queryAgent = Uri.UnescapeDataString(kv[1]);
             }
 
             if (string.IsNullOrEmpty(queryAgent) || !KnownAgents.TryGetValue(queryAgent, out var agentDisplay))
@@ -1523,9 +1523,9 @@ public sealed partial class McpServer : IDisposable
         var gestures = new List<string>();
         if (text.Contains('\n') || text.Contains('\r')) gestures.Add("Enter");
         if (text.Contains(' ')) gestures.Add("Space");
-        foreach (string gesture in (keys ?? []).Select(key => KeyGesture(key?.ToString())))
+        foreach (string gesture in (keys ?? []).Select(key => KeyGesture(key?.ToString())).Where(gesture => gesture.Length > 0 && !gestures.Contains(gesture)))
         {
-            if (gesture.Length > 0 && !gestures.Contains(gesture)) gestures.Add(gesture);
+            gestures.Add(gesture);
         }
         return gestures;
     }
@@ -1577,9 +1577,9 @@ public sealed partial class McpServer : IDisposable
                 focusOk = target.Count == 0;
                 break;
             case "browser_drag_and_drop":
-                foreach (var endpoint in new[] { "from_", "to_" }.Select(prefix => Targeting(args, prefix)))
+                foreach (var endpoint in new[] { "from_", "to_" }.Select(prefix => Targeting(args, prefix)).Where(endpoint => endpoint.Count > 0))
                 {
-                    if (endpoint.Count > 0) targets.Add(endpoint);
+                    targets.Add(endpoint);
                 }
                 if (targets.Count > 0) gestures.Add("drag");
                 break;

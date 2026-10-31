@@ -41,11 +41,13 @@ public sealed class BridgeShutdownTests : IDisposable
             using var body = new StringContent(new JsonObject { ["pid"] = Environment.ProcessId, ["instance_id"] = instance }.ToJsonString(), Encoding.UTF8, "application/json");
             return await http.PostAsync(url + "/api/shutdown", body, TestContext.Current.CancellationToken);
         }
-        foreach (string malformed in new[] { "[]", "{}", "{\"instance_id\":4,\"pid\":\"x\"}" })
+        foreach (var body in new[] { "[]", "{}", "{\"instance_id\":4,\"pid\":\"x\"}" }.Select(malformed => new StringContent(malformed)))
         {
-            using var body = new StringContent(malformed);
-            using var refused = await http.PostAsync(url + "/api/shutdown", body, TestContext.Current.CancellationToken);
-            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+            using (body)
+            {
+                using var refused = await http.PostAsync(url + "/api/shutdown", body, TestContext.Current.CancellationToken);
+                Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+            }
         }
         using (var wrong = await Shutdown("another-instance")) Assert.Equal(HttpStatusCode.Conflict, wrong.StatusCode);
         using (var busy = await Shutdown(state["instance_id"]!.ToString())) Assert.Equal(HttpStatusCode.Conflict, busy.StatusCode);

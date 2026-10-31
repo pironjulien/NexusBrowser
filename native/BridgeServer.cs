@@ -154,13 +154,11 @@ public sealed class BridgeServer : IAsyncDisposable
         _emergencyStop = new EmergencyStop();
 
         var origins = allowedOrigins?.ToList() ?? LoadConfiguredOrigins();
-        foreach (var trimmed in origins.Select(origin => origin.Trim().TrimEnd('/')))
+        foreach (var trimmed in origins.Select(origin => origin.Trim().TrimEnd('/'))
+                     .Where(trimmed => trimmed.StartsWith("chrome-extension://", StringComparison.Ordinal) && !trimmed.Contains('*')))
         {
-            if (trimmed.StartsWith("chrome-extension://", StringComparison.Ordinal) && !trimmed.Contains('*'))
-            {
-                _allowedOrigins.Add(trimmed);
-                _allowedOrigins.Add(trimmed + "/");
-            }
+            _allowedOrigins.Add(trimmed);
+            _allowedOrigins.Add(trimmed + "/");
         }
     }
 
@@ -1286,8 +1284,9 @@ public sealed class BridgeServer : IAsyncDisposable
                     if (client.HasValue && headers.TryGetValue(BridgeSecurity.GoneHeader.ToLowerInvariant(), out var goneHdr))
                     {
                         gone ??= [];
+                        var caller = client.Value;
                         foreach (var id in goneHdr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(32)
-                                     .Where(id => id != client.Value.Id && BridgeSecurity.CheckIdentity(client.Value.Agent, id) is not null && !gone.Contains(id)))
+                                     .Where(id => id != caller.Id && BridgeSecurity.CheckIdentity(caller.Agent, id) is not null && !gone.Contains(id)))
                             gone.Add(id);
                     }
 
