@@ -5,6 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+- CodeQL (GitHub default setup) and the OpenSSF Scorecard workflow run again on every push to main.
+
 ## [2.33.11] - 2026-10-31
 
 ### Changed
