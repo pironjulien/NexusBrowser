@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 - Release: a push whose version is not released yet becomes the stable release right after its development build
   (same files); "Run workflow" still promotes by hand. CodeQL and OpenSSF Scorecard workflows removed.
+- Chrome Web Store: GitHub no longer sends the extension. `scripts/publish-store.ps1` sends a stable release's
+  extension on request (checked against its `SHA256SUMS.txt`, token from gcloud as the `cws-publisher` service
+  account) and says when an earlier version is still in review.
 
 ## [2.33.10] - 2026-10-31
 
