@@ -3,6 +3,12 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- A Chrome Web Store submission while Google still reviews an earlier one is reported as a warning instead of
+  failing the stable release; the next stable release submits again.
+
 ## [2.33.8] - 2026-10-31
 
 ### Added

@@ -156,9 +156,14 @@ jobs:
           echo "$upload"
           state=$(jq -r '.uploadState // "FAILURE"' <<<"$upload")
           if [[ "$state" != SUCCESS && "$state" != IN_PROGRESS ]]; then
-            # The same extension version is already in the store (only the engine changed): nothing to submit.
+            # The same extension version is already in the store (only the engine changed), or Google is still
+            # reviewing an earlier submission: nothing to submit now; the next stable release submits again.
             if jq -e '[.itemError[]?.error_detail // ""] | any(test("version"; "i"))' <<<"$upload" >/dev/null; then
               echo "::notice::The Chrome Web Store already has this extension version; nothing submitted."
+              exit 0
+            fi
+            if jq -e '[.itemError[]?.error_detail // ""] | any(test("pending review|ready to publish"; "i"))' <<<"$upload" >/dev/null; then
+              echo "::warning::The Chrome Web Store is still reviewing an earlier submission; this version was not submitted."
               exit 0
             fi
             exit 1
