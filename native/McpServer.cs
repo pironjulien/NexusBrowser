@@ -221,16 +221,8 @@ public sealed partial class McpServer : IDisposable
     {
         string raw = LoadEmbeddedText("tools.json");
         var arr = JsonNode.Parse(raw) as JsonArray ?? new JsonArray();
-        var structured = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var item in arr)
-        {
-            if (item is JsonObject toolObj &&
-                toolObj["name"]?.GetValue<string>() is { } name &&
-                toolObj["outputSchema"] is JsonObject)
-            {
-                structured.Add(name);
-            }
-        }
+        var structured = arr.OfType<JsonObject>().Where(tool => tool["outputSchema"] is JsonObject)
+            .Select(tool => tool["name"]?.GetValue<string>()).OfType<string>().ToHashSet(StringComparer.Ordinal);
         return (arr, structured);
     }
 
@@ -266,7 +258,7 @@ public sealed partial class McpServer : IDisposable
                     await CallBridgeRawAsync("heartbeat", new JsonObject { ["reclaim"] = reclaim }, 5.0, _processIdentity, _processPid, ct, recover: false);
                     reclaim = false;
                 }
-                catch
+                catch (Exception caught) when (Boundary.Recoverable(caught))
                 {
                     // Deliberate boundary: any heartbeat failure is retried on the next beat
                 }
@@ -285,8 +277,8 @@ public sealed partial class McpServer : IDisposable
     public void Dispose()
     {
         // Best-effort shutdown: one failed step must not keep the other from running.
-        try { _heartbeatCts?.Cancel(); } catch { /* best-effort shutdown */ }
-        try { _httpClient.Dispose(); } catch { /* best-effort shutdown */ }
+        try { _heartbeatCts?.Cancel(); } catch (Exception caught) when (Boundary.Recoverable(caught)) { /* best-effort shutdown */ }
+        try { _httpClient.Dispose(); } catch (Exception caught) when (Boundary.Recoverable(caught)) { /* best-effort shutdown */ }
         _heartbeatCts?.Dispose();
     }
 
@@ -376,7 +368,7 @@ public sealed partial class McpServer : IDisposable
                 {
                     break;
                 }
-                catch
+                catch (Exception caught) when (Boundary.Recoverable(caught))
                 {
                     // Deliberate boundary: a failed accept never stops the listener loop
                     continue;
@@ -401,8 +393,8 @@ public sealed partial class McpServer : IDisposable
         {
             linkedCts.Cancel();
             // The background loops' outcome no longer matters once they are cancelled.
-            try { await sessionHeartbeatTask; } catch { /* best-effort shutdown */ }
-            try { await restartTask; } catch { /* best-effort shutdown */ }
+            try { await sessionHeartbeatTask; } catch (Exception caught) when (Boundary.Recoverable(caught)) { /* best-effort shutdown */ }
+            try { await restartTask; } catch (Exception caught) when (Boundary.Recoverable(caught)) { /* best-effort shutdown */ }
         }
     }
 
@@ -482,13 +474,13 @@ public sealed partial class McpServer : IDisposable
                         // autre (30/10). La conversation qui en a besoin les reprend (adopt_tab) ou les ferme.
                         await CallBridgeRawAsync("heartbeat", new JsonObject { ["reclaim"] = false }, 5.0, ident, _processPid, ct, recover: false);
                     }
-                    catch
+                    catch (Exception caught) when (Boundary.Recoverable(caught))
                     {
                         // Deliberate boundary: any heartbeat failure is retried next tick
                     }
                 }
             }
-            catch
+            catch (Exception caught) when (Boundary.Recoverable(caught))
             {
                 // Deliberate boundary: keep the never-crash daemon loop alive
             }
@@ -562,7 +554,7 @@ public sealed partial class McpServer : IDisposable
                         ["fingerprint"] = RestartRequest.RuntimeFingerprint,
                     });
                 }
-                catch
+                catch (Exception caught) when (Boundary.Recoverable(caught))
                 {
                     // Deliberate boundary: any failure to load the tool list is reported as unhealthy
                     await WriteHttpPlainAsync(stream, 503, "Native capabilities unavailable");
@@ -721,7 +713,7 @@ public sealed partial class McpServer : IDisposable
                 await WriteHttpJsonAsync(stream, 200, replyObj, extraHeaders);
             }
         }
-        catch
+        catch (Exception caught) when (Boundary.Recoverable(caught))
         {
             // Deliberate boundary: dropped HTTP connection; the daemon keeps serving
         }
@@ -851,7 +843,7 @@ public sealed partial class McpServer : IDisposable
                 ["result"] = result,
             };
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Boundary.Recoverable(ex))
         {
             // Deliberate boundary: any failure becomes a JSON-RPC error answer
             return new JsonObject
@@ -981,7 +973,7 @@ public sealed partial class McpServer : IDisposable
 
             return callResult;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Boundary.Recoverable(ex))
         {
             // Deliberate boundary: any tool failure is journaled and returned as a tool error
             if (name != "browser_batch")
@@ -1048,7 +1040,7 @@ public sealed partial class McpServer : IDisposable
             };
             Journal.Ecrire(identity.Agent, ligne);
         }
-        catch
+        catch (Exception caught) when (Boundary.Recoverable(caught))
         {
             // Deliberate boundary: never fail a tool call on a journal write
         }
@@ -1662,7 +1654,7 @@ public sealed partial class McpServer : IDisposable
             ["method"] = "Runtime.evaluate",
             ["commandParams"] = new JsonObject
             {
-                ["expression"] = $"{TriggerProbeJs.Value}({spec.ToJsonString(CompactJson)})",
+                ["expression"] = $"({TriggerProbeJs.Value})({spec.ToJsonString(CompactJson)})",
                 ["returnByValue"] = true,
                 ["awaitPromise"] = false,
             },
@@ -1833,7 +1825,7 @@ public sealed partial class McpServer : IDisposable
             ["tab_id"] = tabId, ["method"] = "Runtime.evaluate",
             ["commandParams"] = new JsonObject
             {
-                ["expression"] = $"{WebMcpProbeJs.Value}({spec.ToJsonString(CompactJson)})", ["returnByValue"] = true, ["awaitPromise"] = true,
+                ["expression"] = $"({WebMcpProbeJs.Value})({spec.ToJsonString(CompactJson)})", ["returnByValue"] = true, ["awaitPromise"] = true,
             },
         }, timeout, identity, pid, ct) as JsonObject;
         if (answer is not null && GetBool(answer, "dialogOpened", false)) return answer;
@@ -2034,7 +2026,7 @@ public sealed partial class McpServer : IDisposable
                 if (!GetBool(entry, "ok", false)) continue;
                 JsonObject final;
                 try { final = readable ? await Read(steps[i]) : new JsonObject { ["error"] = "current state unknown: dialog open, no read-back" }; }
-                catch (Exception ex) { final = new JsonObject { ["error"] = ex.Message }; } // deliberate: a failed read-back is reported per step
+                catch (Exception ex) when (Boundary.Recoverable(ex)) { final = new JsonObject { ["error"] = ex.Message }; } // deliberate: a failed read-back is reported per step
                 entry["final_verified"] = final["verified"]?.DeepClone();
                 var values = new JsonObject();
                 foreach (var key in new[] { "value", "checked", "selectedText", "error" }.Where(final.ContainsKey))
@@ -2147,7 +2139,7 @@ public sealed partial class McpServer : IDisposable
                 await Task.Delay(250, ct);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Boundary.Recoverable(ex))
         {
             // Deliberate boundary: any failure is returned as a tool error
             return ErrorJson(ex.Message);
@@ -2300,7 +2292,7 @@ public sealed partial class McpServer : IDisposable
 
             return payload.ToJsonString(CompactJson);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Boundary.Recoverable(ex))
         {
             // Deliberate boundary: any failure is returned as a tool error
             return ErrorJson(ex.Message);

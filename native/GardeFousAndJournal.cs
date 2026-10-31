@@ -590,11 +590,7 @@ public sealed class Accords
         var values = new List<string>();
         if (act["recipients"] is JsonArray arr)
         {
-            foreach (var item in arr)
-            {
-                if (item?.GetValue<string>() is { Length: > 0 } r)
-                    values.Add(r);
-            }
+            values.AddRange(arr.Select(item => item?.GetValue<string>()).OfType<string>().Where(r => r.Length > 0));
         }
         if (act["target"]?.GetValue<string>() is { Length: > 0 } t)
             values.Add(t);
@@ -864,7 +860,7 @@ public static class Journal
                 File.AppendAllText(chemin, text, new UTF8Encoding(false));
             }
         }
-        catch
+        catch (Exception caught) when (Boundary.Recoverable(caught))
         {
             // Deliberate boundary: never block tool execution on journal failure
         }

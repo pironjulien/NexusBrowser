@@ -59,17 +59,15 @@ internal sealed class ChromeLauncher
 
     internal static bool IsRunning()
     {
-        var processes = Process.GetProcessesByName("chrome");
-        try
-        {
-            using var current = Process.GetCurrentProcess();
-            int session = current.SessionId;
-            foreach (var process in processes)
-                try { if (!process.HasExited && process.SessionId == session) return true; }
+        using var current = Process.GetCurrentProcess();
+        int session = current.SessionId;
+        bool running = false;
+        // Every handle is disposed, also after a match.
+        foreach (var process in Process.GetProcessesByName("chrome"))
+            using (process)
+                try { running = running || !process.HasExited && process.SessionId == session; }
                 catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { /* exited or inaccessible: not ours */ }
-            return false;
-        }
-        finally { foreach (var process in processes) process.Dispose(); }
+        return running;
     }
 
     internal static string? LocateExecutable()

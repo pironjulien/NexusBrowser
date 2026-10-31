@@ -15,7 +15,7 @@ namespace NexusBrowser.Native;
 
 public static partial class BridgeSecurity
 {
-    public const string Version = "2.33.10";
+    public const string Version = "2.33.11";
     public const string TokenFileName = "bridge-token";
     public const string TokenHeader = "X-Nexus-Browser-Token";
     public const string AgentHeader = "X-Nexus-Browser-Agent";
@@ -243,7 +243,7 @@ public static partial class BridgeSecurity
             using var proc = Process.Start(psi);
             proc?.WaitForExit(5000);
         }
-        catch
+        catch (Exception caught) when (Boundary.Recoverable(caught))
         {
             // Deliberate best-effort boundary: ACL hardening must never block token creation
         }
@@ -400,7 +400,7 @@ public static partial class BridgeSecurity
         if (text == "~" || text.StartsWith("~/", StringComparison.Ordinal) || text.StartsWith(@"~\", StringComparison.Ordinal))
         {
             var home = HomeDir();
-            text = text.Length == 1 ? home : Path.Combine(home, text[2..]);
+            text = text.Length == 1 ? home : Path.Join(home, text[2..]);
         }
 
         text = text.Replace('/', '\\');

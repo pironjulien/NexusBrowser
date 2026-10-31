@@ -5,7 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.33.11] - 2026-10-31
+
 ### Changed
+- Code quality, behavior unchanged (remaining CodeQL notes): every Win32 call uses source-generated `LibraryImport`
+  (Explorer launch broker, process tests, lifetime fixture); boundaries and best-effort shutdowns contain every
+  failure except fatal ones (`OutOfMemoryException`, `InsufficientExecutionStackException`), which now end the
+  process (`Boundary.Recoverable`); disposables use `using`; implicit loop filters written as `Where`; `Path.Join`
+  for the home expansion and the Antigravity logo copy (a rooted logo name can no longer leave the plugin folder);
+  the trigger and WebMCP probes are named functions, wrapped into an expression where they are evaluated.
 - Release: a push whose version is not released yet becomes the stable release right after its development build
   (same files); "Run workflow" still promotes by hand. CodeQL and OpenSSF Scorecard workflows removed.
 - Chrome Web Store: GitHub no longer sends the extension. `scripts/publish-store.ps1` sends a stable release's
@@ -1491,7 +1499,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.33.0...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.33.11...HEAD
+[2.33.11]: https://github.com/pironjulien/NexusBrowser/compare/v2.33.10...v2.33.11
 [2.33.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.32.0...v2.33.0
 [2.26.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.3
 [2.26.2]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.2

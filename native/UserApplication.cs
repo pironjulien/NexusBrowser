@@ -10,15 +10,16 @@ sealed class UserApplicationUnavailableException(string message, Exception? inne
 // Process.Start(UseShellExecute=true) still creates an inherited child: neither is a lifetime boundary.
 // https://devblogs.microsoft.com/oldnewthing/20131118-00/?p=2643
 // No fallback to an inherited process after an unavailable broker, and no retry after ShellExecute was entered.
-static unsafe class UserApplication
+static unsafe partial class UserApplication
 {
-    [DllImport("user32.dll")] static extern nint GetShellWindow();
-    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(nint hwnd, out uint pid);
-    [DllImport("user32.dll", SetLastError = true)] static extern nint OpenDesktop(string lpszDesktop, uint dwFlags, bool fInherit, uint dwDesiredAccess);
-    [DllImport("user32.dll", SetLastError = true)] static extern bool SetThreadDesktop(nint hDesktop);
-    [DllImport("user32.dll", SetLastError = true)] static extern bool CloseDesktop(nint hDesktop);
-    [DllImport("user32.dll")] static extern nint GetThreadDesktop(int dwThreadId);
-    [DllImport("kernel32.dll")] static extern int GetCurrentThreadId();
+    [LibraryImport("user32.dll")] private static partial nint GetShellWindow();
+    [LibraryImport("user32.dll")] private static partial uint GetWindowThreadProcessId(nint hwnd, out uint pid);
+    [LibraryImport("user32.dll", EntryPoint = "OpenDesktopW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint OpenDesktop(string lpszDesktop, uint dwFlags, [MarshalAs(UnmanagedType.Bool)] bool fInherit, uint dwDesiredAccess);
+    [LibraryImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool SetThreadDesktop(nint hDesktop);
+    [LibraryImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool CloseDesktop(nint hDesktop);
+    [LibraryImport("user32.dll")] private static partial nint GetThreadDesktop(int dwThreadId);
+    [LibraryImport("kernel32.dll")] private static partial int GetCurrentThreadId();
     static nint* Table(nint value) => *(nint**)value;
     static void Check(int result) { if (result < 0) Marshal.ThrowExceptionForHR(result); }
     static void Release(nint value) { if (value != 0) Marshal.Release(value); }
@@ -32,7 +33,7 @@ static unsafe class UserApplication
             throw new UserApplicationUnavailableException("The user-application broker takes an argument string and no redirected protocol handles; nothing was launched");
         object? application;
         try { application = DesktopApplication(); }
-        catch (Exception error) { throw new UserApplicationUnavailableException("The interactive Explorer launch broker is unavailable; nothing was launched", error); } // deliberate: any COM failure means no broker
+        catch (Exception error) when (Boundary.Recoverable(error)) { throw new UserApplicationUnavailableException("The interactive Explorer launch broker is unavailable; nothing was launched", error); } // deliberate: any COM failure means no broker
         try
         {
             started();

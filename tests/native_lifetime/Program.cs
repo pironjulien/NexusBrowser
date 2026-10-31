@@ -4,7 +4,7 @@ using System.Text.Json;
 using NexusBrowser.Native;
 
 // Only this disposable WinExe is launched: no Chrome process, profile or user window is used.
-internal static class Program
+internal static partial class Program
 {
     public static int Main(string[] args)
     {
@@ -49,7 +49,7 @@ internal static class Program
             }
             return 3;
         }
-        catch (Exception error)
+        catch (Exception error) when (Boundary.Recoverable(error))
         {
             // Deliberate boundary: the fixture reports any failure to the test instead of crashing
             Write(ready, new { error = error.ToString() });
@@ -115,7 +115,7 @@ internal static class Program
         {
             File.WriteAllText(Path.Join(folder, "child.stop"), "cleanup");
             if (job != 0) CloseHandle(job);
-            if (child is not null) { child.WaitForExit(5000); child.Dispose(); }
+            using (child) child?.WaitForExit(5000);
             if (callerStarted) { caller.WaitForExit(5000); Console.Error.Write(caller.StandardError.ReadToEnd()); }
         }
     }
@@ -141,11 +141,11 @@ internal static class Program
     [StructLayout(LayoutKind.Sequential)] private struct IoCounters { public ulong ReadOps, WriteOps, OtherOps, ReadBytes, WriteBytes, OtherBytes; }
     [StructLayout(LayoutKind.Sequential)] private struct ExtendedLimits { public BasicLimits Basic; public IoCounters Io; public nuint ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory; }
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern nint CreateJobObjectW(nint security, string? name);
-    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetInformationJobObject(nint job, int informationClass, ref ExtendedLimits info, uint length);
-    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool AssignProcessToJobObject(nint job, nint process);
-    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool CloseHandle(nint handle);
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)] private static partial nint CreateJobObjectW(nint security, string? name);
+    [LibraryImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool SetInformationJobObject(nint job, int informationClass, ref ExtendedLimits info, uint length);
+    [LibraryImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool AssignProcessToJobObject(nint job, nint process);
+    [LibraryImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool CloseHandle(nint handle);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsProcessInJob(nint process, nint job, [MarshalAs(UnmanagedType.Bool)] out bool result);
+    private static partial bool IsProcessInJob(nint process, nint job, [MarshalAs(UnmanagedType.Bool)] out bool result);
 }

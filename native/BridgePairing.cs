@@ -142,11 +142,8 @@ public sealed class PairingStore
             if (node is not JsonObject obj)
                 return new Dictionary<string, string>(StringComparer.Ordinal);
             var dict = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var kv in obj)
-            {
-                if (kv.Value is JsonValue v && v.TryGetValue<string>(out var s) && s != null)
-                    dict[kv.Key] = s;
-            }
+            foreach (var kv in obj.Where(kv => kv.Value is JsonValue v && v.TryGetValue<string>(out var s) && s != null))
+                dict[kv.Key] = kv.Value!.GetValue<string>();
             return dict;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)

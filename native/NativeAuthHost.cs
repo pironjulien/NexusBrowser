@@ -141,7 +141,7 @@ public static class NativeAuthHost
         {
             reply = Fail(error.Message);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Boundary.Recoverable(ex))
         {
             // Deliberate boundary: Chrome always gets an answer, never a crashed host
             reply = Fail(ex.Message);

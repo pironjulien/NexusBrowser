@@ -298,7 +298,7 @@ internal sealed class FakeBridge : IDisposable
                 {
                     lock (_commands) _commands.Add((JsonObject)request.DeepClone());
                     try { response = new JsonObject { ["success"] = true, ["data"] = _answer(action, parameters)?.DeepClone() }; }
-                    catch (Exception error)
+                    catch (Exception error) when (Boundary.Recoverable(error))
                     {
                         // Deliberate: the fake bridge answers any handler failure as an error, like the real one
                         status = 400;

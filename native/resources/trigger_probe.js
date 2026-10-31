@@ -4,7 +4,7 @@
 // Rend : libellé de l'élément cliquable, boutons d'envoi de son formulaire, champs de ce formulaire (jamais la valeur
 // d'un champ sensible), destinataires et pièces jointes reconnaissables, URL et titre.
 // spec : {mark} | {selector, index} | {text} | {id, tag, point} (candidat de l'action find) | {} (élément actif).
-(function (spec) {
+function triggerProbe(spec) {
     const win = typeof window !== "undefined" ? window : globalThis;
     const doc = typeof document !== "undefined" ? document : null;
     const clip = (v, n) => String(v === undefined || v === null ? "" : v).replace(/[\s ]+/g, " ").trim().slice(0, n || 200);
@@ -265,4 +265,4 @@
         tabTitle: clip(doc && doc.title, 200),
         tabUrl: url
     };
-})
+}

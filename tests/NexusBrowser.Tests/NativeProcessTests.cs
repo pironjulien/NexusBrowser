@@ -24,11 +24,11 @@ public sealed partial class NativeProcessTests : IDisposable
     // Chrome launches the WinExe through cmd.exe: a console exists, the redirected streams must stay.
     // ---------------------------------------------------------------------------------------------
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    [StructLayout(LayoutKind.Sequential)]
     private struct StartupInfo
     {
         public int cb;
-        public string? lpReserved, lpDesktop, lpTitle;
+        public nint lpReserved, lpDesktop, lpTitle;
         public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
         public short wShowWindow, cbReserved2;
         public nint lpReserved2, hStdInput, hStdOutput, hStdError;
@@ -41,22 +41,23 @@ public sealed partial class NativeProcessTests : IDisposable
         public int dwProcessId, dwThreadId;
     }
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    // commandLine: a writable, null-terminated buffer (CreateProcessW may modify it in place).
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreateProcessW(string? application, StringBuilder commandLine, nint processAttributes, nint threadAttributes,
+    private static partial bool CreateProcessW(string? application, ref char commandLine, nint processAttributes, nint threadAttributes,
         [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint creationFlags, nint environment, string? currentDirectory,
         ref StartupInfo startupInfo, out ProcessInformation processInformation);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint WaitForSingleObject(nint handle, uint milliseconds);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial uint WaitForSingleObject(nint handle, uint milliseconds);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetExitCodeProcess(nint process, out uint exitCode);
+    private static partial bool GetExitCodeProcess(nint process, out uint exitCode);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CloseHandle(nint handle);
+    private static partial bool CloseHandle(nint handle);
 
     [Fact]
     public void ChromeCmdConsolePreservesNativeMessageStreams()
@@ -72,7 +73,8 @@ public sealed partial class NativeProcessTests : IDisposable
         string comspec = Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe";
         string command = $"\"\"{NativeExe.Path}\" chrome-extension://{FakeExtension.Id}/ --parent-window=0 < \"{incoming}\" > \"{outgoing}\"\"";
         var startup = new StartupInfo { cb = Marshal.SizeOf<StartupInfo>(), dwFlags = 0x1 /* STARTF_USESHOWWINDOW */, wShowWindow = 0 /* SW_HIDE */ };
-        if (!CreateProcessW(null, new StringBuilder($"{comspec} /d /s /c {command}"), 0, 0, false, 0x10 /* CREATE_NEW_CONSOLE */, 0, null, ref startup, out var info))
+        char[] commandLine = $"{comspec} /d /s /c {command}\0".ToCharArray();
+        if (!CreateProcessW(null, ref commandLine[0], 0, 0, false, 0x10 /* CREATE_NEW_CONSOLE */, 0, null, ref startup, out var info))
             throw new Win32Exception();
         try
         {

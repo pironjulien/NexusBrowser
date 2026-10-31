@@ -18,7 +18,7 @@ public static class Program
     public static async Task<int> Main(string[] args)
     {
         try { return await RunAsync(args); }
-        catch (Exception error)
+        catch (Exception error) when (Boundary.Recoverable(error))
         {
             // Deliberate top-level boundary.
             // A failed second daemon must report its occupied port and exit, not open a Windows crash dialog.

@@ -39,7 +39,6 @@ internal sealed class Daemon : IDisposable
             ["NEXUS_BROWSER_RESTART_REQUEST"] = dir["daemon-restart.request"],
         };
         var daemon = new Daemon(new ChildProcess(NativeExe.Path, ["--http", port.ToString()], env), $"http://127.0.0.1:{port}") { RestartPath = dir["daemon-restart.request"] };
-        bool ready = false;
         try
         {
             var clock = Stopwatch.StartNew();
@@ -48,7 +47,7 @@ internal sealed class Daemon : IDisposable
                 try
                 {
                     using var health = await daemon._http.GetAsync(daemon.Base + "/health");
-                    if (health.IsSuccessStatusCode) { ready = true; return daemon; }
+                    if (health.IsSuccessStatusCode) return daemon;
                 }
                 catch (HttpRequestException) { /* not listening yet: retry */ }
                 if (daemon.Process.Process.HasExited || clock.Elapsed > TimeSpan.FromSeconds(10))
@@ -56,7 +55,11 @@ internal sealed class Daemon : IDisposable
                 await Task.Delay(50);
             }
         }
-        finally { if (!ready) daemon.Dispose(); }
+        catch
+        {
+            daemon.Dispose(); // only a ready daemon is handed to the caller
+            throw;
+        }
     }
 
     public async Task<HttpResponseMessage> SendAsync(HttpMethod method, string agent, string? body, string? session = null)

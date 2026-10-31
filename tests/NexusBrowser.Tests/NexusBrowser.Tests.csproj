@@ -5,6 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- Source-generated P/Invoke (LibraryImport) of the process tests. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>NexusBrowser.Tests</RootNamespace>
     <!-- Test results beside the build, never in the repository (OneDrive). -->
     <TestingPlatformCommandLineArguments>$(TestingPlatformCommandLineArguments) --results-directory "$(NexusBrowserBuild)TestResults"</TestingPlatformCommandLineArguments>

@@ -337,7 +337,7 @@ public static partial class ClientRegistration
             var manifest = ReadJson(Path.Join(source, "plugin.json"));
             WriteAtomic(Path.Join(plugin, "plugin.json"), Json(manifest));
             string logo = manifest["logo"]?.ToString() ?? "logo.png";
-            File.Copy(Path.Combine(source, logo), Path.Combine(plugin, logo), overwrite: true);
+            File.Copy(Path.Join(source, logo), Path.Join(plugin, logo), overwrite: true);
             WriteAtomic(pluginConfig, Json(new JsonObject { ["mcpServers"] = new JsonObject { [Name] = Entry(c.Exe, "Antigravity") } }));
             WriteAtomic(Path.Join(plugin, "skills", Name, "SKILL.md"), File.ReadAllText(Path.Join(source, "skills", Name, "SKILL.md"), Encoding.UTF8));
             RemoveJsonServer(Path.Join(folder, "mcp_config.json"), c.Backups); // global entry of an earlier version

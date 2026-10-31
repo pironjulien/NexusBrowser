@@ -2221,7 +2221,7 @@ test("trigger_probe.js (accord des gestes sortants) : lecture sans geste du déc
     // Script envoyé par le serveur MCP dans le monde isolé par cdp-send (Runtime.evaluate) : aucune action nouvelle.
     const source = fs.readFileSync(path.join(__dirname, '..', 'native', 'resources', 'trigger_probe.js'), 'utf8');
     const probeIn = (dom) => {
-        const fn = vm.runInNewContext(source, {document: dom.doc, window: dom.win});
+        const fn = vm.runInNewContext(`(${source})`, {document: dom.doc, window: dom.win});
         return (spec) => JSON.parse(JSON.stringify(fn(spec)));  // autre royaume (vm)
     };
     const dom = richDom((h) => [
@@ -2322,7 +2322,7 @@ test("trigger_probe.js : bouton d'un composant web (texte rendu par un slot ou d
     const som = new Map([[30, button], [31, host]]);
     const doc = {title: 'Partner Center', querySelectorAll: (sel) => sel === '*' ? [body, ...body.querySelectorAll('*')] : [], getElementById: () => null, activeElement: null};
     const win = {__nexus_som_elements: som, location: {href: 'https://partner.microsoft.com/dashboard/products/x/submissions/1'}};
-    const probe = (spec) => JSON.parse(JSON.stringify(vm.runInNewContext(source, {document: doc, window: win})(spec)));
+    const probe = (spec) => JSON.parse(JSON.stringify(vm.runInNewContext(`(${source})`, {document: doc, window: win})(spec)));
     // mark sur le <button> de la shadow root (libellé DOM vide) : le texte rendu par le slot est lu.
     assert.deepEqual([probe({mark: 30}).label, probe({mark: 30}).clickable], ['Publier maintenant', true]);
     // mark sur l'hôte du composant : son bouton intérieur le rend cliquable.
@@ -4484,7 +4484,7 @@ test("webmcp_probe.js (outils WebMCP de la page) : liste sans geste, appel seule
         }
     };
     const run = (context) => {
-        const fn = vm.runInNewContext(source, {
+        const fn = vm.runInNewContext(`(${source})`, {
             document: context.doc, navigator: {}, location: {href: 'https://bistro.example/?s=1'}, window: win,
             URL, AbortController, setTimeout, clearTimeout
         });

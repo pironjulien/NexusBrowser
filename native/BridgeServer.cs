@@ -272,9 +272,9 @@ public sealed class BridgeServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         // Best-effort shutdown: one failed step must not keep the others from running.
-        try { _cts?.Cancel(); } catch { /* best-effort shutdown */ }
-        try { _wsListener?.Dispose(); } catch { /* best-effort shutdown */ }
-        try { _httpListener?.Dispose(); } catch { /* best-effort shutdown */ }
+        try { _cts?.Cancel(); } catch (Exception caught) when (Boundary.Recoverable(caught)) { /* best-effort shutdown */ }
+        try { _wsListener?.Dispose(); } catch (Exception caught) when (Boundary.Recoverable(caught)) { /* best-effort shutdown */ }
+        try { _httpListener?.Dispose(); } catch (Exception caught) when (Boundary.Recoverable(caught)) { /* best-effort shutdown */ }
 
         List<BridgeClientConnection> clients;
         lock (_stateLock)
@@ -284,13 +284,13 @@ public sealed class BridgeServer : IAsyncDisposable
         }
         foreach (var c in clients)
         {
-            try { c.WebSocket.Dispose(); } catch { /* best-effort shutdown */ }
+            try { c.WebSocket.Dispose(); } catch (Exception caught) when (Boundary.Recoverable(caught)) { /* best-effort shutdown */ }
         }
 
         // The background loops' outcome no longer matters once they are stopped.
-        if (_wsAcceptTask != null) { try { await _wsAcceptTask; } catch { /* best-effort shutdown */ } }
-        if (_httpAcceptTask != null) { try { await _httpAcceptTask; } catch { /* best-effort shutdown */ } }
-        if (_stopWatchTask != null) { try { await _stopWatchTask; } catch { /* best-effort shutdown */ } }
+        if (_wsAcceptTask != null) { try { await _wsAcceptTask; } catch (Exception caught) when (Boundary.Recoverable(caught)) { /* best-effort shutdown */ } }
+        if (_httpAcceptTask != null) { try { await _httpAcceptTask; } catch (Exception caught) when (Boundary.Recoverable(caught)) { /* best-effort shutdown */ } }
+        if (_stopWatchTask != null) { try { await _stopWatchTask; } catch (Exception caught) when (Boundary.Recoverable(caught)) { /* best-effort shutdown */ } }
         _cts?.Dispose();
     }
 
@@ -315,7 +315,7 @@ public sealed class BridgeServer : IAsyncDisposable
             {
                 break;
             }
-            catch
+            catch (Exception caught) when (Boundary.Recoverable(caught))
             {
                 // Deliberate boundary: a failed accept never stops the listener loop
                 continue;
@@ -327,10 +327,10 @@ public sealed class BridgeServer : IAsyncDisposable
                 {
                     await handler(client, ct);
                 }
-                catch
+                catch (Exception caught) when (Boundary.Recoverable(caught))
                 {
                     // Deliberate boundary: a failed connection handler must not fault the unobserved task
-                    try { client.Dispose(); } catch { /* best-effort cleanup */ }
+                    try { client.Dispose(); } catch (Exception disposeFailure) when (Boundary.Recoverable(disposeFailure)) { /* best-effort cleanup */ }
                 }
             }, ct);
         }
@@ -403,7 +403,7 @@ public sealed class BridgeServer : IAsyncDisposable
             await SafeCloseWebSocketAsync(ws, (WebSocketCloseStatus)1008, "Authentication failed");
             return;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Boundary.Recoverable(ex))
         {
             // Deliberate boundary: any other failure only ends this connection
             Log("INFO", $"WebSocket connection ended during authentication: {ex.Message}");
@@ -479,7 +479,7 @@ public sealed class BridgeServer : IAsyncDisposable
                 }
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Boundary.Recoverable(ex))
         {
             // Deliberate boundary: any failure only ends this connection
             Log("INFO", $"WebSocket connection ended: {ex.Message}");
@@ -634,7 +634,7 @@ public sealed class BridgeServer : IAsyncDisposable
                 await ws.CloseAsync(status, description, cts.Token);
             }
         }
-        catch
+        catch (Exception caught) when (Boundary.Recoverable(caught))
         {
             // Deliberate best-effort cleanup: the peer may already be gone
         }
@@ -661,15 +661,12 @@ public sealed class BridgeServer : IAsyncDisposable
                     if (JsonNode.Parse(File.ReadAllText(fichier, Encoding.UTF8)) is JsonObject lu &&
                         lu["sources"] is JsonObject srcObj)
                     {
-                        foreach (var kv in srcObj)
+                        foreach (var kv in srcObj.Where(kv => kv.Value is JsonObject entry &&
+                                     TryGetString(entry, "at") is { } atStr &&
+                                     DateTimeOffset.TryParse(atStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var atTime) &&
+                                     (maintenant - atTime).TotalSeconds < 86_400))
                         {
-                            if (kv.Value is JsonObject entry &&
-                                TryGetString(entry, "at") is { } atStr &&
-                                DateTimeOffset.TryParse(atStr, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var atTime) &&
-                                (maintenant - atTime).TotalSeconds < 86_400)
-                            {
-                                sources[kv.Key] = (JsonObject)entry.DeepClone();
-                            }
+                            sources[kv.Key] = (JsonObject)kv.Value!.DeepClone();
                         }
                     }
                 }
@@ -735,7 +732,7 @@ public sealed class BridgeServer : IAsyncDisposable
             var p = new JsonObject { ["hold_s"] = Math.Round(left, 1) };
             await SendCommandToChromeAsync("emergency_stop", p, 5.0, client: null, target: target, gone: null);
         }
-        catch
+        catch (Exception caught) when (Boundary.Recoverable(caught))
         {
             // Deliberate best-effort notification: the extension may be absent or gone
         }
@@ -780,7 +777,7 @@ public sealed class BridgeServer : IAsyncDisposable
                     await CancelForStopAsync(left);
                 }
             }
-            catch
+            catch (Exception caught) when (Boundary.Recoverable(caught))
             {
                 // Deliberate boundary: keep the never-crash watcher loop alive
             }
@@ -891,7 +888,7 @@ public sealed class BridgeServer : IAsyncDisposable
                 await chosen.SendAsync(ordered);
                 break;
             }
-            catch
+            catch (Exception caught) when (Boundary.Recoverable(caught))
             {
                 // Deliberate boundary: any send failure makes this connection unusable; try the next one
                 lock (_stateLock)
@@ -1308,7 +1305,7 @@ public sealed class BridgeServer : IAsyncDisposable
                             ["emergency_stop"] = true,
                         });
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (Boundary.Recoverable(ex))
                     {
                         // Deliberate boundary: any command failure is answered to the caller, never left unanswered
                         await SendJsonResponseAsync(stream, 400, new JsonObject
@@ -1328,7 +1325,7 @@ public sealed class BridgeServer : IAsyncDisposable
         {
             await SendJsonResponseAsync(stream, 408, new JsonObject { ["success"] = false, ["error"] = "HTTP request timed out" });
         }
-        catch
+        catch (Exception caught) when (Boundary.Recoverable(caught))
         {
             // Deliberate boundary: connection closed or failed; the bridge keeps serving
         }

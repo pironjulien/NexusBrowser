@@ -105,10 +105,9 @@ public sealed partial class McpServer
         if (factor.HasValue) { meta["css_origin"] = origin; meta["css_per_image_px"] = Math.Round(factor.Value, 6); }
         data["image"] = meta;
         if (factor is > 0 && data["markers"] is JsonArray markers)
-            foreach (var marker in markers.OfType<JsonObject>())
-                if (marker["rect"] is JsonObject r)
+            foreach (var (marker, r) in markers.OfType<JsonObject>().Select(m => (m, m["rect"] as JsonObject)).Where(p => p.Item2 is not null))
                 {
-                    double x = (Number(r["x"]) - Number(origin["x"])) / factor.Value, y = (Number(r["y"]) - Number(origin["y"])) / factor.Value;
+                    double x = (Number(r!["x"]) - Number(origin["x"])) / factor.Value, y = (Number(r["y"]) - Number(origin["y"])) / factor.Value;
                     marker["image_box"] = new JsonArray(Math.Round(x), Math.Round(y), Math.Round(x + Number(r["width"]) / factor.Value), Math.Round(y + Number(r["height"]) / factor.Value));
                 }
         string target = vision ? "vision" : new JsonArray(p["selector"]?.DeepClone(), p["fullPage"]?.DeepClone(), p["region"]?.DeepClone(), p["scale"]?.DeepClone()).ToJsonString();

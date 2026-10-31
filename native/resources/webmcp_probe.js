@@ -2,7 +2,7 @@
 // Évalué par cdp-send (Runtime.evaluate) dans le monde ISOLÉ de l'onglet : la page ne peut ni remplacer getTools ni
 // executeTool, ni voir l'appel. spec.call absent : liste seule (aucun geste). spec.call présent : l'outil n'est
 // exécuté que si sa définition est restée celle que le serveur a contrôlée (spec.key), sinon rien n'est fait.
-(async (spec) => {
+async function webmcpProbe(spec) {
     const mc = document.modelContext || navigator.modelContext;
     const page = { url: location.href, title: document.title };
     if (!mc || typeof mc.getTools !== "function" || typeof mc.executeTool !== "function") {
@@ -67,4 +67,4 @@
     } finally {
         clearTimeout(timer);
     }
-})
+}
