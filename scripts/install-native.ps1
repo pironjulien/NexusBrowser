@@ -242,18 +242,12 @@ $agyConfig = Join-Path $agyRoot 'mcp_config.json'
 if ($Register -and -not $UpdateOnly -and $supervised -and $token -and (Test-Path $agyConfig)) {
     $entry = [PSCustomObject]@{ serverUrl = "http://127.0.0.1:$port/mcp?agent=antigravity"; headers = [PSCustomObject]@{ Authorization = "Bearer $token" } }
     $plugin = Join-Path $agyRoot 'plugins\nexus-browser'
-    foreach ($file in Get-ChildItem (Join-Path $sourceRoot 'plugins\nexus-browser') -File -Recurse) {
-        if ($file.Name -eq 'mcp_config.json') { continue }
-        $target = Join-Path $plugin $file.FullName.Substring((Join-Path $sourceRoot 'plugins\nexus-browser').Length + 1)
-        New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
-        Copy-Item $file.FullName $target -Force
-    }
-    # Skill: the workstation's own version (perso\nexus-browser, private) when present, else the public one.
+    # Antigravity's files of the shared plugin folder (manifest, logo, skill); Claude Code's and Codex's stay out.
+    $pluginSource = Join-Path $sourceRoot 'plugin'
     $pluginSkill = Join-Path $plugin 'skills\nexus-browser'
     New-Item -ItemType Directory -Force $pluginSkill | Out-Null
-    $skill = Join-Path $sourceRoot 'perso\nexus-browser\SKILL.md'
-    if (-not (Test-Path -LiteralPath $skill)) { $skill = Join-Path $sourceRoot 'skills\nexus-browser\SKILL.md' }
-    Copy-Item $skill (Join-Path $pluginSkill 'SKILL.md') -Force
+    Copy-Item (Join-Path $pluginSource 'plugin.json'), (Join-Path $pluginSource 'logo.png') $plugin -Force
+    Copy-Item (Join-Path $pluginSource 'skills\nexus-browser\SKILL.md') (Join-Path $pluginSkill 'SKILL.md') -Force
     $pluginMcp = [PSCustomObject]@{ mcpServers = [PSCustomObject]@{ 'nexus-browser' = $entry } }
     [IO.File]::WriteAllText((Join-Path $plugin 'mcp_config.json'), ($pluginMcp | ConvertTo-Json -Depth 100), $utf8)
     $oldSkill = Join-Path $agyRoot 'skills\nexus-browser'

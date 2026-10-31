@@ -3,7 +3,15 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.33.6] - 2026-10-31
+
+### Changed
+- `plugin/` is now the single source of the nexus-browser plugin for all three AI apps: Antigravity's manifest,
+  logo and skill (shipped in the release package and copied by the installer, as before), plus Claude Code's
+  (`.claude-plugin`, `.mcp.json`) and Codex's (`.codex-plugin`, `.codex-mcp.json`) files, which the NexusSystem
+  catalog can point to at the release tag instead of keeping its own copies. The former `plugins/nexus-browser` and
+  `skills/nexus-browser` folders are gone, and the skill now carries the catalog's newer, operation-scoped approval
+  guidance. The installer no longer prefers a private workstation copy of the skill.
 
 ### Fixed
 - Local engine installation without `-Register` preserves Antigravity's plugin and configuration. Existing bridge

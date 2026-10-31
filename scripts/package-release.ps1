@@ -12,9 +12,13 @@ $work = Join-Path $buildRoot "package\$Runtime"
 if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
 $stage = Join-Path $work 'app'
 & (Join-Path $PSScriptRoot 'build-native.ps1') -OutputDirectory (Join-Path $stage 'engine') -Runtime $Runtime
-foreach ($item in 'extension', 'plugins', 'skills', 'install.ps1', 'get.ps1', 'verify.ps1', 'VERSION', 'LICENSE', 'README.md', 'CHANGELOG.md') {
+foreach ($item in 'extension', 'install.ps1', 'get.ps1', 'verify.ps1', 'VERSION', 'LICENSE', 'README.md', 'CHANGELOG.md') {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot $item) -Destination $stage -Recurse
 }
+# Antigravity's subset of the shared plugin folder; Claude Code and Codex get theirs from the NexusSystem catalog.
+New-Item -ItemType Directory -Force (Join-Path $stage 'plugin\skills') | Out-Null
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'plugin\plugin.json'), (Join-Path $repositoryRoot 'plugin\logo.png') -Destination (Join-Path $stage 'plugin')
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'plugin\skills\nexus-browser') -Destination (Join-Path $stage 'plugin\skills') -Recurse
 New-Item -ItemType Directory -Force (Join-Path $stage 'scripts'), (Join-Path $stage 'native\resources') | Out-Null
 Get-ChildItem -LiteralPath $PSScriptRoot -Filter *.ps1 | Where-Object Name -notin 'package-release.ps1', 'build-native.ps1' |
     Copy-Item -Destination (Join-Path $stage 'scripts')

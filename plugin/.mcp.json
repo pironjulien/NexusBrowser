@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "nexus-browser": {
+      "type": "http",
+      "url": "http://127.0.0.1:16182/mcp?agent=claude",
+      "headers": {
+        "Authorization": "Bearer ${NEXUS_MCP_TOKEN}"
+      }
+    }
+  }
+}

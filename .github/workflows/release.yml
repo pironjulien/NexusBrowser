@@ -42,7 +42,7 @@ jobs:
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
           if ($env:TAG -ne "v$version") { throw "Tag $env:TAG does not match VERSION $version." }
-          foreach ($file in 'mcpb/manifest.json', 'plugins/nexus-browser/plugin.json', 'gemini-extension.json', 'server.json') {
+          foreach ($file in 'mcpb/manifest.json', 'plugin/plugin.json', 'plugin/.claude-plugin/plugin.json', 'plugin/.codex-plugin/plugin.json', 'gemini-extension.json', 'server.json') {
             if ((Get-Content $file -Raw | ConvertFrom-Json).version -ne $version) { throw "$file is not at $version." }
           }
       - name: Tests (test.ps1)

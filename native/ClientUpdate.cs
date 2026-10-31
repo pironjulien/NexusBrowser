@@ -67,9 +67,9 @@ public static partial class ClientRegistration
             if (!native && !daemon) return "kept (custom plugin route)";
             // Preserve the transport, choice of app and enablement. Refresh only an already installed own guide.
             if (native) UpdateJsonExisting(c, config, "Antigravity");
-            string source = Path.Combine(c.SourceRoot, "plugins", Name);
+            string source = Path.Combine(c.SourceRoot, "plugin");
             WriteAtomic(Path.Combine(plugin, "plugin.json"), File.ReadAllText(Path.Combine(source, "plugin.json")));
-            WriteAtomic(Path.Combine(plugin, "skills", Name, "SKILL.md"), File.ReadAllText(Path.Combine(c.SourceRoot, "skills", Name, "SKILL.md")));
+            WriteAtomic(Path.Combine(plugin, "skills", Name, "SKILL.md"), File.ReadAllText(Path.Combine(source, "skills", Name, "SKILL.md")));
             return "updated existing plugin (transport and enablement preserved)";
         }
         return "kept (not installed)";

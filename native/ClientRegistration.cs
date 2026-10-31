@@ -16,7 +16,7 @@ internal partial class BrowserTomlContext : TomlSerializerContext { }
 /// Declares the nexus-browser MCP server to the AI clients found on this PC (--register, public install by get.ps1).
 /// Claude Code (CLI or ~/.claude.json), Claude Desktop and Codex (~/.codex/config.toml): one stdio entry each, this
 /// executable with --mcp, the client's name as NEXUS_BROWSER_AGENT (its tab group). Antigravity: a nexus-browser plugin
-/// (plugins/nexus-browser: that stdio server and the skill), never an entry in its global mcp_config.json. An entry of
+/// (plugin/: its manifest, logo and skill, plus that stdio server), never an entry in its global mcp_config.json. An entry of
 /// ours (this engine, or the former Python server mcp_server.py) is replaced in place; an entry the user wrote
 /// differently, or a nexus-browser plugin providing another server, is left alone. Each file is written atomically after
 /// a backup. Prints one line per client, and with NEXUS_PACK=1 a last "NEXUS_PACK_RESULT ..." line for the Nexus pack.
@@ -335,13 +335,13 @@ public static partial class ClientRegistration
                 if (current is not null && !Ours(current)) // a plugin of the user's own (e.g. the shared daemon)
                     return RemoveJsonServer(Path.Combine(folder, "mcp_config.json"), c.Backups) ? Removed : Plugin;
             }
-            string source = Path.Combine(c.SourceRoot, "plugins", Name);
+            string source = Path.Combine(c.SourceRoot, "plugin");
             var manifest = ReadJson(Path.Combine(source, "plugin.json"));
             WriteAtomic(Path.Combine(plugin, "plugin.json"), Json(manifest));
             string logo = manifest["logo"]?.ToString() ?? "logo.png";
             File.Copy(Path.Combine(source, logo), Path.Combine(plugin, logo), overwrite: true);
             WriteAtomic(pluginConfig, Json(new JsonObject { ["mcpServers"] = new JsonObject { [Name] = Entry(c.Exe, "Antigravity") } }));
-            WriteAtomic(Path.Combine(plugin, "skills", Name, "SKILL.md"), File.ReadAllText(Path.Combine(c.SourceRoot, "skills", Name, "SKILL.md"), Encoding.UTF8));
+            WriteAtomic(Path.Combine(plugin, "skills", Name, "SKILL.md"), File.ReadAllText(Path.Combine(source, "skills", Name, "SKILL.md"), Encoding.UTF8));
             RemoveJsonServer(Path.Combine(folder, "mcp_config.json"), c.Backups); // global entry of an earlier version
             string app = Path.Combine(folder, "config.json");
             if (File.Exists(app) && !c.AntigravityRunning())

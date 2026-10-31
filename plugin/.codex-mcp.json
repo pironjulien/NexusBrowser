@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "nexus-browser": {
+      "url": "http://127.0.0.1:16182/mcp?agent=codex",
+      "bearer_token_env_var": "NEXUS_MCP_TOKEN",
+      "startup_timeout_sec": 60
+    }
+  }
+}

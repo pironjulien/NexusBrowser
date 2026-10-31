@@ -871,7 +871,7 @@ public sealed partial class McpServer : IDisposable
         {
             new JsonObject
             {
-                ["src"] = "https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/plugins/nexus-browser/logo.png",
+                ["src"] = "https://raw.githubusercontent.com/pironjulien/NexusBrowser/main/plugin/logo.png",
                 ["mimeType"] = "image/png",
                 ["sizes"] = new JsonArray("256x256"),
             },

@@ -25,7 +25,9 @@ public sealed class RepositoryTests
         Assert.Matches(@"^\d+\.\d+\.\d+$", Version);
         Assert.Equal(BridgeSecurity.Version, Version);
         Assert.Equal(Version, (string?)Json("mcpb", "manifest.json")["version"]);
-        Assert.Equal(Version, (string?)Json("plugins", "nexus-browser", "plugin.json")["version"]);
+        Assert.Equal(Version, (string?)Json("plugin", "plugin.json")["version"]);
+        Assert.Equal(Version, (string?)Json("plugin", ".claude-plugin", "plugin.json")["version"]);
+        Assert.Equal(Version, (string?)Json("plugin", ".codex-plugin", "plugin.json")["version"]);
         Assert.Equal(Version, (string?)Json("gemini-extension.json")["version"]);
         var server = Json("server.json");
         Assert.Equal(Version, (string?)server["version"]);
@@ -177,7 +179,7 @@ public sealed class RepositoryTests
     [Fact]
     public void PublicSkillNamesNobodyAndDescribesOneTabPerSession()
     {
-        string skill = Text("skills", "nexus-browser", "SKILL.md");
+        string skill = Text("plugin", "skills", "nexus-browser", "SKILL.md");
         Assert.DoesNotContain("Julien", skill, StringComparison.Ordinal);
         Assert.DoesNotContain("lastAgentTabId", skill, StringComparison.Ordinal);
         Assert.Contains("One tab per agent session", skill);
@@ -191,9 +193,9 @@ public sealed class RepositoryTests
         string readme = Text("README.md");
         Assert.Contains("full access to the page", readme);
         Assert.Contains("[masked value]", readme);
-        // Copied into the Antigravity plugin: the personal skill if present, else the public one.
+        // Copied into the Antigravity plugin: the one skill of the shared plugin folder.
         string install = Text("scripts", "install-native.ps1");
-        Assert.Contains(@"perso\nexus-browser\SKILL.md", install);
+        Assert.DoesNotContain(@"perso\nexus-browser", install);
         Assert.Contains(@"skills\nexus-browser\SKILL.md", install);
     }
 }

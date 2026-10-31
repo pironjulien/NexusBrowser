@@ -1,0 +1,24 @@
+{
+  "name": "nexus-browser",
+  "displayName": "Nexus Browser",
+  "version": "2.33.6",
+  "description": "Your real Chrome (your sessions) driven in background tabs: forms, network, dialogs, cross-origin iframes, exports, downloads. Served by the local NexusBrowser daemon; requires its Chrome extension, both installed by NexusSystem (or NexusBrowser's get.ps1).",
+  "author": {
+    "name": "Julien Piron",
+    "url": "https://github.com/pironjulien"
+  },
+  "homepage": "https://julienpiron.fr/nexusbrowser/",
+  "repository": "https://github.com/pironjulien/NexusBrowser",
+  "license": "MIT",
+  "keywords": [
+    "chrome",
+    "browser",
+    "cdp",
+    "automation",
+    "mcp"
+  ],
+  "icon": "./assets/logo.png",
+  "documentationUrl": "https://github.com/pironjulien/NexusBrowser#readme",
+  "privacyPolicyUrl": "https://github.com/pironjulien/NexusBrowser#privacy",
+  "supportUrl": "https://github.com/pironjulien/NexusBrowser/issues"
+}
