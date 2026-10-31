@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [2.33.8] - 2026-10-31
 
+### Added
+- The stable release submits the extension to the Chrome Web Store itself (upload, then submission for review), as
+  a dedicated service account reached by GitHub OIDC and workload identity federation: no key or secret is stored,
+  and Google accepts the token only from the release workflow on `main`.
+
 ### Changed
 - The guide says what to do on pages Chrome protects from every extension (Chrome Web Store, `chrome://`): opening
   them in the agent's tab still works; reading or acting on them goes through NexusWindows when it is installed, with
