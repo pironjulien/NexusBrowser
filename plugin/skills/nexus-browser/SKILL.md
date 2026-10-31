@@ -34,8 +34,9 @@ Do not create a question card just to report progress.
 - Chrome Web Store and `chrome://` pages are protected by Chrome: no extension can read them (`protected_page`).
   Opening or navigating your tab to them still works. To read or act on them, use NexusWindows when it is
   installed (its `look` and `act` tools on the Chrome window): Chrome only paints a window that is on screen, and
-  clicks and typing there need the foreground briefly, so ask the user before taking mouse and keyboard. Without
-  NexusWindows, use the site's API or ask the user for that one step.
+  clicks and typing there need the foreground briefly. When the user asked for the task (for example "publish the
+  update"), that brief foreground input is part of it: no extra confirmation; NexusWindows waits until the user is
+  idle and gives the foreground back. Without NexusWindows, use the site's API or ask the user for that one step.
 - Images only on request: `browser_screenshot(tab_id, inline=True)` attaches the view (WebP, at most 2000 px);
   `region=[x1, y1, x2, y2]`, in pixels of the last whole-view image, zooms on an area to read small text. A view
   unchanged since the last image sent says `unchanged` and attaches nothing (`force=True` resends it).
