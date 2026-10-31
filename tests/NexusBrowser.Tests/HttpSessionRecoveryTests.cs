@@ -21,7 +21,9 @@ public sealed class HttpSessionRecoveryTests : IDisposable
     public async Task ReinitializeWithAnExpiredIdIs404AndWithoutItCreatesAnIsolatedFreshSession(string protocol)
     {
         using var bridge = new FakeBridge((action, _) => action == "list-tabs" ? new JsonArray() : new JsonObject());
-        using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "0.25");
+        // Long enough that the fresh session never expires between this test's own requests on a loaded CI runner;
+        // the first session is left idle on purpose and its expiry is awaited.
+        using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "2");
         string initialize = new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 1, ["method"] = "initialize",
             ["params"] = new JsonObject { ["protocolVersion"] = protocol, ["capabilities"] = new JsonObject(),
                 ["clientInfo"] = new JsonObject { ["name"] = "interop-fixture", ["version"] = "1" } } }.ToJsonString();
@@ -33,7 +35,7 @@ public sealed class HttpSessionRecoveryTests : IDisposable
         }
         await daemon.CallToolAsync("antigravity", original, "browser_list_tabs");
         var oldCall = bridge.Requests.Last(r => r.Action == "list-tabs");
-        await daemon.WaitForStderrAsync($"session {original[..8]} (Antigravity) expired", TimeSpan.FromSeconds(5));
+        await daemon.WaitForStderrAsync($"session {original[..8]} (Antigravity) expired", TimeSpan.FromSeconds(15));
 
         using (var staleInitialize = await daemon.SendAsync(HttpMethod.Post, "antigravity", initialize, original))
         {
