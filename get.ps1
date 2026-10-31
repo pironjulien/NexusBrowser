@@ -9,6 +9,8 @@
 # (127.0.0.1:16182, token in the user variable NEXUS_MCP_TOKEN), MCP server declared to the AI clients found (Claude
 # Code, Claude Desktop, Codex, Antigravity), and a guide for the one manual step, loading the extension.
 # Run it again to update.
+# NEXUS_RELEASE_TAG: install that release (vX.Y.Z, or a development build vX.Y.Z-dev.N) instead of the latest; set by
+# NexusSystem for its development channel.
 # NEXUS_PACK=1 (the Nexus pack, get-nexus.ps1): no question, no wait, no window (no Chrome, no guide, no clipboard);
 # exit code 0 on success; a last "NEXUS_PACK_RESULT ..." line; the pack shows the guide itself at the end:
 #   & "$env:LOCALAPPDATA\NexusBrowser\app\scripts\guide-extension.ps1" -WaitSeconds 0
@@ -67,6 +69,12 @@ $zipName = "NexusBrowser-$rid.zip"
 # Latest release tag from the redirect of github.com/.../releases/latest (Location: .../releases/tag/vX.Y.Z): no API
 # call, so no "API rate limit exceeded" (60 requests an hour per IP without a token). The API stays as a fallback.
 function Get-LatestTag {
+    # NEXUS_RELEASE_TAG (set by NexusSystem for its development channel): that release instead, a stable vX.Y.Z or a
+    # development vX.Y.Z-dev.N build, checked against its own SHA256SUMS.txt like any other.
+    if ($env:NEXUS_RELEASE_TAG) {
+        if ($env:NEXUS_RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+(-dev\.\d+)?$') { throw "NEXUS_RELEASE_TAG is not a release tag: $env:NEXUS_RELEASE_TAG" }
+        return $env:NEXUS_RELEASE_TAG
+    }
     $location = $null
     try {
         $request = [Net.HttpWebRequest]::Create("https://github.com/$repository/releases/latest")

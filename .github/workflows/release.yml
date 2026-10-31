@@ -1,29 +1,47 @@
-# Release: on a vX.Y.Z tag, runs test.ps1, builds the self-contained engine for both Windows architectures
-# (NexusBrowser-win-x64.zip, NexusBrowser-win-arm64.zip: what get.ps1 installs), the Chrome Web Store package of the
-# extension, the Claude Desktop extension for each architecture (nexus-browser-win-x64.mcpb, nexus-browser-win-arm64.mcpb,
-# server type binary) and get.ps1, lists their SHA-256 in
-# SHA256SUMS.txt, attests their build provenance (Sigstore, no key to manage: verify with
-# `gh attestation verify <file> --repo pironjulien/NexusBrowser`, or offline with the attached NexusBrowser-X.Y.Z.intoto.jsonl
-# and `--bundle`), and publishes them as the "NexusBrowser X.Y.Z" GitHub release, notes from CHANGELOG.md. Then
-# server.json goes to the official MCP registry (mcpb package: the attached .mcpb, its SHA-256), GitHub OIDC, no token.
-# Actions pinned by commit SHA; Dependabot (github-actions) keeps them up to date.
+# Release, in two channels, with the shared Nexus release workflows of NexusSystem.
+# - Development: every push to main checks one version everywhere, runs test.ps1 and builds the self-contained engine
+#   for both Windows architectures (NexusBrowser-win-x64.zip, NexusBrowser-win-arm64.zip: what get.ps1 installs), the
+#   Chrome Web Store package of the extension (nexus-browser-extension-<extension version>.zip), the Claude Desktop
+#   extension for each architecture (nexus-browser-win-x64.mcpb, nexus-browser-win-arm64.mcpb, server type binary),
+#   get.ps1 and SHA256SUMS.txt. product-dev-release attests them (Sigstore: `gh attestation verify <file> --repo
+#   pironjulien/NexusBrowser`, or offline with the attached NexusBrowser-X.Y.Z.intoto.jsonl and `--bundle`) and
+#   publishes the pre-release vX.Y.Z-dev.N (NexusSystem's development channel, through NEXUS_RELEASE_TAG).
+# - Stable: "Run workflow" (promote: a vX.Y.Z-dev.N, or empty for the newest) runs product-promote: the SAME files
+#   become the release "NexusBrowser X.Y.Z" with the CHANGELOG section, then server.json goes to the official MCP
+#   registry (mcpb package: the attached nexus-browser-win-x64.mcpb, its SHA-256), GitHub OIDC, no token.
+#   registry: only re-send a stable release's server.json. get.ps1 installs from releases/latest.
+# The Chrome Web Store submission stays manual (store/README.md), from the stable release's extension zip.
+# Actions and shared workflows pinned by commit SHA; Dependabot (github-actions) keeps them up to date.
 name: Release
 
 on:
   push:
-    tags: ["v*.*.*"]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      promote:
+        description: Development build to publish as stable (vX.Y.Z-dev.N; empty = the newest)
+        required: false
+        default: ''
+      registry:
+        description: Only send this stable release's server.json (vX.Y.Z) to the MCP registry again
+        required: false
+        default: ''
 
 permissions: {}
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  release:
+  build:
+    if: github.event_name == 'push'
     runs-on: windows-latest
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
     outputs:
-      mcpb-sha256: ${{ steps.packages.outputs.mcpb-sha256 }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -35,21 +53,29 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           global-json-file: global.json
-      - name: Version matches the tag
+      - name: One version everywhere
+        id: version
         shell: pwsh
-        env:
-          TAG: ${{ github.ref_name }}
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
-          if ($env:TAG -ne "v$version") { throw "Tag $env:TAG does not match VERSION $version." }
-          foreach ($file in 'mcpb/manifest.json', 'plugin/plugin.json', 'plugin/.claude-plugin/plugin.json', 'plugin/.codex-plugin/plugin.json', 'gemini-extension.json', 'server.json') {
-            if ((Get-Content $file -Raw | ConvertFrom-Json).version -ne $version) { throw "$file is not at $version." }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "VERSION: no X.Y.Z version ($version)." }
+          $server = Get-Content server.json -Raw | ConvertFrom-Json
+          $found = [ordered]@{
+            'native/BridgeSecurity.cs' = [regex]::Match((Get-Content native/BridgeSecurity.cs -Raw), 'Version = "([^"]+)"').Groups[1].Value
+            'server.json' = $server.version
+            'server.json packages[0]' = $server.packages[0].version
           }
+          foreach ($file in 'mcpb/manifest.json', 'plugin/plugin.json', 'plugin/.claude-plugin/plugin.json', 'plugin/.codex-plugin/plugin.json', 'gemini-extension.json') {
+            $found[$file] = (Get-Content $file -Raw | ConvertFrom-Json).version
+          }
+          # extension/manifest.json has its own version: the extension is released only when it changes.
+          $wrong = @($found.GetEnumerator() | Where-Object { $_.Value -ne $version } | ForEach-Object { "$($_.Key)=$($_.Value)" })
+          if ($wrong) { throw "Version $version expected: $($wrong -join ', ')" }
+          "version=$version" >> $env:GITHUB_OUTPUT
       - name: Tests (test.ps1)
         shell: pwsh
         run: ./test.ps1
       - name: Packages
-        id: packages
         shell: pwsh
         run: |
           New-Item -ItemType Directory dist | Out-Null
@@ -65,61 +91,32 @@ jobs:
           Get-ChildItem dist -File | ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } |
             Set-Content dist/SHA256SUMS.txt -Encoding utf8NoBOM
           Get-Content dist/SHA256SUMS.txt
-          "mcpb-sha256=$((Get-FileHash dist/nexus-browser-win-x64.mcpb -Algorithm SHA256).Hash.ToLower())" >> $env:GITHUB_OUTPUT
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
-        id: provenance
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          subject-path: dist/*
-      - name: Provenance bundle
-        shell: pwsh
-        env:
-          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
-          TAG: ${{ github.ref_name }}
-        run: Copy-Item $env:BUNDLE "dist/NexusBrowser-$($env:TAG.TrimStart('v')).intoto.jsonl"
-      - name: GitHub release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          $version = $env:TAG.TrimStart('v')
-          $lines = Get-Content CHANGELOG.md
-          $start = [Array]::FindIndex($lines, [Predicate[string]] { param($l) $l -like "## ``[$version``]*" })
-          if ($start -lt 0) { throw "CHANGELOG.md has no [$version] section." }
-          $end = [Array]::FindIndex($lines, $start + 1, [Predicate[string]] { param($l) $l -like '## *' })
-          if ($end -lt 0) { $end = $lines.Count }
-          $lines[($start + 1)..($end - 1)] | Set-Content notes.md -Encoding utf8NoBOM
-          gh release create $env:TAG (Get-ChildItem dist -File).FullName --title "NexusBrowser $version" --notes-file notes.md --verify-tag --repo $env:GITHUB_REPOSITORY
+          name: dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 3
 
-  registry:
-    # server.json to the official MCP registry (namespace io.github.pironjulien), the mcpb package being the x64 .mcpb just
-    # attached (identifier: its release URL, fileSha256: its hash). mcp-publisher pinned by version and SHA-256.
-    needs: release
-    if: github.repository == 'pironjulien/NexusBrowser'
-    runs-on: ubuntu-latest
+  dev:
+    needs: build
     permissions:
+      contents: write
       id-token: write
-      contents: read
-    env:
-      PUBLISHER_VERSION: v1.8.1
-      PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - name: server.json for this release
-        env:
-          TAG: ${{ github.ref_name }}
-          SHA: ${{ needs.release.outputs.mcpb-sha256 }}
-        run: |
-          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/nexus-browser-win-x64.mcpb"
-          jq --arg url "$url" --arg sha "$SHA" '.packages[0].identifier = $url | .packages[0].fileSha256 = $sha' server.json > server.release.json
-          cat server.release.json
-      - name: Install mcp-publisher (pinned, checksum verified)
-        run: |
-          curl -fsSL -o mcp-publisher.tar.gz \
-            "https://github.com/modelcontextprotocol/registry/releases/download/${PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
-          echo "${PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum --strict -c
-          tar xzf mcp-publisher.tar.gz mcp-publisher
-      - run: ./mcp-publisher login github-oidc
-      - run: ./mcp-publisher publish server.release.json
+      attestations: write
+    uses: pironjulien/NexusSystem/.github/workflows/product-dev-release.yml@a409925bafd1184acc207dd90ca4a43ba987d0e3  # v1.6.39
+    with:
+      product: NexusBrowser
+      version: ${{ needs.build.outputs.version }}
+
+  promote:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      id-token: write
+    uses: pironjulien/NexusSystem/.github/workflows/product-promote.yml@a409925bafd1184acc207dd90ca4a43ba987d0e3  # v1.6.39
+    with:
+      product: NexusBrowser
+      promote: ${{ inputs.promote }}
+      registry-only: ${{ inputs.registry }}
+      mcp-package: nexus-browser-win-x64.mcpb

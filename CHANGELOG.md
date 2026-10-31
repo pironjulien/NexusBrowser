@@ -3,6 +3,19 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.33.7] - 2026-10-31
+
+### Changed
+- Releases come in two channels. Every push to `main` checks one version everywhere, runs `test.ps1`, builds the
+  engine packages, the Chrome Web Store extension zip, the `.mcpb` extensions and `get.ps1` with their
+  `SHA256SUMS.txt`, and publishes them, attested, as a development pre-release `vX.Y.Z-dev.N` that only NexusSystem's
+  development channel installs. The stable release `vX.Y.Z` is a promotion of the same tested files ("Run workflow"),
+  never a rebuild, followed by the MCP registry update. Both steps use NexusSystem's shared release workflows
+  (`product-dev-release`, `product-promote`); pushing a version tag no longer releases anything.
+- `get.ps1` honours `NEXUS_RELEASE_TAG` (`vX.Y.Z` or `vX.Y.Z-dev.N`, checked against that release's own
+  `SHA256SUMS.txt`), which NexusSystem sets for its development channel. `NEXUS_BROWSER_TAG` still takes precedence.
+  The extension's own version is unchanged (2.33.6): the extension itself did not change.
+
 ## [2.33.6] - 2026-10-31
 
 ### Changed
