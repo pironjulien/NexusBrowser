@@ -1,0 +1,74 @@
+{
+ "schemaVersion": 1,
+ "date": "2026-10-31",
+ "nexusBrowser": "2.34.0",
+ "tokenizer": "o200k_base",
+ "rounds": 1,
+ "browser": "the user's real Chrome, background tabs",
+ "results": {
+  "export": {
+   "inline": 14786,
+   "output_path": 423,
+   "file_bytes": 52518
+  },
+  "json_path": {
+   "full_body": 2462,
+   "json_path": 210,
+   "matches": 20
+  },
+  "logs": {
+   "all_with_stacks": 13375,
+   "level_error": 119,
+   "errors": 2
+  },
+  "scroll_fixture": {
+   "no_target": {
+    "at_end": false,
+    "max": 5913,
+    "position": 600,
+    "scrollX": 0,
+    "scrollY": 0,
+    "scrolled": 600,
+    "success": true,
+    "target": "div#main"
+   },
+   "selector": {
+    "at_end": false,
+    "max": 1785,
+    "position": 300,
+    "scrollX": 0,
+    "scrollY": 0,
+    "scrolled": 300,
+    "success": true,
+    "target": "div#side"
+   },
+   "to_end": {
+    "at_end": true,
+    "max": 5913,
+    "position": 5913,
+    "scrollX": 0,
+    "scrollY": 0,
+    "scrolled": 5313,
+    "success": true,
+    "target": "div#main"
+   }
+  },
+  "scroll_gmail_2": {
+   "target": "div#:3.Tm.aeJ",
+   "scrolled": 800,
+   "position": 1600,
+   "max": 1913,
+   "at_end": false
+  },
+  "scroll_gmail": {
+   "target": "div#:3.Tm.aeJ",
+   "scrolled": 800,
+   "at_end": false
+  },
+  "include_changes": {
+   "click_with_changes": 101,
+   "click_then_full_snapshot": 2707,
+   "calls_saved": 1
+  }
+ }
+}

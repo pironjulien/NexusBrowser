@@ -22,7 +22,7 @@ const AGY_FEATURES = [
     "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree",
     "history-navigation-cdp", "full-page-capture", "opener-tabs-webnav",
     "installer-reload", "tab-list-redaction", "download-ownership", "gmail-counter", "wait-load-navigation",
-    "map-field-labels", "bridge-pairing"
+    "map-field-labels", "bridge-pairing", "scroll-panel"
 ];
 
 let attachedDebuggers = new Set();
@@ -2026,6 +2026,71 @@ function agyMouseKit(spec, textKit, locatorKit) {
             return { ok: false, coveredBy, reason: reason || (coveredBy ? null : "outside the viewport") };
         }
         return { ok: true, points: mapped, depth, owner: describe(owner) };
+    }
+
+    if (spec.phase === "scroll") {
+        // Défilement : l'élément visé ou son premier ancêtre défilable ; sans cible, la page, sinon son plus grand
+        // panneau défilable visible (Gmail, Slack, Sheets : la page elle-même ne défile pas).
+        const horizontal = !!spec.horizontal;
+        const scrolls = (n) => {
+            if (!n || (n.nodeType !== undefined && n.nodeType !== 1)) return false;
+            const st = styleOf(n);
+            const over = String((st && (horizontal ? st.overflowX : st.overflowY)) || "");
+            return /(auto|scroll|overlay)/.test(over) &&
+                (horizontal ? n.scrollWidth > n.clientWidth + 1 : n.scrollHeight > n.clientHeight + 1);
+        };
+        const page = doc0 && (doc0.scrollingElement || doc0.documentElement);
+        // overflow: hidden sur <html> ou <body> (Gmail) : la page ne défile pas, même plus haute que la vue.
+        const pageLocked = [doc0 && doc0.documentElement, doc0 && doc0.body].some(n => {
+            const st = n ? styleOf(n) : null;
+            return !!st && /(hidden|clip)/.test(String((horizontal ? st.overflowX : st.overflowY) || ""));
+        });
+        const pageScrolls = !!page && !pageLocked && (horizontal
+            ? page.scrollWidth > (win0.innerWidth || page.clientWidth) + 1
+            : page.scrollHeight > (win0.innerHeight || page.clientHeight) + 1);
+        let box = null;
+        if (spec.locate) {
+            const el = locate(spec.locate);
+            if (!el) return notFound(spec.locate);
+            for (let n = el, i = 0; n && i < 64; n = up(n), i++) {
+                const t = tagUp(n);
+                if (t === "BODY" || t === "HTML") break;
+                if (scrolls(n)) { box = n; break; }
+            }
+        } else if (!pageScrolls && doc0 && typeof doc0.querySelectorAll === "function") {
+            let best = 0;
+            const vw = win0.innerWidth || 0, vh = win0.innerHeight || 0;
+            for (const n of doc0.querySelectorAll("*")) {
+                if (!(horizontal ? n.scrollWidth > n.clientWidth + 1 : n.scrollHeight > n.clientHeight + 1) || !scrolls(n)) continue;
+                const r = rectOf(n);
+                const w = Math.max(0, Math.min(r.left + r.width, vw || r.left + r.width) - Math.max(r.left, 0));
+                const h = Math.max(0, Math.min(r.top + r.height, vh || r.top + r.height) - Math.max(r.top, 0));
+                if (w * h > best) { best = w * h; box = n; }
+            }
+        }
+        const pos = () => box
+            ? (horizontal ? { at: box.scrollLeft, max: box.scrollWidth - box.clientWidth } : { at: box.scrollTop, max: box.scrollHeight - box.clientHeight })
+            : (horizontal ? { at: win0.scrollX || 0, max: page ? page.scrollWidth - (win0.innerWidth || page.clientWidth) : 0 }
+                : { at: win0.scrollY || 0, max: page ? page.scrollHeight - (win0.innerHeight || page.clientHeight) : 0 });
+        const before = pos().at;
+        const delta = Number(spec.delta) || 0;
+        const move = horizontal ? { left: delta, top: 0 } : { left: 0, top: delta };
+        try {
+            const where = box || win0;
+            if (typeof where.scrollBy === "function") where.scrollBy({ ...move, behavior: spec.behavior || "instant" });
+            else if (box) { if (horizontal) box.scrollLeft += delta; else box.scrollTop += delta; }
+        } catch (_) {}
+        const after = pos();
+        return {
+            success: true,
+            target: box ? describe(box) : "page",
+            scrolled: Math.round(after.at - before),
+            position: Math.round(after.at),
+            max: Math.max(0, Math.round(after.max)),
+            at_end: delta < 0 ? after.at <= 1 : after.at >= after.max - 1,
+            scrollX: win0.scrollX || 0,
+            scrollY: win0.scrollY || 0
+        };
     }
 
     if (spec.phase === "edit") {
@@ -4955,19 +5020,34 @@ async function scrollPage(params = {}) {
     // donc un fil infini (X, Reddit, LinkedIn, YouTube) ne charge plus la suite (mesuré le 26/10 sur x.com : 5 posts
     // sur 8 défilements). L'émulation du focus rend la page visible et active sans toucher à l'onglet ni à la fenêtre
     // de l'utilisateur (même mesure : visibilityState "visible", 21 posts ; Reddit : 3 → 24).
-    await ensureFocusEmulation(await ensureDebugger(tabId));
+    const target = await ensureDebugger(tabId);
+    await ensureFocusEmulation(target);
 
-    const sign = params.direction === "up" ? -1 : 1;
-    const dy = sign * Math.abs(params.y !== undefined && params.y !== null ? Number(params.y) : 500);
-    const dx = Number(params.x || 0);
-
-    return await evaluateIsolated({
-        tabId,
-        code: `(() => {
-            window.scrollBy({ left: ${dx}, top: ${dy}, behavior: ${JSON.stringify(String(params.behavior || "instant"))} });
-            return { scrollX: window.scrollX, scrollY: window.scrollY };
-        })()`
-    });
+    const direction = String(params.direction || "down");
+    const sign = direction === "up" || direction === "left" ? -1 : 1;
+    const spec = {
+        phase: "scroll",
+        horizontal: direction === "left" || direction === "right",
+        delta: sign * Math.abs(params.y !== undefined && params.y !== null ? Number(params.y) : 500),
+        behavior: String(params.behavior || "instant")
+    };
+    // Panneau intérieur visé (locator, mark, selector) : lui ou son premier ancêtre défilable, dans son cadre.
+    const locate = targetLocate(params, { allowText: false });
+    let res;
+    if (locate) {
+        const start = Date.now();
+        const timeoutMs = mouseTimeout(params, 1200);
+        for (;;) {
+            res = await locateAndRun(target, locate, (root, loc) => pageCall(root, { ...spec, locate: loc }));
+            if (res?.__dialog || res?.success || !res?.notFound || Date.now() - start >= timeoutMs) break;
+            await sleepMs(MOUSE_RETRY_MS);
+        }
+    } else {
+        res = await pageCall(target, spec);
+    }
+    if (res?.__dialog) return { data: dialogInterruption(res.__dialog) };
+    if (!res?.success) return { error: prepareError(res, locate) };
+    return { data: res };
 }
 
 // Remise de secours de la barre de défilement après une capture d'élément au-delà de la vue (voir takeScreenshot).

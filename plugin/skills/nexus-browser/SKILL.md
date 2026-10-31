@@ -30,7 +30,16 @@ Do not create a question card just to report progress.
   Playwright MCP's snapshot; each `[#N]` is a mark for `browser_click(mark=N)`, `browser_fill(mark=N)`... Lighter
   than the map for forms, heavier for a long page. Numbers stay the same from one snapshot to the next of the same
   page: after an action, `changes_only=True` returns only the added and removed lines (or `changes="none"`), and
-  `selector="form#checkout"` reads one part of the page.
+  `selector="form#checkout"` reads one part of the page. `include_changes=True` on `browser_click`, `browser_fill`,
+  `browser_press_key` or `browser_batch` returns that diff (`changes`) with the action itself.
+- Large reads to a file: `output_path` (absolute) on `browser_export`, `browser_export_gsuite`, `browser_axtree`,
+  `browser_network_response` and `browser_logs` writes the payload there and answers only its path, size and an
+  excerpt. `json_path="$.data.items[*].id"` returns one part of a JSON response body (secrets already masked).
+  `browser_logs(level="error", since_ms=..., limit=...)` filters the console; call stacks only with
+  `include_stack=True`.
+- `browser_scroll(tab_id, selector=... | mark=N | locator=...)` scrolls the panel holding that element (a mail list,
+  a chat); without a target, the page, or its largest scrollable panel when the page itself does not scroll (Gmail,
+  Slack, Sheets). `at_end=True`: nothing more in that direction.
 - A mark whose element the page re-rendered is retargeted to the only element with the same role and name
   (`recovered_mark` in the answer); otherwise the gesture fails with nothing sent.
 - A failed call carries `retry_safe`: `outcome="not_done"` means nothing reached the page (fix and resend);

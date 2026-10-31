@@ -15,7 +15,7 @@ namespace NexusBrowser.Native;
 
 public static partial class BridgeSecurity
 {
-    public const string Version = "2.33.18";
+    public const string Version = "2.34.0";
     public const string TokenFileName = "bridge-token";
     public const string TokenHeader = "X-Nexus-Browser-Token";
     public const string AgentHeader = "X-Nexus-Browser-Agent";

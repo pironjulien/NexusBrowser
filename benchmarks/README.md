@@ -77,6 +77,13 @@ Earlier runs of this benchmark found real NexusBrowser bugs, all fixed in 2.24.5
 - the export picked Wikipedia's reference list;
 - a time input could not be filled.
 
+## Smaller answers (2026-10-31, NexusBrowser 2.34.0)
+
+Same token count on the agent's side, in the real Chrome: `output_path` on an article export 14,786 → 423 tokens
+(97 %), `json_path` on an API response 2,462 → 210 (91 %), `browser_logs(level="error")` 13,375 → 119 (99 %), and a
+click with `include_changes=True` 101 tokens in one call instead of 2,707 in two (click, then a full snapshot).
+Details: [results/results-2026-10-31.md](results/results-2026-10-31.md).
+
 ## Not compared
 
 - **Claude in Chrome**: it cannot be driven from an ordinary MCP client, so it cannot be measured the same way.

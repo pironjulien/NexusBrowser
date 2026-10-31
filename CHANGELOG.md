@@ -5,6 +5,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.34.0] - 2026-10-31
+
+### Added
+- `browser_scroll` scrolls an inner panel: `locator`, `mark` or `selector` of an element inside it (that element or
+  its first scrollable ancestor). Without a target, a page that does not scroll itself (Gmail, Slack, Sheets) scrolls
+  its largest visible scrollable panel. Directions `left` and `right`; the answer says `target`, `scrolled`,
+  `position`, `max` and `at_end`. Ideas from chrome-live-mcp and Playwright.
+- `output_path` (absolute) on `browser_export`, `browser_export_gsuite`, `browser_axtree`,
+  `browser_network_response` and `browser_logs`: the payload is written to that file and the answer keeps only
+  `output_path`, `size_bytes` and an excerpt. Idea from Chrome DevTools MCP and Playwright MCP.
+- `json_path` on `browser_network_response` (`$.data.items[0]`, `items[*].id`): only that part of a JSON body,
+  read whole (up to 5 MB) after the secrets were masked, then cut to `max_bytes`. Idea from blueprint-mcp.
+- `browser_logs` filters: `level` (that severity and above), `since_ms`, `limit`; every entry says its `level`, and
+  call stacks come back only with `include_stack=True`.
+- `include_changes=True` on `browser_click`, `browser_fill`, `browser_press_key` and `browser_batch`: the page
+  changes since the tab's previous snapshot (`changes_only` diff) come back with the action, after the network
+  settles briefly.
+
+### Changed
+- `browser_logs` drops call stacks unless `include_stack=True`.
+
 ## [2.33.18] - 2026-10-31
 
 ### Fixed

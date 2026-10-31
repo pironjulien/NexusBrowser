@@ -1117,7 +1117,7 @@ public sealed partial class McpServer : IDisposable
         try
         {
             hold = await CheckGestureAsync(name, args, identity, pid, ct);
-            string answer = await ExecuteToolCoreAsync(name, args, identity, pid, appel, ct);
+            string answer = await ShapeReadAnswerAsync(name, args, await ExecuteToolCoreAsync(name, args, identity, pid, appel, ct), ct);
             if (EmbeddedTools.Value.StructuredTools.Contains(name) && JsonNode.Parse(answer) is JsonObject value && GetString(value, "status") != "error")
             {
                 var issues = new List<string>();
@@ -1137,6 +1137,8 @@ public sealed partial class McpServer : IDisposable
                 failure["error"] = $"{GetString(failure, "error")} The accord was not used: resend with the same accord once fixed.";
                 return failure.ToJsonString(CompactJson);
             }
+            if (name is "browser_click" or "browser_fill" or "browser_press_key" && GetBool(args, "include_changes", false))
+                answer = await WithChangesAsync(answer, RequireTabParams(args)["tab_id"]!.GetValue<int>(), identity, pid, ct);
             return answer;
         }
         catch (AccordRequiredException ex)
@@ -1376,8 +1378,10 @@ public sealed partial class McpServer : IDisposable
             {
                 var p = RequireTabParams(args);
                 p["request_id"] = GetString(args, "request_id") ?? "";
-                p["maxBytes"] = GetInt(args, "max_bytes", 65536);
-                p["includeBinary"] = GetBool(args, "include_binary", false);
+                bool toFile = GetString(args, "output_path") is not null;
+                // json_path reads the whole body, output_path writes it: the cut to max_bytes comes after.
+                p["maxBytes"] = toFile || GetString(args, "json_path") is { Length: > 0 } ? WholeBodyBytes : GetInt(args, "max_bytes", 65536);
+                p["includeBinary"] = toFile || GetBool(args, "include_binary", false);
                 return await CallBridgeFormattedAsync("network-response", p, 20.0, identity, pid, checkPageNote: true, ct: ct);
             }
 
@@ -1441,6 +1445,10 @@ public sealed partial class McpServer : IDisposable
                 var p = RequireTabParams(args);
                 p["direction"] = GetString(args, "direction") ?? "down";
                 p["y"] = GetInt(args, "y", 400);
+                p["timeoutMs"] = GetInt(args, "timeout_ms", 1200);
+                if (args["locator"] is not null) p["locator"] = args["locator"]!.DeepClone();
+                if (TryGetInt(args, "mark") is { } mark) p["mark"] = mark;
+                if (GetString(args, "selector") is { } sel) p["selector"] = sel;
                 return await CallBridgeFormattedAsync("scroll", p, 20.0, identity, pid, ct: ct);
             }
 
@@ -2210,6 +2218,7 @@ public sealed partial class McpServer : IDisposable
             return ErrorJson($"At most 30 steps per batch ({steps.Count} given)");
 
         int? defaultTab = TryGetInt(args, "tab_id");
+        int? lastTab = defaultTab;
         var results = new JsonArray();
 
         for (int index = 0; index < steps.Count; index++)
@@ -2248,22 +2257,38 @@ public sealed partial class McpServer : IDisposable
                 ["status"] = status,
                 ["result"] = stepParsed,
             });
+            lastTab = TryGetInt(stepArgs, "tab_id") ?? lastTab;
             if (status == "error")
             {
-                return new JsonObject
+                return await BatchChangesAsync(new JsonObject
                 {
                     ["status"] = "error",
                     ["stopped_at"] = index,
                     ["steps"] = results,
-                }.ToJsonString(CompactJson);
+                }, index > 0);
             }
         }
 
-        return new JsonObject
+        return await BatchChangesAsync(new JsonObject
         {
             ["status"] = "success",
             ["steps"] = results,
-        }.ToJsonString(CompactJson);
+        }, true);
+
+        // include_changes: one diff of the page after the last step run (none if no step reached it).
+        async Task<string> BatchChangesAsync(JsonObject answer, bool ran)
+        {
+            string text = answer.ToJsonString(CompactJson);
+            if (!ran || !GetBool(args, "include_changes", false) || lastTab is not int tab) return text;
+            if (GetString(answer, "status") != "success")
+            {
+                answer["status"] = "success";
+                var withChanges = JsonNode.Parse(await WithChangesAsync(answer.ToJsonString(CompactJson), tab, identity, pid, ct)) as JsonObject ?? answer;
+                withChanges["status"] = "error";
+                return withChanges.ToJsonString(CompactJson);
+            }
+            return await WithChangesAsync(text, tab, identity, pid, ct);
+        }
     }
 
     private async Task<string> CallBridgeFormattedAsync(

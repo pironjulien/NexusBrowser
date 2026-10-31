@@ -536,6 +536,44 @@ test('défilement : focus émulé avant, la page cachée redevient visible (fil 
     assert.ok(focus >= 0 && scroll > focus);
 });
 
+// Page qui ne défile pas (Gmail, Slack) : deux panneaux, le plus grand défile ; un élément visé fait défiler son
+// propre panneau ; at_end dit quand le bout est atteint.
+test('défilement ciblé : plus grand panneau sans cible, panneau de l\'élément visé, at_end', async () => {
+    const panel = (id, w, h, scrollHeight) => {
+        const node = {
+            nodeType: 1, tagName: 'DIV', id, parentNode: null, scrollTop: 0, scrollLeft: 0, scrollHeight, clientHeight: h,
+            scrollWidth: w, clientWidth: w, computed: {overflowY: 'auto', overflowX: 'hidden'},
+            getBoundingClientRect: () => ({x: 0, y: 0, left: 0, top: 0, width: w, height: h}),
+            scrollBy({top}) { node.scrollTop = Math.max(0, Math.min(node.scrollHeight - node.clientHeight, node.scrollTop + top)); }
+        };
+        return node;
+    };
+    const side = panel('side', 200, 600, 900);
+    const main = panel('main', 800, 700, 1500);
+    const item = {nodeType: 1, tagName: 'SPAN', id: 'item', parentNode: side, computed: {overflowY: 'visible'}, scrollHeight: 20, clientHeight: 20,
+        getBoundingClientRect: () => ({x: 0, y: 0, left: 0, top: 0, width: 10, height: 10})};
+    const html = {nodeType: 1, tagName: 'HTML', scrollHeight: 800, clientHeight: 800, scrollWidth: 1000, clientWidth: 1000};
+    const h = harness({
+        document: listenable({
+            scrollingElement: html, documentElement: html,
+            querySelectorAll: (sel) => sel === '*' ? [html, side, main, item] : (sel === '#item' ? [item] : [])
+        }),
+        window: {innerWidth: 1000, innerHeight: 800, scrollX: 0, scrollY: 0, getComputedStyle: (el) => el.computed || {}, scrollBy() {}}
+    });
+    const first = await h.run('scroll', {tabId: 1, direction: 'down', y: 500});
+    assert.equal(first.data.target, 'div#main');
+    assert.equal(first.data.scrolled, 500);
+    assert.equal(first.data.at_end, false);
+    const end = await h.run('scroll', {tabId: 1, direction: 'down', y: 500});
+    assert.deepEqual([end.data.scrolled, end.data.position, end.data.max, end.data.at_end], [300, 800, 800, true]);
+    const inner = await h.run('scroll', {tabId: 1, selector: '#item', direction: 'down', y: 100});
+    assert.equal(inner.data.target, 'div#side');
+    assert.equal(side.scrollTop, 100);
+    const up = await h.run('scroll', {tabId: 1, selector: '#item', direction: 'up', y: 400});
+    assert.deepEqual([up.data.scrolled, up.data.at_end], [-100, true]);
+    assert.match((await h.run('scroll', {tabId: 1, selector: '#absent', timeoutMs: 0})).error, /not found|No element/i);
+});
+
 test('hover dispatches mouseMoved CDP command and coordinates', async () => {
     const h = harness();
     const res = await h.run('hover', {tabId: 1, selector: 'button', timeoutMs: 50});
