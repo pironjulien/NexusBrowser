@@ -7,6 +7,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>NexusBrowser</AssemblyName>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- On GitHub (CI=true) the restore must match packages.lock.json exactly. -->
+    <RestoreLockedMode Condition="'$(CI)' == 'true'">true</RestoreLockedMode>
     <!-- Release builds (self-contained, single file); declared so packages.lock.json stays the same for every build. -->
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <RootNamespace>NexusBrowser</RootNamespace>

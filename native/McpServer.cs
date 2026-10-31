@@ -173,6 +173,11 @@ public sealed partial class McpServer : IDisposable
 
     private static string Short(string sessionId) => sessionId.Length > 8 ? sessionId[..8] : sessionId;
 
+    internal static bool ResumesStaleSessions(string agent) => agent == "Antigravity";
+
+    /// <summary>The daemon's own session id format (Guid "N"): only such ids are opened again.</summary>
+    private static bool IsSessionId(string sessionId) => sessionId.Length == 32 && sessionId.All(char.IsAsciiHexDigitLower);
+
     /// <summary>One line on stderr: the supervisor writes it, timestamped, to ~\.nexus\daemons\nexus-browser.log.</summary>
     private static void DaemonLog(string message)
     {
@@ -613,16 +618,26 @@ public sealed partial class McpServer : IDisposable
             }
 
             headers.TryGetValue("mcp-session-id", out var sessionId);
-            bool unknownSession = false;
+            bool unknownSession = false, resumed = false;
             lock (_httpSessionsLock)
             {
                 ExpireHttpSessions();
                 if (!string.IsNullOrEmpty(sessionId))
                 {
                     unknownSession = !_sessionAgents.TryGetValue(sessionId, out var owner) || owner != agentDisplay;
+                    // Antigravity's MCP client never initializes again after a 404 ("session not found" until the app
+                    // restarts), so its own expired or pre-restart session id is opened again instead.
+                    if (unknownSession && owner is null && method == "POST" && ResumesStaleSessions(agentDisplay) && IsSessionId(sessionId))
+                    {
+                        _sessionAgents[sessionId] = agentDisplay;
+                        if (_goneSessions.TryGetValue(agentDisplay, out var gone)) gone.TryRemove(SessionIdentity(agentDisplay, sessionId).Id, out _);
+                        unknownSession = false;
+                        resumed = true;
+                    }
                     if (!unknownSession) _sessionLastSeen[sessionId] = EmergencyStop.NowMonotonic();
                 }
             }
+            if (resumed) DaemonLog($"session {Short(sessionId!)} ({agentDisplay}) resumed: its client never initializes again after a 404");
             if (unknownSession)
             {
                 DaemonLog($"unknown session {Short(sessionId!)} ({agentDisplay}): 404, the client starts a new one");

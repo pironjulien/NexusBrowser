@@ -3,7 +3,7 @@
   "name": "io.github.pironjulien/nexus-browser",
   "title": "NexusBrowser",
   "description": "Your real Chrome in background tabs (Windows; needs the NexusBrowser bridge and extension).",
-  "version": "2.33.12",
+  "version": "2.33.13",
   "websiteUrl": "https://julienpiron.fr/nexusbrowser/",
   "icons": [
     {
@@ -28,8 +28,8 @@
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/pironjulien/NexusBrowser/releases/download/v2.33.12/nexus-browser-win-x64.mcpb",
-      "version": "2.33.12",
+      "identifier": "https://github.com/pironjulien/NexusBrowser/releases/download/v2.33.13/nexus-browser-win-x64.mcpb",
+      "version": "2.33.13",
       "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "transport": {
         "type": "stdio"

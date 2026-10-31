@@ -8,5 +8,7 @@
     <BaseIntermediateOutputPath>$(NexusBrowserBuild)obj\</BaseIntermediateOutputPath>
     <BaseOutputPath>$(NexusBrowserBuild)bin\</BaseOutputPath>
     <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
+    <!-- The product version (VERSION) on every binary, so Windows shows the real one. -->
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>
   </PropertyGroup>
 </Project>

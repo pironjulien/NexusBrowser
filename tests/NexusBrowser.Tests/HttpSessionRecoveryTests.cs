@@ -28,38 +28,38 @@ public sealed class HttpSessionRecoveryTests : IDisposable
             ["params"] = new JsonObject { ["protocolVersion"] = protocol, ["capabilities"] = new JsonObject(),
                 ["clientInfo"] = new JsonObject { ["name"] = "interop-fixture", ["version"] = "1" } } }.ToJsonString();
         string original;
-        using (var opened = await daemon.SendAsync(HttpMethod.Post, "antigravity", initialize))
+        using (var opened = await daemon.SendAsync(HttpMethod.Post, "claude", initialize))
         {
             Assert.Equal(HttpStatusCode.OK, opened.StatusCode);
             original = opened.Headers.GetValues("mcp-session-id").Single();
         }
-        await daemon.CallToolAsync("antigravity", original, "browser_list_tabs");
+        await daemon.CallToolAsync("claude", original, "browser_list_tabs");
         var oldCall = bridge.Requests.Last(r => r.Action == "list-tabs");
-        await daemon.WaitForStderrAsync($"session {original[..8]} (Antigravity) expired", TimeSpan.FromSeconds(15));
+        await daemon.WaitForStderrAsync($"session {original[..8]} (Claude) expired", TimeSpan.FromSeconds(15));
 
-        using (var staleInitialize = await daemon.SendAsync(HttpMethod.Post, "antigravity", initialize, original))
+        using (var staleInitialize = await daemon.SendAsync(HttpMethod.Post, "claude", initialize, original))
         {
             Assert.Equal(HttpStatusCode.NotFound, staleInitialize.StatusCode);
             Assert.False(staleInitialize.Headers.Contains("mcp-session-id"));
         }
-        Assert.Equal(HttpStatusCode.NotFound, await daemon.ListToolsAsync("antigravity", original));
+        Assert.Equal(HttpStatusCode.NotFound, await daemon.ListToolsAsync("claude", original));
         string fresh;
-        using (var recovered = await daemon.SendAsync(HttpMethod.Post, "antigravity", initialize))
+        using (var recovered = await daemon.SendAsync(HttpMethod.Post, "claude", initialize))
         {
             Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
             fresh = recovered.Headers.GetValues("mcp-session-id").Single();
             Assert.NotEqual(original, fresh);
             Assert.Equal(protocol, JsonNode.Parse(await recovered.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))!["result"]!["protocolVersion"]!.ToString());
         }
-        Assert.Equal(HttpStatusCode.OK, await daemon.ListToolsAsync("antigravity", fresh));
-        await daemon.CallToolAsync("antigravity", fresh, "browser_list_tabs");
+        Assert.Equal(HttpStatusCode.OK, await daemon.ListToolsAsync("claude", fresh));
+        await daemon.CallToolAsync("claude", fresh, "browser_list_tabs");
         var newCall = bridge.Requests.Last(r => r.Action == "list-tabs");
         Assert.NotEqual(oldCall.Header(BridgeSecurity.ClientHeader), newCall.Header(BridgeSecurity.ClientHeader));
         Assert.Contains(oldCall.Header(BridgeSecurity.ClientHeader)!, newCall.Gone);
         using (var anotherAgent = await daemon.SendAsync(HttpMethod.Post, "codex", initialize, fresh))
             Assert.Equal(HttpStatusCode.NotFound, anotherAgent.StatusCode);
         using var unauthorizedClient = new HttpClient();
-        using var badToken = new HttpRequestMessage(HttpMethod.Post, daemon.Base + "/mcp?agent=antigravity")
+        using var badToken = new HttpRequestMessage(HttpMethod.Post, daemon.Base + "/mcp?agent=claude")
         { Content = new StringContent(initialize, Encoding.UTF8, "application/json") };
         badToken.Headers.Authorization = new AuthenticationHeaderValue("Bearer", new string('x', 64));
         badToken.Headers.Add("mcp-session-id", original);
@@ -67,4 +67,21 @@ public sealed class HttpSessionRecoveryTests : IDisposable
         Assert.Equal(HttpStatusCode.Unauthorized, refused.StatusCode);
         Assert.DoesNotContain(bridge.Requests, request => request.Action is "adopt-tab" or "create-tab");
     }
+
+    [Fact]
+    public async Task AntigravityKeepsItsExpiredIdBecauseItsClientNeverInitializesAgain()
+    {
+        using var bridge = new FakeBridge((action, _) => action == "list-tabs" ? new JsonArray() : new JsonObject());
+        using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "2");
+        string original = await daemon.OpenSessionAsync("antigravity");
+        await daemon.WaitForStderrAsync($"session {original[..8]} (Antigravity) expired", TimeSpan.FromSeconds(15));
+        Assert.Equal(HttpStatusCode.NotFound, await daemon.ListToolsAsync("codex", original));  // never another agent's
+        Assert.Equal(HttpStatusCode.OK, await daemon.ListToolsAsync("antigravity", original));
+        await daemon.WaitForStderrAsync($"session {original[..8]} (Antigravity) resumed", TimeSpan.FromSeconds(3));
+        await daemon.CallToolAsync("antigravity", original, "browser_list_tabs");
+        Assert.Equal(Identity("Antigravity", original), bridge.Requests.Last(r => r.Action == "list-tabs").Header(BridgeSecurity.ClientHeader));
+        Assert.Equal(HttpStatusCode.NotFound, await daemon.ListToolsAsync("antigravity", "not-a-daemon-session-id"));
+    }
+
+    private static string Identity(string agent, string session) => McpServer.SessionIdentity(agent, session).Id;
 }
