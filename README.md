@@ -18,10 +18,7 @@ and keyboard events sent through the Chrome DevTools Protocol, while the user ke
 
 Windows 10/11 (x64 and ARM64) · Chrome 116+ · self-contained .NET engine, nothing else to install · MIT licence
 
-Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
-([Claude](https://github.com/pironjulien/NexusWindows-Claude) ·
-[Codex](https://github.com/pironjulien/NexusWindows-Codex) ·
-[Antigravity](https://github.com/pironjulien/NexusWindows-Antigravity)),
+Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/) ([repo](https://github.com/pironjulien/NexusWindows)),
 [NexusBrowser](https://julienpiron.fr/nexusbrowser/) ([repo](https://github.com/pironjulien/NexusBrowser)),
 [NexusAndroid](https://julienpiron.fr/nexusandroid/) ([repo](https://github.com/pironjulien/NexusAndroid)).
 Project page: [julienpiron.fr/nexusbrowser](https://julienpiron.fr/nexusbrowser/).
