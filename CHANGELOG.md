@@ -3,9 +3,11 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.33.9] - 2026-10-31
 
 ### Fixed
+- The HTTP session recovery test no longer fails at random on a loaded CI runner: the fresh session it opens
+  could expire between two of the test's own requests (0.25 s idle window). The window is now 2 s.
 - A Chrome Web Store submission while Google still reviews an earlier one is reported as a warning instead of
   failing the stable release; the next stable release submits again.
 
