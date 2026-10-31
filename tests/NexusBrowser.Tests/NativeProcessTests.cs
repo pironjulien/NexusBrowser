@@ -78,7 +78,7 @@ public sealed partial class NativeProcessTests : IDisposable
         {
             if (WaitForSingleObject(info.hProcess, 15_000) != 0)
             {
-                try { using var stuck = Process.GetProcessById(info.dwProcessId); stuck.Kill(entireProcessTree: true); } catch (ArgumentException) { }
+                try { using var stuck = Process.GetProcessById(info.dwProcessId); stuck.Kill(entireProcessTree: true); } catch (ArgumentException) { /* already exited */ }
                 Assert.Fail("The native host waited forever behind cmd.exe instead of answering Chrome");
             }
             Assert.True(GetExitCodeProcess(info.hProcess, out uint code));
@@ -154,7 +154,7 @@ public sealed partial class NativeProcessTests : IDisposable
             upload.Content = new StringContent(new JsonObject
             {
                 ["action"] = "upload",
-                ["params"] = new JsonObject { ["files"] = new JsonArray(Path.Combine(BridgeSecurity.HomeDir(), ".ssh", "id_ed25519")), ["tab_id"] = 7 },
+                ["params"] = new JsonObject { ["files"] = new JsonArray(Path.Join(BridgeSecurity.HomeDir(), ".ssh", "id_ed25519")), ["tab_id"] = 7 },
                 ["timeout"] = 5.0,
             }.ToJsonString(), Encoding.UTF8, "application/json");
             upload.Headers.Add(BridgeSecurity.AgentHeader, "Claude");
@@ -179,7 +179,7 @@ public sealed partial class NativeProcessTests : IDisposable
         Assert.Equal(7, (int)answers[2]["result"]!["structuredContent"]!["data"]![0]!["id"]!);
 
         responder.Cancel();
-        try { await responderTask; } catch (OperationCanceledException) { }
+        try { await responderTask; } catch (OperationCanceledException) { /* stopped on purpose */ }
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -236,7 +236,8 @@ public sealed partial class NativeProcessTests : IDisposable
         }
         // Idle expiry has its own test (ExpiredSessionAnswers404AndIsLogged), which waits for the
         // daemon's expiry evidence. A subsecond lease here races agent-isolation assertions on busy runners.
-        using (var anonymous = await http.PostAsync(base_ + "/mcp?agent=codex", new StringContent(list, Encoding.UTF8, "application/json"), ct))
+        using (var anonymousBody = new StringContent(list, Encoding.UTF8, "application/json"))
+        using (var anonymous = await http.PostAsync(base_ + "/mcp?agent=codex", anonymousBody, ct))
             Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
     }
 
@@ -256,7 +257,7 @@ public sealed partial class NativeProcessTests : IDisposable
         Assert.Equal(1, code);
         Assert.StartsWith("NexusBrowser:", stderr);
         Assert.DoesNotContain("Unhandled exception", stderr);
-        Assert.Contains("SocketException", File.ReadAllText(Path.Combine(home, ".nexus", "nexus-browser", "engine.log")));
+        Assert.Contains("SocketException", File.ReadAllText(Path.Join(home, ".nexus", "nexus-browser", "engine.log")));
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -268,8 +269,8 @@ public sealed partial class NativeProcessTests : IDisposable
     {
         string buildRoot = Environment.GetEnvironmentVariable("NEXUS_BROWSER_BUILD_ROOT") is { Length: > 0 } configured
             ? configured
-            : Path.Combine(TestEnvironment.OriginalUserProfile!, ".nexus", "build", "nexus-browser");
-        string output = Path.Combine(buildRoot, "LifetimeFixture", "publish-tests");
+            : Path.Join(TestEnvironment.OriginalUserProfile!, ".nexus", "build", "nexus-browser");
+        string output = Path.Join(buildRoot, "LifetimeFixture", "publish-tests");
         // dotnet publish needs the real profile (NuGet cache) and no MSBuild state inherited from the test host.
         var env = new Dictionary<string, string?>
         {
@@ -286,7 +287,7 @@ public sealed partial class NativeProcessTests : IDisposable
             env, timeoutSeconds: 180);
         Assert.True(published == 0, publishOut + publishErr);
 
-        var (code, stdout, stderr) = await ChildProcess.RunAsync(Path.Combine(output, "LifetimeFixture.exe"), ["--test"], timeoutSeconds: 45);
+        var (code, stdout, stderr) = await ChildProcess.RunAsync(Path.Join(output, "LifetimeFixture.exe"), ["--test"], timeoutSeconds: 45);
         Assert.True(code == 0, $"stdout={stdout}\nstderr={stderr}");
         var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(l => JsonNode.Parse(l)).ToList();
         var expected = new[] { false, true }.Select(broker => (JsonNode)new JsonObject

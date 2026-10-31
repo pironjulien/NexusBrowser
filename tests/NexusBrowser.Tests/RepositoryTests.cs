@@ -99,9 +99,9 @@ public sealed class RepositoryTests
         var invocation = new Regex(@"\bpythonw?(\.exe)?[""']?\s+(-[a-z]\b|\S+\.py\b)|\buv\s+(sync|run|pip)\b|\buvx\b|\bpip3?\s+install\b|\bpy\s+-3\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         var found = new List<string>();
-        foreach (string file in RepositoryFiles().Where(f => Regex.IsMatch(f, @"\.(ps1|psm1|yml|yaml|json|cs|cmd|bat)$", RegexOptions.IgnoreCase)))
+        foreach (string file in RepositoryFiles().Where(f => Regex.IsMatch(f, @"\.(ps1|psm1|yml|yaml|json|cs|cmd|bat)$", RegexOptions.IgnoreCase) &&
+                     !f.StartsWith("tests/NexusBrowser.Tests/", StringComparison.Ordinal)))
         {
-            if (file.StartsWith("tests/NexusBrowser.Tests/", StringComparison.Ordinal)) continue;
             var lines = File.ReadAllLines(Repo.File(file));
             for (int i = 0; i < lines.Length; i++)
                 if (invocation.IsMatch(lines[i])) found.Add($"{file}:{i + 1}: {lines[i].Trim()}");
@@ -117,9 +117,9 @@ public sealed class RepositoryTests
         var pattern = new Regex(@"\|\s*iex\b|Invoke-Expression|-EncodedCommand|\[scriptblock\]::Create|\birm\s+https?://",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         var found = new List<string>();
-        foreach (string file in RepositoryFiles().Where(f => Regex.IsMatch(f, @"\.(ps1|psm1|yml|yaml|json|cs|cmd|bat|md|js|html)$", RegexOptions.IgnoreCase)))
+        foreach (string file in RepositoryFiles().Where(f => Regex.IsMatch(f, @"\.(ps1|psm1|yml|yaml|json|cs|cmd|bat|md|js|html)$", RegexOptions.IgnoreCase) &&
+                     f is not ("CHANGELOG.md" or "tests/NexusBrowser.Tests/RepositoryTests.cs")))
         {
-            if (file is "CHANGELOG.md" or "tests/NexusBrowser.Tests/RepositoryTests.cs") continue;
             var lines = File.ReadAllLines(Repo.File(file));
             for (int i = 0; i < lines.Length; i++)
                 if (pattern.IsMatch(lines[i])) found.Add($"{file}:{i + 1}: {lines[i].Trim()}");

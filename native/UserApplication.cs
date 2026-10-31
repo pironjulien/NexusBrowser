@@ -32,7 +32,7 @@ static unsafe class UserApplication
             throw new UserApplicationUnavailableException("The user-application broker takes an argument string and no redirected protocol handles; nothing was launched");
         object? application;
         try { application = DesktopApplication(); }
-        catch (Exception error) { throw new UserApplicationUnavailableException("The interactive Explorer launch broker is unavailable; nothing was launched", error); }
+        catch (Exception error) { throw new UserApplicationUnavailableException("The interactive Explorer launch broker is unavailable; nothing was launched", error); } // deliberate: any COM failure means no broker
         try
         {
             started();

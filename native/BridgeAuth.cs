@@ -132,17 +132,17 @@ public static class BridgeAuth
         {
             if (frameNode is not JsonObject frame ||
                 frame.Count != 3 ||
-                !frame.ContainsKey("seq") ||
-                !frame.ContainsKey("body") ||
-                !frame.ContainsKey("mac"))
+                !frame.TryGetPropertyValue("seq", out JsonNode? seqNode) ||
+                !frame.TryGetPropertyValue("body", out JsonNode? bodyNode) ||
+                !frame.TryGetPropertyValue("mac", out JsonNode? macNode))
             {
                 throw new AuthError("message non signé");
             }
 
-            if (frame["seq"] is not JsonValue seqVal ||
+            if (seqNode is not JsonValue seqVal ||
                 seqVal.GetValueKind() != JsonValueKind.Number ||
                 !seqVal.TryGetValue<long>(out long seq) ||
-                frame["body"] is not JsonValue bodyVal ||
+                bodyNode is not JsonValue bodyVal ||
                 bodyVal.GetValueKind() != JsonValueKind.String ||
                 !bodyVal.TryGetValue<string>(out string? body) ||
                 body is null)
@@ -150,7 +150,7 @@ public static class BridgeAuth
                 throw new AuthError("message signé mal formé");
             }
 
-            string? mac = frame["mac"] is JsonValue macVal && macVal.GetValueKind() == JsonValueKind.String
+            string? mac = macNode is JsonValue macVal && macVal.GetValueKind() == JsonValueKind.String
                 ? macVal.GetValue<string>()
                 : null;
 

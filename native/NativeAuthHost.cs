@@ -28,7 +28,7 @@ public static class NativeAuthHost
         {
             token = File.ReadAllText(path, Encoding.ASCII).Trim();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             throw new AuthError($"jeton du pont illisible ({ex.Message}) : lancer install.ps1");
         }
@@ -39,9 +39,8 @@ public static class NativeAuthHost
 
     public static string? CallerExtensionId(string[] args)
     {
-        foreach (var raw in args)
+        foreach (var match in args.Select(raw => OriginRegex.Match(raw ?? "")))
         {
-            var match = OriginRegex.Match(raw ?? "");
             if (match.Success)
                 return match.Groups[1].Value;
         }
@@ -78,7 +77,7 @@ public static class NativeAuthHost
         {
             return JsonNode.Parse(Encoding.UTF8.GetString(payload));
         }
-        catch
+        catch (JsonException)
         {
             throw new AuthError("message natif illisible");
         }
@@ -144,6 +143,7 @@ public static class NativeAuthHost
         }
         catch (Exception ex)
         {
+            // Deliberate boundary: Chrome always gets an answer, never a crashed host
             reply = Fail(ex.Message);
         }
 

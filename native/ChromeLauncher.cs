@@ -66,7 +66,7 @@ internal sealed class ChromeLauncher
             int session = current.SessionId;
             foreach (var process in processes)
                 try { if (!process.HasExited && process.SessionId == session) return true; }
-                catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+                catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { /* exited or inaccessible: not ours */ }
             return false;
         }
         finally { foreach (var process in processes) process.Dispose(); }
@@ -85,10 +85,10 @@ internal sealed class ChromeLauncher
                     if (key?.GetValue(null) is string path && !string.IsNullOrWhiteSpace(path))
                         candidates.Add(Environment.ExpandEnvironmentVariables(path.Trim().Trim('"')));
                 }
-                catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException) { }
-        foreach (string variable in new[] { "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA" })
-            if (Environment.GetEnvironmentVariable(variable) is { Length: > 0 } root)
-                candidates.Add(Path.Combine(root, "Google", "Chrome", "Application", "chrome.exe"));
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException) { /* unreadable registry view: next candidate */ }
+        foreach (string root in new[] { "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA" }
+                     .Select(Environment.GetEnvironmentVariable).OfType<string>().Where(root => root.Length > 0))
+            candidates.Add(Path.Join(root, "Google", "Chrome", "Application", "chrome.exe"));
         return candidates.FirstOrDefault(File.Exists);
     }
 

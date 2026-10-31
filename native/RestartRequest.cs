@@ -23,7 +23,7 @@ public static partial class RestartRequest
     public static string DefaultPath() =>
         Environment.GetEnvironmentVariable("NEXUS_BROWSER_RESTART_REQUEST") is { Length: > 0 } configured
             ? configured
-            : Path.Combine(BridgeSecurity.DefaultDataDir(), "daemon-restart.request");
+            : Path.Join(BridgeSecurity.DefaultDataDir(), "daemon-restart.request");
 
     /// <summary>SHA-256 of the code this process runs: the main assembly (framework-dependent build) or the single-file
     /// executable (release build). The installer computes the same value to name the immutable version folder.</summary>
@@ -39,7 +39,7 @@ public static partial class RestartRequest
                 return Convert.ToHexStringLower(SHA256.HashData(stream));
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* unreadable: fall back to the version */ }
         return BridgeSecurity.Version;
     }
 
@@ -69,14 +69,14 @@ public static partial class RestartRequest
             string? code = parts.FirstOrDefault(s => s.StartsWith("code:", StringComparison.Ordinal))?[5..];
             bool safe = instanceId is not null && instance == instanceId && PidTarget().IsMatch(content) &&
                 code is { Length: 64 } && code.All(Uri.IsHexDigit) && !code.Equals(loadedFingerprint, StringComparison.OrdinalIgnoreCase);
-            try { File.Delete(taken); } catch (IOException) { }
+            try { File.Delete(taken); } catch (IOException) { /* best-effort cleanup */ }
             return safe;
         }
         string? target = parts
             .FirstOrDefault(s => s.StartsWith("sha256:", StringComparison.Ordinal))?[7..];
         bool wanted = content.StartsWith("force", StringComparison.Ordinal) ||
             (target is not null && !target.Equals(loadedFingerprint, StringComparison.OrdinalIgnoreCase));
-        try { File.Delete(taken); } catch (IOException) { }
+        try { File.Delete(taken); } catch (IOException) { /* best-effort cleanup */ }
         return wanted;
     }
 
@@ -87,6 +87,6 @@ public static partial class RestartRequest
             if (!File.Exists(requestPath)) File.Move(taken, requestPath);
             else File.Delete(taken);
         }
-        catch (IOException) { }
+        catch (IOException) { /* best-effort restore */ }
     }
 }

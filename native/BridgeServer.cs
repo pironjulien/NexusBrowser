@@ -154,9 +154,8 @@ public sealed class BridgeServer : IAsyncDisposable
         _emergencyStop = new EmergencyStop();
 
         var origins = allowedOrigins?.ToList() ?? LoadConfiguredOrigins();
-        foreach (var origin in origins)
+        foreach (var trimmed in origins.Select(origin => origin.Trim().TrimEnd('/')))
         {
-            var trimmed = origin.Trim().TrimEnd('/');
             if (trimmed.StartsWith("chrome-extension://", StringComparison.Ordinal) && !trimmed.Contains('*'))
             {
                 _allowedOrigins.Add(trimmed);
@@ -194,7 +193,7 @@ public sealed class BridgeServer : IAsyncDisposable
             string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss,fff} {level} {message}\n";
             File.AppendAllText(_logFile, line, new UTF8Encoding(false));
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Ignore logging error
         }
@@ -274,9 +273,10 @@ public sealed class BridgeServer : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        try { _cts?.Cancel(); } catch { }
-        try { _wsListener?.Dispose(); } catch { }
-        try { _httpListener?.Dispose(); } catch { }
+        // Best-effort shutdown: one failed step must not keep the others from running.
+        try { _cts?.Cancel(); } catch { /* best-effort shutdown */ }
+        try { _wsListener?.Dispose(); } catch { /* best-effort shutdown */ }
+        try { _httpListener?.Dispose(); } catch { /* best-effort shutdown */ }
 
         List<BridgeClientConnection> clients;
         lock (_stateLock)
@@ -286,12 +286,13 @@ public sealed class BridgeServer : IAsyncDisposable
         }
         foreach (var c in clients)
         {
-            try { c.WebSocket.Dispose(); } catch { }
+            try { c.WebSocket.Dispose(); } catch { /* best-effort shutdown */ }
         }
 
-        if (_wsAcceptTask != null) { try { await _wsAcceptTask; } catch { } }
-        if (_httpAcceptTask != null) { try { await _httpAcceptTask; } catch { } }
-        if (_stopWatchTask != null) { try { await _stopWatchTask; } catch { } }
+        // The background loops' outcome no longer matters once they are stopped.
+        if (_wsAcceptTask != null) { try { await _wsAcceptTask; } catch { /* best-effort shutdown */ } }
+        if (_httpAcceptTask != null) { try { await _httpAcceptTask; } catch { /* best-effort shutdown */ } }
+        if (_stopWatchTask != null) { try { await _stopWatchTask; } catch { /* best-effort shutdown */ } }
         _cts?.Dispose();
     }
 
@@ -318,6 +319,7 @@ public sealed class BridgeServer : IAsyncDisposable
             }
             catch
             {
+                // Deliberate boundary: a failed accept never stops the listener loop
                 continue;
             }
 
@@ -329,7 +331,8 @@ public sealed class BridgeServer : IAsyncDisposable
                 }
                 catch
                 {
-                    try { client.Dispose(); } catch { }
+                    // Deliberate boundary: a failed connection handler must not fault the unobserved task
+                    try { client.Dispose(); } catch { /* best-effort cleanup */ }
                 }
             }, ct);
         }
@@ -404,6 +407,7 @@ public sealed class BridgeServer : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            // Deliberate boundary: any other failure only ends this connection
             Log("INFO", $"WebSocket connection ended during authentication: {ex.Message}");
             return;
         }
@@ -479,6 +483,7 @@ public sealed class BridgeServer : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            // Deliberate boundary: any failure only ends this connection
             Log("INFO", $"WebSocket connection ended: {ex.Message}");
         }
         finally
@@ -515,7 +520,7 @@ public sealed class BridgeServer : IAsyncDisposable
             {
                 node = JsonNode.Parse(raw);
             }
-            catch
+            catch (JsonException)
             {
                 throw new AuthError("message de poignée de main illisible");
             }
@@ -633,7 +638,7 @@ public sealed class BridgeServer : IAsyncDisposable
         }
         catch
         {
-            // Ignore close error
+            // Deliberate best-effort cleanup: the peer may already be gone
         }
     }
 
@@ -643,7 +648,7 @@ public sealed class BridgeServer : IAsyncDisposable
 
     private static void EcrireCompteurs(JsonObject data)
     {
-        string fichier = Path.Combine(BridgeSecurity.DefaultDataDir(), "compteurs.json");
+        string fichier = Path.Join(BridgeSecurity.DefaultDataDir(), "compteurs.json");
         string? rawSource = TryGetString(data, "source");
         string source = rawSource != null && Uuid36Regex.IsMatch(rawSource) ? rawSource : "defaut";
         var maintenant = DateTimeOffset.UtcNow;
@@ -670,9 +675,9 @@ public sealed class BridgeServer : IAsyncDisposable
                         }
                     }
                 }
-                catch
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
                 {
-                    // Start fresh
+                    // Unreadable counters: start fresh
                 }
             }
 
@@ -719,7 +724,7 @@ public sealed class BridgeServer : IAsyncDisposable
             File.WriteAllText(tmp, root.ToJsonString(JsonOptions), new UTF8Encoding(false));
             File.Move(tmp, fichier, overwrite: true);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Ignore counter error
         }
@@ -734,7 +739,7 @@ public sealed class BridgeServer : IAsyncDisposable
         }
         catch
         {
-            // Extension absent
+            // Deliberate best-effort notification: the extension may be absent or gone
         }
     }
 
@@ -748,10 +753,8 @@ public sealed class BridgeServer : IAsyncDisposable
         var toCancel = new List<PendingCommand>();
         lock (_stateLock)
         {
-            foreach (var kv in _pendingRequests.ToList())
+            foreach (var kv in _pendingRequests.ToList().Where(kv => kv.Value.Action != "emergency_stop" && !kv.Value.Future.Task.IsCompleted))
             {
-                if (kv.Value.Action == "emergency_stop" || kv.Value.Future.Task.IsCompleted)
-                    continue;
                 _pendingRequests.Remove(kv.Key);
                 toCancel.Add(kv.Value);
             }
@@ -781,7 +784,7 @@ public sealed class BridgeServer : IAsyncDisposable
             }
             catch
             {
-                // Keep watcher alive
+                // Deliberate boundary: keep the never-crash watcher loop alive
             }
 
             try
@@ -892,6 +895,7 @@ public sealed class BridgeServer : IAsyncDisposable
             }
             catch
             {
+                // Deliberate boundary: any send failure makes this connection unusable; try the next one
                 lock (_stateLock)
                 {
                     _pendingRequests.Remove(reqId);
@@ -944,13 +948,11 @@ public sealed class BridgeServer : IAsyncDisposable
             var (method, path, headers, overRead) = headerResult.Value;
 
             long contentLength = 0;
-            if (headers.TryGetValue("content-length", out var clRaw))
+            if (headers.TryGetValue("content-length", out var clRaw) &&
+                !long.TryParse(clRaw, NumberStyles.None, CultureInfo.InvariantCulture, out contentLength))
             {
-                if (!long.TryParse(clRaw, NumberStyles.None, CultureInfo.InvariantCulture, out contentLength))
-                {
-                    await SendJsonResponseAsync(stream, 400, new JsonObject { ["success"] = false, ["error"] = "Invalid Content-Length" });
-                    return;
-                }
+                await SendJsonResponseAsync(stream, 400, new JsonObject { ["success"] = false, ["error"] = "Invalid Content-Length" });
+                return;
             }
             if (contentLength < 0 || contentLength > MaxRequestBytes)
             {
@@ -1082,9 +1084,9 @@ public sealed class BridgeServer : IAsyncDisposable
                         foreach (var tab in tabs as JsonArray ?? throw new InvalidOperationException("Tab ownership unavailable; bridge kept."))
                         {
                             if (tab is not JsonObject value || value["id"] is not JsonValue tabId || !tabId.TryGetValue<int>(out int id) || id <= 0 ||
-                                !value.ContainsKey("owner") || value["state"] is not JsonValue state || !state.TryGetValue<string>(out string? tabState))
+                                !value.TryGetPropertyValue("owner", out JsonNode? owner) || value["state"] is not JsonValue state || !state.TryGetValue<string>(out string? tabState))
                                 throw new InvalidOperationException("Invalid tab ownership report; bridge kept.");
-                            if (value["owner"] is not null || tabState != "user")
+                            if (owner is not null || tabState != "user")
                                 throw new InvalidOperationException("An agent owns Chrome tabs; bridge kept.");
                         }
                     }
@@ -1143,7 +1145,7 @@ public sealed class BridgeServer : IAsyncDisposable
                             BridgeAuth.CheckExtensionId(extId);
                         }
                     }
-                    catch
+                    catch (Exception ex) when (ex is JsonException or AuthError)
                     {
                         await SendJsonResponseAsync(stream, 400, new JsonObject { ["success"] = false, ["error"] = "extension_id invalide" });
                         return;
@@ -1175,7 +1177,7 @@ public sealed class BridgeServer : IAsyncDisposable
                 {
                     parsedBody = JsonNode.Parse(Encoding.UTF8.GetString(body));
                 }
-                catch
+                catch (JsonException)
                 {
                     await SendJsonResponseAsync(stream, 400, new JsonObject { ["success"] = false, ["error"] = "Invalid JSON body" });
                     return;
@@ -1195,11 +1197,12 @@ public sealed class BridgeServer : IAsyncDisposable
                 }
 
                 JsonObject @params;
-                if (!reqJson.ContainsKey("params") || reqJson["params"] is null)
+                JsonNode? paramsNode = reqJson["params"];
+                if (paramsNode is null)
                 {
                     @params = new JsonObject();
                 }
-                else if (reqJson["params"] is JsonObject pObj)
+                else if (paramsNode is JsonObject pObj)
                 {
                     @params = (JsonObject)pObj.DeepClone();
                 }
@@ -1210,18 +1213,16 @@ public sealed class BridgeServer : IAsyncDisposable
                 }
 
                 double timeout = 15.0;
-                if (reqJson.ContainsKey("timeout") && reqJson["timeout"] is not null)
+                if (reqJson["timeout"] is { } timeoutNode &&
+                    (timeoutNode is not JsonValue tv ||
+                     tv.GetValueKind() != JsonValueKind.Number ||
+                     !tv.TryGetValue<double>(out timeout) ||
+                     !double.IsFinite(timeout) ||
+                     timeout < 0.1 ||
+                     timeout > 120.0))
                 {
-                    if (reqJson["timeout"] is not JsonValue tv ||
-                        tv.GetValueKind() != JsonValueKind.Number ||
-                        !tv.TryGetValue<double>(out timeout) ||
-                        !double.IsFinite(timeout) ||
-                        timeout < 0.1 ||
-                        timeout > 120.0)
-                    {
-                        await SendJsonResponseAsync(stream, 400, new JsonObject { ["success"] = false, ["error"] = "timeout must be between 0.1 and 120 seconds" });
-                        return;
-                    }
+                    await SendJsonResponseAsync(stream, 400, new JsonObject { ["success"] = false, ["error"] = "timeout must be between 0.1 and 120 seconds" });
+                    return;
                 }
 
                 string normalized = NormalizeAction(action.Trim());
@@ -1244,18 +1245,15 @@ public sealed class BridgeServer : IAsyncDisposable
                     return;
                 }
 
-                if (!BridgeSecurity.IsReadOnlyAction(action))
+                if (!BridgeSecurity.IsReadOnlyAction(action) && _emergencyStop.Check() is { } stopMsg)
                 {
-                    if (_emergencyStop.Check() is { } stopMsg)
+                    await SendJsonResponseAsync(stream, 423, new JsonObject
                     {
-                        await SendJsonResponseAsync(stream, 423, new JsonObject
-                        {
-                            ["success"] = false,
-                            ["error"] = stopMsg,
-                            ["emergency_stop"] = true,
-                        });
-                        return;
-                    }
+                        ["success"] = false,
+                        ["error"] = stopMsg,
+                        ["emergency_stop"] = true,
+                    });
+                    return;
                 }
 
                 if (BridgeSecurity.IsUploadAction(action, @params))
@@ -1288,8 +1286,9 @@ public sealed class BridgeServer : IAsyncDisposable
                     if (client.HasValue && headers.TryGetValue(BridgeSecurity.GoneHeader.ToLowerInvariant(), out var goneHdr))
                     {
                         gone ??= [];
-                        foreach (var id in goneHdr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(32))
-                            if (id != client.Value.Id && BridgeSecurity.CheckIdentity(client.Value.Agent, id) is not null && !gone.Contains(id)) gone.Add(id);
+                        foreach (var id in goneHdr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(32)
+                                     .Where(id => id != client.Value.Id && BridgeSecurity.CheckIdentity(client.Value.Agent, id) is not null && !gone.Contains(id)))
+                            gone.Add(id);
                     }
 
                     try
@@ -1312,6 +1311,7 @@ public sealed class BridgeServer : IAsyncDisposable
                     }
                     catch (Exception ex)
                     {
+                        // Deliberate boundary: any command failure is answered to the caller, never left unanswered
                         await SendJsonResponseAsync(stream, 400, new JsonObject
                         {
                             ["success"] = false,
@@ -1331,7 +1331,7 @@ public sealed class BridgeServer : IAsyncDisposable
         }
         catch
         {
-            // Connection closed or failed
+            // Deliberate boundary: connection closed or failed; the bridge keeps serving
         }
     }
 
@@ -1375,7 +1375,7 @@ public sealed class BridgeServer : IAsyncDisposable
             var ascii = Encoding.GetEncoding("us-ascii", EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
             headerText = ascii.GetString(buf, 0, headerEnd);
         }
-        catch
+        catch (DecoderFallbackException)
         {
             if (sendErrorResponses)
                 await SendJsonResponseAsync(stream, 400, new JsonObject { ["success"] = false, ["error"] = "Invalid HTTP headers" });
@@ -1465,14 +1465,14 @@ public sealed class BridgeServer : IAsyncDisposable
             await stream.WriteAsync(body);
             await stream.FlushAsync();
         }
-        catch
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
             // Client gone
         }
     }
 
-    private static string UpdateStatusPath() => Path.Combine(
-        Environment.GetEnvironmentVariable("NEXUS_STATUS_DIR") ?? Path.Combine(BridgeSecurity.HomeDir(), ".nexus", "status"), "browser.json");
+    private static string UpdateStatusPath() => Path.Join(
+        Environment.GetEnvironmentVariable("NEXUS_STATUS_DIR") ?? Path.Join(BridgeSecurity.HomeDir(), ".nexus", "status"), "browser.json");
 
     private static JsonObject ReadUpdateStatus()
     {
@@ -1501,7 +1501,7 @@ public sealed class BridgeServer : IAsyncDisposable
     {
         try
         {
-            var metadata = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "installation.json"))) as JsonObject;
+            var metadata = JsonNode.Parse(File.ReadAllText(Path.Join(AppContext.BaseDirectory, "installation.json"))) as JsonObject;
             string? root = metadata is null ? null : TryGetString(metadata, "repository_root");
             return string.IsNullOrWhiteSpace(root) || !Directory.Exists(root) ? null : root;
         }
@@ -1512,9 +1512,9 @@ public sealed class BridgeServer : IAsyncDisposable
     {
         try
         {
-            var metadata = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "installation.json"))) as JsonObject;
+            var metadata = JsonNode.Parse(File.ReadAllText(Path.Join(AppContext.BaseDirectory, "installation.json"))) as JsonObject;
             string? root = metadata is null ? null : TryGetString(metadata, "repository_root");
-            string expected = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NexusBrowser", "app");
+            string expected = Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NexusBrowser", "app");
             return !string.IsNullOrWhiteSpace(root) && string.Equals(Path.GetFullPath(root).TrimEnd('\\', '/'), expected.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception ex) when (ex is IOException or JsonException or ArgumentException) { return false; }
@@ -1572,7 +1572,7 @@ public sealed class BridgeServer : IAsyncDisposable
             if (TryGetString(status, "state") == "updating") return (202, status);
             status["version"] = BridgeSecurity.Version;
             // The ecosystem owns its one maintenance schedule. A product request delegates to that existing task.
-            if (File.Exists(Path.Combine(BridgeSecurity.HomeDir(), ".nexus", "nexussystem", "maintenance", "get-nexus.ps1")) &&
+            if (File.Exists(Path.Join(BridgeSecurity.HomeDir(), ".nexus", "nexussystem", "maintenance", "get-nexus.ps1")) &&
                 await RunUpdateTaskAsync("NexusSystem Update", queryFirst: true, ct))
             {
                 status["state"] = "deferred"; status["message"] = "NexusSystem maintenance requested; activation will be verified separately.";

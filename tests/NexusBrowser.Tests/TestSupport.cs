@@ -18,7 +18,7 @@ namespace NexusBrowser.Tests;
 internal static class TestEnvironment
 {
     public static string Root { get; private set; } = "";
-    public static string Home => Path.Combine(Root, "home");
+    public static string Home => Path.Join(Root, "home");
     public static string? OriginalUserProfile { get; private set; }
     public static string? OriginalHome { get; private set; }
 
@@ -29,15 +29,15 @@ internal static class TestEnvironment
     {
         OriginalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
         OriginalHome = Environment.GetEnvironmentVariable("HOME");
-        Root = Path.Combine(Path.GetTempPath(), $"nb-tests-{Environment.ProcessId}-{Guid.NewGuid():N}");
+        Root = Path.Join(Path.GetTempPath(), $"nb-tests-{Environment.ProcessId}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Home);
         Environment.SetEnvironmentVariable("USERPROFILE", Home);
         Environment.SetEnvironmentVariable("HOME", Home);
-        Environment.SetEnvironmentVariable("NEXUS_JOURNAL_HOME", Path.Combine(Root, "journal"));
-        Environment.SetEnvironmentVariable("NEXUS_SHARED_HOME", Path.Combine(Root, "shared"));
-        Environment.SetEnvironmentVariable("NEXUS_STATUS_DIR", Path.Combine(Root, "status"));
-        Environment.SetEnvironmentVariable("NEXUS_BROWSER_TOKEN_FILE", Path.Combine(Home, ".nexus", "nexus-browser", "bridge-token"));
-        Environment.SetEnvironmentVariable("NEXUS_BROWSER_RESTART_REQUEST", Path.Combine(Root, "daemon-restart.request"));
+        Environment.SetEnvironmentVariable("NEXUS_JOURNAL_HOME", Path.Join(Root, "journal"));
+        Environment.SetEnvironmentVariable("NEXUS_SHARED_HOME", Path.Join(Root, "shared"));
+        Environment.SetEnvironmentVariable("NEXUS_STATUS_DIR", Path.Join(Root, "status"));
+        Environment.SetEnvironmentVariable("NEXUS_BROWSER_TOKEN_FILE", Path.Join(Home, ".nexus", "nexus-browser", "bridge-token"));
+        Environment.SetEnvironmentVariable("NEXUS_BROWSER_RESTART_REQUEST", Path.Join(Root, "daemon-restart.request"));
         // Port 1 refuses at once; any port other than 9225 also disables bridge/Chrome auto-start in McpServer.
         Environment.SetEnvironmentVariable("NEXUS_BROWSER_HTTP_PORT", "1");
         foreach (string inherited in new[] { "NEXUS_MCP_TOKEN", "NEXUS_MCP_TOKEN_FILE", "NEXUS_BROWSER_SESSION_IDLE_SECONDS",
@@ -45,7 +45,7 @@ internal static class TestEnvironment
             Environment.SetEnvironmentVariable(inherited, null);
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
-            try { Directory.Delete(Root, recursive: true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            try { Directory.Delete(Root, recursive: true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best-effort cleanup */ }
         };
     }
 }
@@ -80,13 +80,13 @@ internal sealed class EnvScope : IDisposable
 
 internal sealed class TempDir : IDisposable
 {
-    public string Path { get; } = Directory.CreateDirectory(System.IO.Path.Combine(TestEnvironment.Root, "t-" + Guid.NewGuid().ToString("N")[..12])).FullName;
+    public string Path { get; } = Directory.CreateDirectory(System.IO.Path.Join(TestEnvironment.Root, "t-" + Guid.NewGuid().ToString("N")[..12])).FullName;
 
-    public string this[string relative] => System.IO.Path.Combine(Path, relative);
+    public string this[string relative] => System.IO.Path.Join(Path, relative);
 
     public void Dispose()
     {
-        try { Directory.Delete(Path, recursive: true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        try { Directory.Delete(Path, recursive: true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best-effort cleanup */ }
     }
 }
 
@@ -95,9 +95,9 @@ internal static class Repo
     private static string ThisFile([CallerFilePath] string path = "") => path;
 
     /// <summary>Repository root, from this source file's location (the build output lives outside the repo).</summary>
-    public static string Root { get; } = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(ThisFile())!, "..", ".."));
+    public static string Root { get; } = Path.GetFullPath(Path.Join(Path.GetDirectoryName(ThisFile())!, "..", ".."));
 
-    public static string File(params string[] parts) => Path.Combine([Root, .. parts]);
+    public static string File(params string[] parts) => Path.Join([Root, .. parts]);
 }
 
 internal static class NativeExe
@@ -107,7 +107,7 @@ internal static class NativeExe
     {
         get
         {
-            string exe = System.IO.Path.Combine(AppContext.BaseDirectory, "NexusBrowser.exe");
+            string exe = System.IO.Path.Join(AppContext.BaseDirectory, "NexusBrowser.exe");
             Assert.True(System.IO.File.Exists(exe), $"NexusBrowser.exe not found next to the tests: {exe}");
             return exe;
         }
@@ -138,7 +138,7 @@ internal static class Ports
                 b.Bind(new IPEndPoint(IPAddress.Loopback, port + 1));
                 return port;
             }
-            catch (SocketException) { }
+            catch (SocketException) { /* pair taken: try the next one */ }
         }
         throw new InvalidOperationException("Unable to allocate a consecutive ephemeral port pair");
     }
@@ -178,8 +178,8 @@ internal sealed class ChildProcess : IDisposable
 
     public void Dispose()
     {
-        try { if (!Process.HasExited) Process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-        try { Process.WaitForExit(5000); } catch (InvalidOperationException) { }
+        try { if (!Process.HasExited) Process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
+        try { Process.WaitForExit(5000); } catch (InvalidOperationException) { /* already gone */ }
         Process.Dispose();
     }
 
@@ -253,7 +253,7 @@ internal sealed class FakeBridge : IDisposable
         {
             TcpClient client;
             try { client = await _listener.AcceptTcpClientAsync(_stop.Token); }
-            catch (Exception) { return; }
+            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or SocketException) { return; }
             _ = Task.Run(() => ServeAsync(client));
         }
     }
@@ -300,6 +300,7 @@ internal sealed class FakeBridge : IDisposable
                     try { response = new JsonObject { ["success"] = true, ["data"] = _answer(action, parameters)?.DeepClone() }; }
                     catch (Exception error)
                     {
+                        // Deliberate: the fake bridge answers any handler failure as an error, like the real one
                         status = 400;
                         response = new JsonObject { ["success"] = false, ["error"] = error.Message };
                     }
@@ -404,7 +405,7 @@ internal static class FakeExtension
             {
                 string? raw;
                 try { raw = await ReceiveAsync(ws, ct); }
-                catch (Exception) { break; }
+                catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException or InvalidOperationException) { break; }
                 if (raw is null) break;
                 var command = (JsonObject)JsonNode.Parse(channel.Open(JsonNode.Parse(raw)))!;
                 lock (received) received.Add(command);
@@ -415,7 +416,7 @@ internal static class FakeExtension
                     ["data"] = data(command),
                 };
                 try { await SendAsync(ws, channel.Seal(reply.ToJsonString()), ct); }
-                catch (Exception) { break; }
+                catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException or InvalidOperationException) { break; }
             }
         }, ct);
 }

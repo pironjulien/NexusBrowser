@@ -6,7 +6,7 @@ namespace NexusBrowser.Tests;
 public sealed class RestartRequestTests : IDisposable
 {
     private readonly string _dir = Directory.CreateTempSubdirectory("nb-restart-").FullName;
-    private string Request => Path.Combine(_dir, "daemon-restart.request");
+    private string Request => Path.Join(_dir, "daemon-restart.request");
 
     public void Dispose() => Directory.Delete(_dir, recursive: true);
 

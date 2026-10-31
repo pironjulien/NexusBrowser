@@ -13,7 +13,7 @@ public sealed class SharedTokenTests : IDisposable
     [InlineData(Shells.Pwsh)]
     public async Task ConcurrentInstallersReuseOneTokenAndRepairAnEmptyFile(string shell)
     {
-        string tokenFile = _dir[Path.Combine("shared", "token.txt")];
+        string tokenFile = _dir[Path.Join("shared", "token.txt")];
         Directory.CreateDirectory(Path.GetDirectoryName(tokenFile)!);
         string script = _dir["resolve.ps1"];
         File.WriteAllText(script, $"""

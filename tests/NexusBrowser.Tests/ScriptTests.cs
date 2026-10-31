@@ -142,13 +142,13 @@ public sealed class ScriptTests : IDisposable
     {
         string root = _dir["locked-install"];
         Directory.CreateDirectory(root);
-        using var held = new FileStream(Path.Combine(root, "update.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var held = new FileStream(Path.Join(root, "update.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         var (code, stdout, stderr) = await Shells.FileAsync(shell, Repo.File("get.ps1"), ["-UpdateOnly"],
             new Dictionary<string, string?> { ["NEXUS_BROWSER_ROOT"] = root });
         Assert.True(code == 0, stdout + stderr);
         Assert.Contains("\"reason\":\"maintenance-in-progress\"", stdout);
-        Assert.False(Directory.Exists(Path.Combine(root, "download")));
-        Assert.False(Directory.Exists(Path.Combine(root, "app.next")));
+        Assert.False(Directory.Exists(Path.Join(root, "download")));
+        Assert.False(Directory.Exists(Path.Join(root, "app.next")));
     }
 
     [Theory]
@@ -158,8 +158,8 @@ public sealed class ScriptTests : IDisposable
     {
         string payload = _dir["cached-payload"], probe = _dir["cache-verifier.ps1"];
         Directory.CreateDirectory(payload);
-        File.WriteAllText(Path.Combine(payload, "get.ps1"), "throw 'must never execute cached code'");
-        File.WriteAllText(Path.Combine(payload, "engine.txt"), "verified engine");
+        File.WriteAllText(Path.Join(payload, "get.ps1"), "throw 'must never execute cached code'");
+        File.WriteAllText(Path.Join(payload, "engine.txt"), "verified engine");
         File.WriteAllText(probe,
             "$ErrorActionPreference='Stop'\n$t=$null;$e=$null\n" +
             $"$ast=[System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("get.ps1"))},[ref]$t,[ref]$e)\n" +
@@ -167,7 +167,7 @@ public sealed class ScriptTests : IDisposable
             "$fn=Join-Path (Split-Path $PSCommandPath) 'cache-function.ps1';[IO.File]::WriteAllText($fn,$f.Extent.Text);. $fn\n" +
             $"Get-CachedPayloadFingerprint {Shells.Quote(payload)}\n" +
             $"& {Shells.Quote(Repo.File("scripts", "payload-integrity.ps1"))} -Path {Shells.Quote(payload)}\n" +
-            $"[IO.File]::WriteAllText({Shells.Quote(Path.Combine(payload, "get.ps1"))},'changed cached installer')\n" +
+            $"[IO.File]::WriteAllText({Shells.Quote(Path.Join(payload, "get.ps1"))},'changed cached installer')\n" +
             $"Get-CachedPayloadFingerprint {Shells.Quote(payload)}\n", Encoding.ASCII);
         var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
         Assert.True(code == 0, stderr);
@@ -252,20 +252,20 @@ public sealed class ScriptTests : IDisposable
     /// <summary>A release zip as package-release.ps1 lays it out, with the engine built for these tests.</summary>
     private string FakeRelease(string folder)
     {
-        string staging = Path.Combine(_dir.Path, folder + "-staging");
-        string engine = Path.Combine(staging, "engine");
+        string staging = Path.Join(_dir.Path, folder + "-staging");
+        string engine = Path.Join(staging, "engine");
         Directory.CreateDirectory(engine);
         foreach (string name in new[] { "NexusBrowser.exe", "NexusBrowser.dll", "NexusBrowser.runtimeconfig.json", "NexusBrowser.deps.json", "SkiaSharp.dll" })
-            File.Copy(Path.Combine(AppContext.BaseDirectory, name), Path.Combine(engine, name));
-        string native = Path.Combine(AppContext.BaseDirectory, "runtimes", "win-x64", "native", "libSkiaSharp.dll");
-        Directory.CreateDirectory(Path.Combine(engine, "runtimes", "win-x64", "native"));
-        File.Copy(native, Path.Combine(engine, "runtimes", "win-x64", "native", "libSkiaSharp.dll"));
-        File.WriteAllText(Path.Combine(staging, "VERSION"), BridgeSecurity.Version + "\n", Encoding.ASCII);
-        string release = Directory.CreateDirectory(Path.Combine(_dir.Path, folder)).FullName;
-        string zip = Path.Combine(release, "NexusBrowser-win-x64.zip");
+            File.Copy(Path.Join(AppContext.BaseDirectory, name), Path.Join(engine, name));
+        string native = Path.Join(AppContext.BaseDirectory, "runtimes", "win-x64", "native", "libSkiaSharp.dll");
+        Directory.CreateDirectory(Path.Join(engine, "runtimes", "win-x64", "native"));
+        File.Copy(native, Path.Join(engine, "runtimes", "win-x64", "native", "libSkiaSharp.dll"));
+        File.WriteAllText(Path.Join(staging, "VERSION"), BridgeSecurity.Version + "\n", Encoding.ASCII);
+        string release = Directory.CreateDirectory(Path.Join(_dir.Path, folder)).FullName;
+        string zip = Path.Join(release, "NexusBrowser-win-x64.zip");
         ZipFile.CreateFromDirectory(staging, zip);
         string hash = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(zip)));
-        File.WriteAllText(Path.Combine(release, "SHA256SUMS.txt"), $"{hash}  NexusBrowser-win-x64.zip\n{new string('0', 64)}  NexusBrowser-win-arm64.zip\n", Encoding.ASCII);
+        File.WriteAllText(Path.Join(release, "SHA256SUMS.txt"), $"{hash}  NexusBrowser-win-x64.zip\n{new string('0', 64)}  NexusBrowser-win-arm64.zip\n", Encoding.ASCII);
         return zip;
     }
 
@@ -284,7 +284,7 @@ public sealed class ScriptTests : IDisposable
         Assert.True(code == 0, stdout + stderr);
         Assert.Contains("Package checked against SHA256SUMS.txt.", stdout);
         Assert.Contains($"NexusBrowser {BridgeSecurity.Version} unpacked in", stdout);
-        Assert.True(File.Exists(Path.Combine(root, "app", "engine", "NexusBrowser.exe")));
+        Assert.True(File.Exists(Path.Join(root, "app", "engine", "NexusBrowser.exe")));
         Assert.Equal(["app", "update.lock"], Directory.EnumerateFileSystemEntries(root).Select(Path.GetFileName).Order());
     }
 
@@ -293,7 +293,7 @@ public sealed class ScriptTests : IDisposable
     {
         var core = await ChildProcess.RunAsync(Shells.Pwsh, ["-NoProfile", "-Command", "$PSHOME"]);
         var desktop = await ChildProcess.RunAsync(Shells.WindowsPowerShell, ["-NoProfile", "-Command", "$PSHOME"], new Dictionary<string, string?> { ["PSModulePath"] = null });
-        string polluted = Path.Combine(core.Stdout.Trim(), "Modules") + ";" + Path.Combine(desktop.Stdout.Trim(), "Modules");
+        string polluted = Path.Join(core.Stdout.Trim(), "Modules") + ";" + Path.Join(desktop.Stdout.Trim(), "Modules");
         string zip = FakeRelease("module-regression");
         var result = await ChildProcess.RunAsync(Shells.WindowsPowerShell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", Repo.File("get.ps1")],
             new Dictionary<string, string?> { ["PSModulePath"] = polluted, ["NEXUS_BROWSER_SOURCE"] = zip, ["NEXUS_BROWSER_ROOT"] = _dir["module-install"] });
@@ -316,8 +316,8 @@ public sealed class ScriptTests : IDisposable
         }, timeoutSeconds: 90);
         Assert.NotEqual(0, code);
         Assert.Contains("SHA-256 mismatch for NexusBrowser-win-x64.zip", stdout + stderr);
-        Assert.False(Directory.Exists(Path.Combine(root, "app")));
-        Assert.False(Directory.Exists(Path.Combine(root, "download", "package")));
+        Assert.False(Directory.Exists(Path.Join(root, "app")));
+        Assert.False(Directory.Exists(Path.Join(root, "download", "package")));
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -364,7 +364,7 @@ public sealed class ScriptTests : IDisposable
     {
         string userData = _dir["User Data"];
         string unpacked = Directory.CreateDirectory(_dir["ancien-pont"]).FullName;
-        File.WriteAllText(Path.Combine(unpacked, "manifest.json"), "{\"name\": \"Antigravity Browser Bridge\"}");
+        File.WriteAllText(Path.Join(unpacked, "manifest.json"), "{\"name\": \"Antigravity Browser Bridge\"}");
         var settings = new JsonObject
         {
             ["aaaapppppppppppppppppppppppppppp"] = new JsonObject { ["path"] = unpacked, ["state"] = 1 },
@@ -374,10 +374,10 @@ public sealed class ScriptTests : IDisposable
         };
         foreach (string profile in new[] { "Default", "Profile 2", "System Profile" })
         {
-            Directory.CreateDirectory(Path.Combine(userData, profile));
-            File.WriteAllText(Path.Combine(userData, profile, "Secure Preferences"), new JsonObject { ["extensions"] = new JsonObject { ["settings"] = settings.DeepClone() } }.ToJsonString());
+            Directory.CreateDirectory(Path.Join(userData, profile));
+            File.WriteAllText(Path.Join(userData, profile, "Secure Preferences"), new JsonObject { ["extensions"] = new JsonObject { ["settings"] = settings.DeepClone() } }.ToJsonString());
         }
-        File.WriteAllText(Path.Combine(userData, "Default", "Preferences"), "{not json"); // unreadable: skipped
+        File.WriteAllText(Path.Join(userData, "Default", "Preferences"), "{not json"); // unreadable: skipped
         var before = Directory.EnumerateFiles(userData, "*", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
 
         var (code, stdout, stderr) = await Shells.FileAsync(Shells.Pwsh, Repo.File("scripts", "ancienne-extension.ps1"), ["-UserData", userData]);
@@ -436,7 +436,7 @@ public sealed class ScriptTests : IDisposable
     {
         string zip = await StorePackageAsync();
         string extension = Repo.File("extension");
-        var manifest = (JsonObject)JsonNode.Parse(File.ReadAllText(Path.Combine(extension, "manifest.json")))!;
+        var manifest = (JsonObject)JsonNode.Parse(File.ReadAllText(Path.Join(extension, "manifest.json")))!;
         var files = Directory.EnumerateFiles(extension, "*", SearchOption.AllDirectories)
             .Select(f => Path.GetRelativePath(extension, f).Replace('\\', '/')).Order(StringComparer.Ordinal).ToList();
         using var archive = ZipFile.OpenRead(zip);
@@ -447,7 +447,7 @@ public sealed class ScriptTests : IDisposable
         manifest.Remove("key");
         Assert.True(JsonNode.DeepEquals(manifest, packaged), packaged.ToJsonString());
         foreach (string file in files.Where(f => f != "manifest.json"))
-            Assert.True(File.ReadAllBytes(Path.Combine(extension, file)).AsSpan().SequenceEqual(Bytes(archive, file)), file);
+            Assert.True(File.ReadAllBytes(Path.Join(extension, file)).AsSpan().SequenceEqual(Bytes(archive, file)), file);
         Assert.Equal($"nexus-browser-extension-{manifest["version"]}.zip", Path.GetFileName(zip));
     }
 

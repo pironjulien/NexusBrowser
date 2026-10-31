@@ -23,8 +23,8 @@ public sealed class ClientRegistrationTests : IDisposable
     private (int, string) _runResult = (0, "");
 
     private string Home => _dir["home"];
-    private string Roaming => Path.Combine(Home, "AppData", "Roaming");
-    private string Local => Path.Combine(Home, "AppData", "Local");
+    private string Roaming => Path.Join(Home, "AppData", "Roaming");
+    private string Local => Path.Join(Home, "AppData", "Local");
     private string Backups => _dir["b"];
 
     public ClientRegistrationTests() => Directory.CreateDirectory(Home);
@@ -84,7 +84,7 @@ public sealed class ClientRegistrationTests : IDisposable
     // Codex (~/.codex/config.toml)
     // ---------------------------------------------------------------------------------------------
 
-    private string CodexConfig => Path.Combine(Home, ".codex", "config.toml");
+    private string CodexConfig => Path.Join(Home, ".codex", "config.toml");
 
     [Fact]
     public void CodexAddedThenReplacedInPlaceOtherSettingsKept()
@@ -168,7 +168,7 @@ public sealed class ClientRegistrationTests : IDisposable
     {
         Directory.CreateDirectory(Path.GetDirectoryName(CodexConfig)!);
         string plugin = $"[plugins.\"nexus-browser@nexus-plugins\"]\nenabled = {enabled.ToString().ToLowerInvariant()}\n";
-        string installed = Path.Combine(Local, "NexusBrowser", "versions", "0123456789abcdef", "NexusBrowser.exe");
+        string installed = Path.Join(Local, "NexusBrowser", "versions", "0123456789abcdef", "NexusBrowser.exe");
         File.WriteAllText(CodexConfig, plugin);
         Assert.Equal(ClientRegistration.Plugin, ClientRegistration.Codex(Context()));
         Assert.Equal(plugin, File.ReadAllText(CodexConfig));
@@ -196,7 +196,7 @@ public sealed class ClientRegistrationTests : IDisposable
         File.WriteAllText(CodexConfig, plugin);
         Assert.Equal(ClientRegistration.Plugin, ClientRegistration.Codex(Context()));
         Assert.Equal(plugin, File.ReadAllText(CodexConfig));
-        string installed = Path.Combine(Local, "NexusBrowser", "versions", "0123456789abcdef", "NexusBrowser.exe");
+        string installed = Path.Join(Local, "NexusBrowser", "versions", "0123456789abcdef", "NexusBrowser.exe");
         File.WriteAllText(CodexConfig, plugin + "\n" + ClientRegistration.CodexBlock(installed));
         Assert.Equal(ClientRegistration.Removed, ClientRegistration.Codex(Context()));
         Assert.Equal(plugin + "\n", File.ReadAllText(CodexConfig));
@@ -226,22 +226,22 @@ public sealed class ClientRegistrationTests : IDisposable
     [Fact]
     public void AntigravityGetsAPluginAndTheGlobalEntryOfAnEarlierVersionGoes()
     {
-        string folder = Path.Combine(Home, ".gemini", "config");
+        string folder = Path.Join(Home, ".gemini", "config");
         Directory.CreateDirectory(folder);
-        File.WriteAllText(Path.Combine(folder, "mcp_config.json"),
+        File.WriteAllText(Path.Join(folder, "mcp_config.json"),
             new JsonObject { ["mcpServers"] = new JsonObject { ["other"] = new JsonObject { ["command"] = "x" }, ["nexus-browser"] = PythonEntry("Antigravity") } }.ToJsonString());
-        File.WriteAllText(Path.Combine(folder, "config.json"), "{\"theme\": \"dark\"}");
+        File.WriteAllText(Path.Join(folder, "config.json"), "{\"theme\": \"dark\"}");
 
         Assert.StartsWith("plugin installed and enabled", ClientRegistration.Antigravity(Context()));
-        string plugin = Path.Combine(folder, "plugins", "nexus-browser");
-        AssertJson(new JsonObject { ["mcpServers"] = new JsonObject { ["nexus-browser"] = Entry("Antigravity") } }, ReadJson(Path.Combine(plugin, "mcp_config.json")));
-        Assert.Equal("nexus-browser", (string?)ReadJson(Path.Combine(plugin, "plugin.json"))!["name"]);
-        Assert.Equal(new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A }, File.ReadAllBytes(Path.Combine(plugin, "logo.png"))[..8]);
-        string skill = File.ReadAllText(Path.Combine(plugin, "skills", "nexus-browser", "SKILL.md"));
+        string plugin = Path.Join(folder, "plugins", "nexus-browser");
+        AssertJson(new JsonObject { ["mcpServers"] = new JsonObject { ["nexus-browser"] = Entry("Antigravity") } }, ReadJson(Path.Join(plugin, "mcp_config.json")));
+        Assert.Equal("nexus-browser", (string?)ReadJson(Path.Join(plugin, "plugin.json"))!["name"]);
+        Assert.Equal(new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A }, File.ReadAllBytes(Path.Join(plugin, "logo.png"))[..8]);
+        string skill = File.ReadAllText(Path.Join(plugin, "skills", "nexus-browser", "SKILL.md"));
         Assert.Equal(File.ReadAllText(Repo.File("plugin", "skills", "nexus-browser", "SKILL.md")).ReplaceLineEndings("\n"), skill.ReplaceLineEndings("\n"));
         Assert.DoesNotContain("Julien", skill, StringComparison.Ordinal);
-        AssertJson(new JsonObject { ["mcpServers"] = new JsonObject { ["other"] = new JsonObject { ["command"] = "x" } } }, ReadJson(Path.Combine(folder, "mcp_config.json")));
-        AssertJson(new JsonObject { ["theme"] = "dark", ["plugins"] = new JsonObject { ["nexus-browser"] = new JsonObject { ["enabled"] = true } } }, ReadJson(Path.Combine(folder, "config.json")));
+        AssertJson(new JsonObject { ["mcpServers"] = new JsonObject { ["other"] = new JsonObject { ["command"] = "x" } } }, ReadJson(Path.Join(folder, "mcp_config.json")));
+        AssertJson(new JsonObject { ["theme"] = "dark", ["plugins"] = new JsonObject { ["nexus-browser"] = new JsonObject { ["enabled"] = true } } }, ReadJson(Path.Join(folder, "config.json")));
         Assert.Equal("plugin", ClientRegistration.Short(ClientRegistration.Antigravity(Context()))); // run again: same plugin, in place
     }
 
@@ -249,22 +249,22 @@ public sealed class ClientRegistrationTests : IDisposable
     public void AntigravityOpenOrWithoutConfigIsToldToEnableIt()
     {
         _antigravityRunning = true;
-        string folder = Path.Combine(Home, ".gemini", "antigravity");
+        string folder = Path.Join(Home, ".gemini", "antigravity");
         Directory.CreateDirectory(folder);
-        File.WriteAllText(Path.Combine(folder, "config.json"), "{}");
+        File.WriteAllText(Path.Join(folder, "config.json"), "{}");
         Assert.Contains("enable nexus-browser", ClientRegistration.Antigravity(Context()));
-        Assert.Equal("{}", File.ReadAllText(Path.Combine(folder, "config.json")));
+        Assert.Equal("{}", File.ReadAllText(Path.Join(folder, "config.json")));
     }
 
     [Fact]
     public void AntigravityPluginOfTheUserKept()
     {
-        string plugin = Path.Combine(Home, ".gemini", "config", "plugins", "nexus-browser");
+        string plugin = Path.Join(Home, ".gemini", "config", "plugins", "nexus-browser");
         Directory.CreateDirectory(plugin);
         string mine = new JsonObject { ["mcpServers"] = new JsonObject { ["nexus-browser"] = new JsonObject { ["serverUrl"] = "http://127.0.0.1:16182/mcp?agent=antigravity" } } }.ToJsonString();
-        File.WriteAllText(Path.Combine(plugin, "mcp_config.json"), mine);
+        File.WriteAllText(Path.Join(plugin, "mcp_config.json"), mine);
         Assert.Equal(ClientRegistration.Plugin, ClientRegistration.Antigravity(Context()));
-        Assert.Equal(mine, File.ReadAllText(Path.Combine(plugin, "mcp_config.json")));
+        Assert.Equal(mine, File.ReadAllText(Path.Join(plugin, "mcp_config.json")));
     }
 
     [Fact]
@@ -274,12 +274,12 @@ public sealed class ClientRegistrationTests : IDisposable
     // Claude Code (CLI or ~/.claude.json)
     // ---------------------------------------------------------------------------------------------
 
-    private string ClaudeJson => Path.Combine(Home, ".claude.json");
+    private string ClaudeJson => Path.Join(Home, ".claude.json");
 
     private void EnableClaudePlugin()
     {
-        Directory.CreateDirectory(Path.Combine(Home, ".claude"));
-        File.WriteAllText(Path.Combine(Home, ".claude", "settings.json"), "{\"enabledPlugins\": {\"nexus-browser@nexus\": true}}");
+        Directory.CreateDirectory(Path.Join(Home, ".claude"));
+        File.WriteAllText(Path.Join(Home, ".claude", "settings.json"), "{\"enabledPlugins\": {\"nexus-browser@nexus\": true}}");
     }
 
     [Fact]
@@ -369,39 +369,39 @@ public sealed class ClientRegistrationTests : IDisposable
     [Fact]
     public void ClaudeDesktopClassicAndStore()
     {
-        string classic = Path.Combine(Roaming, "Claude");
-        string store = Path.Combine(Local, "Packages", "Claude_abc", "LocalCache", "Roaming", "Claude");
+        string classic = Path.Join(Roaming, "Claude");
+        string store = Path.Join(Local, "Packages", "Claude_abc", "LocalCache", "Roaming", "Claude");
         Directory.CreateDirectory(classic);
         Directory.CreateDirectory(store);
         var results = ClientRegistration.ClaudeDesktop(Context());
         Assert.Equal(2, results.Count);
         Assert.All(results, r => Assert.StartsWith("declared", r));
         foreach (string folder in new[] { classic, store })
-            AssertJson(new JsonObject { ["mcpServers"] = new JsonObject { ["nexus-browser"] = Entry("Claude") } }, ReadJson(Path.Combine(folder, "claude_desktop_config.json")));
+            AssertJson(new JsonObject { ["mcpServers"] = new JsonObject { ["nexus-browser"] = Entry("Claude") } }, ReadJson(Path.Join(folder, "claude_desktop_config.json")));
     }
 
     [Fact]
     public void ClaudeDesktopStoreClaudeDataAndLeftFolderSkipped()
     {
-        string store = Path.Combine(Local, "Packages", "AnthropicPBC.Claude_abc", "LocalCache", "Roaming", "Claude");
-        string data = Path.Combine(Local, "Claude-Data", "anthropicpbc.claude_abc");
-        string left = Path.Combine(Local, "Claude-Data", "anthropicpbc.claude_old");
+        string store = Path.Join(Local, "Packages", "AnthropicPBC.Claude_abc", "LocalCache", "Roaming", "Claude");
+        string data = Path.Join(Local, "Claude-Data", "anthropicpbc.claude_abc");
+        string left = Path.Join(Local, "Claude-Data", "anthropicpbc.claude_old");
         foreach (string folder in new[] { store, data, left }) Directory.CreateDirectory(folder);
-        File.WriteAllText(Path.Combine(left, ".user-data-left.2026-10-25"), "");
+        File.WriteAllText(Path.Join(left, ".user-data-left.2026-10-25"), "");
         var results = ClientRegistration.ClaudeDesktop(Context());
         Assert.Equal(2, results.Count);
         Assert.All(results, r => Assert.StartsWith("declared", r));
         foreach (string folder in new[] { store, data })
-            Assert.NotNull(ReadJson(Path.Combine(folder, "claude_desktop_config.json"))!["mcpServers"]!["nexus-browser"]);
-        Assert.False(File.Exists(Path.Combine(left, "claude_desktop_config.json")));
+            Assert.NotNull(ReadJson(Path.Join(folder, "claude_desktop_config.json"))!["mcpServers"]!["nexus-browser"]);
+        Assert.False(File.Exists(Path.Join(left, "claude_desktop_config.json")));
     }
 
     [Fact]
     public void ClaudeDesktopFormerPythonEntryIsReplacedInPlace()
     {
-        string folder = Path.Combine(Roaming, "Claude");
+        string folder = Path.Join(Roaming, "Claude");
         Directory.CreateDirectory(folder);
-        string config = Path.Combine(folder, "claude_desktop_config.json");
+        string config = Path.Join(folder, "claude_desktop_config.json");
         File.WriteAllText(config, new JsonObject
         {
             ["globalShortcut"] = "Ctrl+Space",
@@ -421,9 +421,9 @@ public sealed class ClientRegistrationTests : IDisposable
     [Fact]
     public void ClaudeDesktopEntryOfTheUserKept()
     {
-        string folder = Path.Combine(Roaming, "Claude");
+        string folder = Path.Join(Roaming, "Claude");
         Directory.CreateDirectory(folder);
-        string config = Path.Combine(folder, "claude_desktop_config.json");
+        string config = Path.Join(folder, "claude_desktop_config.json");
         string user = "{\"mcpServers\":{\"nexus-browser\":{\"command\":\"uvx\",\"args\":[\"nexus-browser\"]}}}";
         File.WriteAllText(config, user);
         Assert.Equal(["kept (an entry of yours already exists)"], ClientRegistration.ClaudeDesktop(Context()));
@@ -433,17 +433,17 @@ public sealed class ClientRegistrationTests : IDisposable
     [Fact]
     public void ClaudeDesktopWithTheMcpbExtensionGetsNoSecondServer()
     {
-        string desktop = Path.Combine(Roaming, "Claude");
+        string desktop = Path.Join(Roaming, "Claude");
         Assert.Empty(ClientRegistration.ClaudeDesktop(Context())); // folder absent: nothing
         Directory.CreateDirectory(desktop);
         Assert.StartsWith("declared", ClientRegistration.ClaudeDesktop(Context())[0]);
-        string extension = Path.Combine(desktop, "Claude Extensions", "local.mcpb.julien-piron.nexus-browser");
+        string extension = Path.Join(desktop, "Claude Extensions", "local.mcpb.julien-piron.nexus-browser");
         Directory.CreateDirectory(extension);
-        File.WriteAllText(Path.Combine(extension, "manifest.json"), "{\"name\": \"nexus-browser\"}");
+        File.WriteAllText(Path.Join(extension, "manifest.json"), "{\"name\": \"nexus-browser\"}");
         string result = ClientRegistration.ClaudeDesktop(Context())[0];
         Assert.Equal(ClientRegistration.Mcpb + " (the installer's own entry removed)", result);
         Assert.Equal("plugin", ClientRegistration.Short(result));
-        var servers = ReadJson(Path.Combine(desktop, "claude_desktop_config.json"))!["mcpServers"] as JsonObject;
+        var servers = ReadJson(Path.Join(desktop, "claude_desktop_config.json"))!["mcpServers"] as JsonObject;
         Assert.False(servers?.ContainsKey("nexus-browser") ?? false);
         Assert.Equal([ClientRegistration.Mcpb], ClientRegistration.ClaudeDesktop(Context()));
     }
@@ -483,17 +483,17 @@ public sealed class ClientRegistrationTests : IDisposable
     {
         Directory.CreateDirectory(Path.GetDirectoryName(CodexConfig)!);
         File.WriteAllText(CodexConfig, "model = \"x\"\n");
-        string desktop = Path.Combine(Roaming, "Claude");
+        string desktop = Path.Join(Roaming, "Claude");
         Directory.CreateDirectory(desktop);
         File.WriteAllText(ClaudeJson, "{}");
-        Directory.CreateDirectory(Path.Combine(Home, ".gemini", "config"));
+        Directory.CreateDirectory(Path.Join(Home, ".gemini", "config"));
 
         var (code, lines) = Register("codex", pack: true);
         Assert.Equal(0, code);
         Assert.Contains("nexus-browser", File.ReadAllText(CodexConfig));
-        Assert.False(File.Exists(Path.Combine(desktop, "claude_desktop_config.json"))); // Claude Desktop excluded: nothing written
+        Assert.False(File.Exists(Path.Join(desktop, "claude_desktop_config.json"))); // Claude Desktop excluded: nothing written
         Assert.Equal("{}", File.ReadAllText(ClaudeJson)); // Claude Code excluded: file intact
-        Assert.False(Directory.Exists(Path.Combine(Home, ".gemini", "config", "plugins")));
+        Assert.False(Directory.Exists(Path.Join(Home, ".gemini", "config", "plugins")));
         Assert.Equal("NEXUS_PACK_RESULT Claude Code=skipped; Codex=declared; Antigravity=skipped; Claude Desktop=skipped", lines[^1]);
         Assert.Contains($"Codex: declared in {CodexConfig}", lines);
 
@@ -508,7 +508,7 @@ public sealed class ClientRegistrationTests : IDisposable
     public void WholeRunPrintsOneLinePerClientAndThePackResultLast()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(CodexConfig)!);
-        Directory.CreateDirectory(Path.Combine(Roaming, "Claude"));
+        Directory.CreateDirectory(Path.Join(Roaming, "Claude"));
         File.WriteAllText(ClaudeJson, "{}");
 
         var (code, lines) = Register(null, pack: true);
@@ -517,7 +517,7 @@ public sealed class ClientRegistrationTests : IDisposable
         [
             $"Claude Code: declared in {ClaudeJson}",
             $"Codex: declared in {CodexConfig}",
-            $"Claude Desktop: declared in {Path.Combine(Roaming, "Claude", "claude_desktop_config.json")}",
+            $"Claude Desktop: declared in {Path.Join(Roaming, "Claude", "claude_desktop_config.json")}",
             "NEXUS_PACK_RESULT Claude Code=declared; Codex=declared; Antigravity=absent; Claude Desktop=declared",
         ], lines);
 
@@ -548,14 +548,14 @@ public sealed class ClientRegistrationTests : IDisposable
         Assert.Equal(before, File.ReadAllText(CodexConfig));
         Assert.Equal("{}", File.ReadAllText(ClaudeJson));
         Assert.Empty(_runs);
-        Assert.False(Directory.Exists(Path.Combine(Home, ".gemini")));
+        Assert.False(Directory.Exists(Path.Join(Home, ".gemini")));
     }
 
     [Fact]
     public void UpdateOnlyRefreshesOnlyExactInstalledNativeEntries()
     {
-        string old = Path.Combine(Local, "NexusBrowser", "versions", "0123456789abcdef", "NexusBrowser.exe");
-        string next = Path.Combine(Local, "NexusBrowser", "versions", "fedcba9876543210", "NexusBrowser.exe");
+        string old = Path.Join(Local, "NexusBrowser", "versions", "0123456789abcdef", "NexusBrowser.exe");
+        string next = Path.Join(Local, "NexusBrowser", "versions", "fedcba9876543210", "NexusBrowser.exe");
         File.WriteAllText(ClaudeJson, new JsonObject { ["mcpServers"] = new JsonObject { ["nexus-browser"] = Entry("Claude", old) } }.ToJsonString());
         Directory.CreateDirectory(Path.GetDirectoryName(CodexConfig)!);
         File.WriteAllText(CodexConfig, CodexBlock(old));
@@ -574,23 +574,23 @@ public sealed class ClientRegistrationTests : IDisposable
     [Fact]
     public void UpdateOnlyPreservesAnActiveAntigravityDaemonRouteAndDisabledPluginChoice()
     {
-        string folder = Path.Combine(Home, ".gemini", "config"), plugin = Path.Combine(folder, "plugins", "nexus-browser");
+        string folder = Path.Join(Home, ".gemini", "config"), plugin = Path.Join(folder, "plugins", "nexus-browser");
         Directory.CreateDirectory(plugin);
-        File.WriteAllText(Path.Combine(plugin, "plugin.json"), "{\"version\":\"old\"}");
-        string config = Path.Combine(plugin, "mcp_config.json");
+        File.WriteAllText(Path.Join(plugin, "plugin.json"), "{\"version\":\"old\"}");
+        string config = Path.Join(plugin, "mcp_config.json");
         File.WriteAllText(config, "{\"mcpServers\":{\"nexus-browser\":{\"serverUrl\":\"http://127.0.0.1:16182/mcp?agent=antigravity\",\"headers\":{\"Authorization\":\"Bearer ${NEXUS_MCP_TOKEN}\"}}}}");
         string before = File.ReadAllText(config);
         using var output = new StringWriter();
         Assert.Equal(0, ClientRegistration.Register(Context(), "antigravity", true, output, updateOnly: true));
         Assert.Equal(before, File.ReadAllText(config));
-        Assert.True(File.Exists(Path.Combine(plugin, "skills", "nexus-browser", "SKILL.md")));
-        File.WriteAllText(Path.Combine(folder, "config.json"), "{\"plugins\":{\"nexus-browser\":{\"enabled\":false}}}");
-        File.WriteAllText(Path.Combine(plugin, "plugin.json"), "{\"version\":\"do-not-change\"}");
+        Assert.True(File.Exists(Path.Join(plugin, "skills", "nexus-browser", "SKILL.md")));
+        File.WriteAllText(Path.Join(folder, "config.json"), "{\"plugins\":{\"nexus-browser\":{\"enabled\":false}}}");
+        File.WriteAllText(Path.Join(plugin, "plugin.json"), "{\"version\":\"do-not-change\"}");
         Assert.Equal(0, ClientRegistration.Register(Context(), "antigravity", true, output, updateOnly: true));
-        Assert.Equal("do-not-change", (string?)ReadJson(Path.Combine(plugin, "plugin.json"))!["version"]);
-        File.WriteAllText(Path.Combine(folder, "config.json"), "{\"plugins\":{\"nexus-browser\":false}}");
+        Assert.Equal("do-not-change", (string?)ReadJson(Path.Join(plugin, "plugin.json"))!["version"]);
+        File.WriteAllText(Path.Join(folder, "config.json"), "{\"plugins\":{\"nexus-browser\":false}}");
         Assert.Equal(0, ClientRegistration.Register(Context(), "antigravity", true, output, updateOnly: true));
-        Assert.Equal("do-not-change", (string?)ReadJson(Path.Combine(plugin, "plugin.json"))!["version"]);
+        Assert.Equal("do-not-change", (string?)ReadJson(Path.Join(plugin, "plugin.json"))!["version"]);
     }
 
     [Fact]

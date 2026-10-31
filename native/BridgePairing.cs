@@ -37,7 +37,7 @@ public sealed class PairingStore
     {
         var tp = BridgeSecurity.TokenPath(tokenFile);
         var dir = Path.GetDirectoryName(tp) ?? BridgeSecurity.DefaultDataDir();
-        return Path.Combine(dir, "paired-extensions.json");
+        return Path.Join(dir, "paired-extensions.json");
     }
 
     public static string PairedKey(string secret, string clientNonce, string serverNonce, string extensionId)
@@ -161,7 +161,7 @@ public sealed class PairingStore
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
         var randHex = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
-        var tmp = Path.Combine(dir ?? ".", $".{Path.GetFileName(_path)}-{randHex}.tmp");
+        var tmp = Path.Join(dir ?? ".", $".{Path.GetFileName(_path)}-{randHex}.tmp");
         try
         {
             var obj = new JsonObject();
@@ -179,7 +179,7 @@ public sealed class PairingStore
                 if (File.Exists(tmp))
                     File.Delete(tmp);
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // Ignore cleanup failure
             }

@@ -20,14 +20,15 @@ public static class Program
         try { return await RunAsync(args); }
         catch (Exception error)
         {
+            // Deliberate top-level boundary.
             // A failed second daemon must report its occupied port and exit, not open a Windows crash dialog.
             Console.Error.WriteLine($"NexusBrowser: {error.Message}");
             try
             {
                 string directory = BridgeSecurity.DefaultDataDir(); Directory.CreateDirectory(directory);
-                File.AppendAllText(Path.Combine(directory, "engine.log"), $"{DateTimeOffset.Now:o} pid={Environment.ProcessId} {error}\n", new UTF8Encoding(false));
+                File.AppendAllText(Path.Join(directory, "engine.log"), $"{DateTimeOffset.Now:o} pid={Environment.ProcessId} {error}\n", new UTF8Encoding(false));
             }
-            catch { }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* engine.log unwritable: stderr already has it */ }
             return 1;
         }
     }
@@ -92,7 +93,7 @@ public static class Program
 
         if (args.Contains("--bridge", StringComparer.OrdinalIgnoreCase))
         {
-            logFile ??= Path.Combine(BridgeSecurity.DefaultDataDir(), "bridge.log");
+            logFile ??= Path.Join(BridgeSecurity.DefaultDataDir(), "bridge.log");
             int port = BridgeServer.DefaultPort;
             if (GetArgValue(args, "--port") is { } pStr && int.TryParse(pStr, out int pVal) && pVal >= 0 && pVal < 65535)
                 port = pVal;
