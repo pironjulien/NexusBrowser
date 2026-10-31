@@ -224,6 +224,20 @@ public sealed class ExtensionRefreshTests
     }
 
     [Fact]
+    public void AnOldExtensionWithTheUnpackedIdIsADevelopmentFolderAndAnyOtherStaysUnknown()
+    {
+        // Chrome's ID of an unpacked extension: SHA-256 of its public key, first 16 bytes, each nibble as a letter a-p.
+        string key = (string)JsonNode.Parse(File.ReadAllText(Repo.File("extension", "manifest.json")))!["key"]!;
+        byte[] hash = System.Security.Cryptography.SHA256.HashData(Convert.FromBase64String(key));
+        string derived = string.Concat(hash.Take(16).Select(b => $"{(char)('a' + (b >> 4))}{(char)('a' + (b & 15))}"));
+        Assert.Equal(ExtensionRefresh.UnpackedExtensionId, derived);
+        Assert.Equal("development", ExtensionRefresh.LegacyInstallationType(derived));
+        string store = (string)JsonNode.Parse(File.ReadAllText(Repo.File("native", "resources", "bridge_config.json")))!["store_id"]!;
+        Assert.Equal("unknown", ExtensionRefresh.LegacyInstallationType(store));
+        Assert.Equal("unknown", ExtensionRefresh.LegacyInstallationType(null));
+    }
+
+    [Fact]
     public void InstallerIdentityIsTheOnlyOneTheExtensionLetsReload()
     {
         // reload_extension is reserved by the extension to the "Installer" agent: the name used by the native refresh

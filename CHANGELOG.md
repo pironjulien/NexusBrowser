@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.33.15] - 2026-10-31
+
+### Fixed
+- An unpacked extension older than 2.33.5 (no installation metadata) was deferred on every update and never
+  reloaded, so it stayed on its old version. Its fixed unpacked ID (from the manifest key) now identifies it as a
+  development folder, which a reload updates; any other ID stays unknown and deferred.
+
 ## [2.33.14] - 2026-10-31
 
 ### Added

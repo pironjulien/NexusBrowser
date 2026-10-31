@@ -18,6 +18,17 @@ public static partial class ExtensionRefresh
     public const int Current = 0, Stale = 1, Disconnected = 2, Busy = 3;
     // The extension lets only this agent name reload it (reload_extension).
     public const string InstallerAgent = "Installer";
+    // ID that the public "key" of extension/manifest.json gives the extension loaded from its folder ("Load unpacked");
+    // the Chrome Web Store signs its copy with another key, so this ID is never a store installation.
+    public const string UnpackedExtensionId = "blcgddmjdkobmgakjffjpgiicjlflgjf";
+
+    /// <summary>
+    /// Installation type of an extension older than its installation metadata (before 2.33.5), from the extension ID
+    /// the bridge authenticated: the unpacked ID is a development folder that a reload updates; any other stays unknown.
+    /// Without it, such an extension was deferred on every update and never caught up.
+    /// </summary>
+    public static string LegacyInstallationType(string? extensionId) =>
+        extensionId == UnpackedExtensionId ? "development" : "unknown";
 
     [GeneratedRegex(@"const AGY_FEATURES = \[(.*?)\];", RegexOptions.Singleline)]
     private static partial Regex FeatureDeclaration();
@@ -89,7 +100,7 @@ public static partial class ExtensionRefresh
                     var status = JsonNode.Parse(await statusResponse.Content.ReadAsStringAsync(limit.Token));
                     string? id = status?["target"]?["extension_id"]?.GetValue<string>();
                     ping["extension_id"] = id;
-                    ping["installation_type"] = "unknown";
+                    ping["installation_type"] = LegacyInstallationType(id);
                 }
             }
             return data;
