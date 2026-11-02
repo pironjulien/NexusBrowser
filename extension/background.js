@@ -22,7 +22,7 @@ const AGY_FEATURES = [
     "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree",
     "history-navigation-cdp", "full-page-capture", "opener-tabs-webnav",
     "installer-reload", "tab-list-redaction", "download-ownership", "gmail-counter", "wait-load-navigation",
-    "map-field-labels", "bridge-pairing", "scroll-panel"
+    "map-field-labels", "bridge-pairing", "scroll-panel", "bridge-watch"
 ];
 
 let attachedDebuggers = new Set();
@@ -437,6 +437,7 @@ async function envoyerCompteurs() {
 // ancien, qui répond « opération inconnue » et se ferme), les tentatives restent à l'aveugle comme avant.
 let bridgeWatch = null;
 let bridgeListening = null;
+let bridgeWatchEnd = null;  // dernière fin du guet (raison donnée par Chrome), pour le diagnostic (ping)
 
 function watchBridge() {
     if (bridgeWatch || nativeHostMissing || !chrome.runtime?.connectNative) return;
@@ -458,6 +459,7 @@ function watchBridge() {
     });
     port.onDisconnect.addListener(() => {
         const error = chrome.runtime.lastError;
+        bridgeWatchEnd = { at: Date.now(), error: error?.message || null };
         if (/not found|introuvable/i.test(error?.message || "")) nativeHostMissing = true;
         if (port !== bridgeWatch) return;
         bridgeWatch = null;
@@ -1143,6 +1145,7 @@ async function routeCommand(req, client = null) {
                         installation_type: await extensionInstallationType(),
                         update_check: typeof chrome.runtime?.requestUpdateCheck === "function",
                         features: AGY_FEATURES,
+                        bridge_watch: { active: !!bridgeWatch, listening: bridgeListening, native_host_missing: nativeHostMissing, last_end: bridgeWatchEnd },
                         timestamp: Date.now(),
                     },
                 };

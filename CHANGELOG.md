@@ -12,7 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   host now watches the bridge port over one long-lived native port (`connectNative`): every second it says whether
   port 9224 listens (a local connection closed at once, which the bridge ignores silently), and the extension opens
   its WebSocket only then. It also connects within about a second of the bridge starting. An older native host, or none (Chrome from the Microsoft Store), keeps the
-  previous blind retries.
+  previous blind retries. The extension's `ping` says the watch state (`bridge_watch`), and its new feature
+  `bridge-watch` makes the installer reload an extension still running the previous code.
+- The first command that starts the bridge no longer fails with "No Chrome browser extension connected": it waits
+  for the extension to connect, like a command sent while the bridge runs.
 
 ## [2.34.0] - 2026-10-31
 

@@ -2459,7 +2459,7 @@ public sealed partial class McpServer : IDisposable
             token = BridgeSecurity.ReadToken(_tokenFile);
         }
         string body = new JsonObject { ["action"] = action, ["params"] = p.DeepClone(), ["timeout"] = timeout }.ToJsonString(CompactJson);
-        async Task<JsonNode?> Send(bool retry)
+        async Task<JsonNode?> Send(bool retry, bool bridgeStarted = false)
         {
             ct.ThrowIfCancellationRequested();
             using var request = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{_bridgeHttpPort}/api/command")
@@ -2475,10 +2475,11 @@ public sealed partial class McpServer : IDisposable
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeout + 2));
             HttpResponseMessage response;
             try { response = await _httpClient.SendAsync(request, timeoutCts.Token); }
-            catch (HttpRequestException ex) when (retry && ex.InnerException is SocketException socket && socket.SocketErrorCode == SocketError.ConnectionRefused)
+            catch (HttpRequestException ex) when (retry && !bridgeStarted && ex.InnerException is SocketException socket && socket.SocketErrorCode == SocketError.ConnectionRefused)
             {
                 if (!await EnsureBridgeRunningAsync(ct)) throw new InvalidOperationException("Cannot reach the NexusBrowser bridge. Automatic startup failed.", ex);
-                return await Send(false);
+                // Bridge just started: the extension connects within about a second, so the command may still wait for it.
+                return await Send(true, bridgeStarted: true);
             }
             catch (Exception ex) when ((ex is HttpRequestException or OperationCanceledException) && !ct.IsCancellationRequested)
             {
