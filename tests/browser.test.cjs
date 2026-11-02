@@ -3007,6 +3007,7 @@ test('document offscreen : serveur sans preuve -> rien relayé au service worker
         setTimeout: () => ({}), clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {}
     });
     for (const file of ['bridge_link.js', 'offscreen.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension', file), 'utf8'), ctx);
+    await until(() => sockets.instances.length > 0, 'première connexion');
     const ws = sockets.instances.at(-1);
     ws.open();
     assert.equal(ws.sent[0].role, 'offscreen');
@@ -3032,6 +3033,81 @@ test('document offscreen : serveur sans preuve -> rien relayé au service worker
     assert.deepEqual(plain(toBackground.filter(m => m.request).map(m => m.request.requestId)), ['r2']);
     assert.equal(server.replies().find(r => r.requestId === 'r2').data, 'exécuté');
     vm.runInContext('if (link) link.close();', ctx);
+});
+
+function nativePortMock() {
+    const ports = [];
+    const listeners = () => { const fns = []; return {fns, addListener(fn) { fns.push(fn); }}; };
+    return {
+        ports,
+        connectNative(name) {
+            const port = {name, posted: [], onMessage: listeners(), onDisconnect: listeners(),
+                postMessage(m) { this.posted.push(m); },
+                say(m) { for (const fn of this.onMessage.fns) fn(m); },
+                drop() { for (const fn of this.onDisconnect.fns) fn(); }};
+            ports.push(port);
+            return port;
+        }
+    };
+}
+
+test('guet du pont : aucune connexion tant que le port 9224 n\'écoute pas, connexion dès qu\'il écoute', async () => {
+    const sockets = controlledSockets();
+    const host = nativeHostMock();
+    const native = nativePortMock();
+    const h = harness({}, {
+        WebSocket: sockets.ControlledWebSocket,
+        runtime: {id: EXT_ID, lastError: undefined, connectNative: (n) => native.connectNative(n),
+            sendNativeMessage: (name, msg, cb) => host.sendNativeMessage(name, msg, cb)}
+    });
+    try {
+        h.evalInContext('connectBridgeWS()');
+        assert.equal(native.ports.length, 1);
+        assert.equal(native.ports[0].name, 'com.nexus.browser_auth');
+        assert.deepEqual(plain(native.ports[0].posted), [{op: 'watch'}]);
+        assert.equal(sockets.instances.length, 0, 'guet pas encore répondu : aucune tentative');
+        native.ports[0].say({op: 'watch', listening: false});
+        h.evalInContext('connectBridgeWS()');
+        assert.equal(sockets.instances.length, 0, 'pont endormi : aucune tentative');
+        assert.equal(native.ports.length, 1, 'un seul guet');
+        native.ports[0].say({op: 'watch', listening: true});
+        assert.equal(sockets.instances.length, 1, 'pont à l\'écoute : connexion aussitôt');
+    } finally {
+        h.evalInContext('if (bridgeLink) bridgeLink.close(); clearTimeout(reconnectTimer); clearInterval(keepaliveInterval);');
+    }
+});
+
+test('guet du pont : hôte natif ancien (opération inconnue) -> tentatives à l\'aveugle comme avant', async () => {
+    const sockets = controlledSockets();
+    const native = nativePortMock();
+    const h = harness({}, {
+        WebSocket: sockets.ControlledWebSocket,
+        runtime: {id: EXT_ID, lastError: undefined, connectNative: (n) => native.connectNative(n), sendNativeMessage: () => {}}
+    });
+    try {
+        h.evalInContext('connectBridgeWS()');
+        native.ports[0].say({ok: false, error: 'opération inconnue'});
+        native.ports[0].drop();
+        assert.equal(h.evalInContext('bridgeWaiting()'), false);
+        h.evalInContext('clearTimeout(reconnectTimer); reconnectTimer = null; nativeHostMissing = true; connectBridgeWS()');
+        await until(() => sockets.instances.length === 1, 'tentative à l\'aveugle');
+    } finally {
+        h.evalInContext('if (bridgeLink) bridgeLink.close(); clearTimeout(reconnectTimer); clearInterval(keepaliveInterval);');
+    }
+});
+
+test('document offscreen : le service worker dit d\'attendre -> aucune connexion', async () => {
+    const sockets = controlledSockets();
+    const timers = [];
+    const chromeMock = {runtime: {id: EXT_ID, lastError: undefined, onMessage: {addListener() {}},
+        sendMessage(message, callback) { setImmediate(() => callback(message.bridgeWait ? {wait: true} : {})); }}};
+    const ctx = vm.createContext({
+        chrome: chromeMock, console, WebSocket: sockets.ControlledWebSocket, atob, btoa, TextEncoder, crypto: globalThis.crypto,
+        setTimeout: (fn, ms) => { timers.push(ms); return {}; }, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {}
+    });
+    for (const file of ['bridge_link.js', 'offscreen.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension', file), 'utf8'), ctx);
+    await until(() => timers.length > 0, 'nouvel essai programmé');
+    assert.equal(sockets.instances.length, 0);
 });
 
 // -----------------------------------------------------------------------------

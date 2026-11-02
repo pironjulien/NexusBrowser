@@ -432,6 +432,48 @@ async function envoyerCompteurs() {
 }
 
 
+// Guet du pont par l'hôte natif, sur un port permanent : il redit chaque seconde si le port 9224 écoute, et l'extension ne s'y
+// connecte qu'alors (aucune connexion refusée notée dans Chrome tant que le pont dort). Sans guet (hôte absent ou
+// ancien, qui répond « opération inconnue » et se ferme), les tentatives restent à l'aveugle comme avant.
+let bridgeWatch = null;
+let bridgeListening = null;
+
+function watchBridge() {
+    if (bridgeWatch || nativeHostMissing || !chrome.runtime?.connectNative) return;
+    let port;
+    try {
+        port = chrome.runtime.connectNative(NATIVE_AUTH_HOST);
+    } catch (_) {
+        return;
+    }
+    bridgeWatch = port;
+    bridgeListening = null;
+    port.onMessage.addListener((message) => {
+        if (port !== bridgeWatch || message?.op !== "watch") return;
+        bridgeListening = message.listening === true;
+        if (bridgeListening) {
+            reconnectAttempts = 0;
+            connectBridgeWS();
+        }
+    });
+    port.onDisconnect.addListener(() => {
+        const error = chrome.runtime.lastError;
+        if (/not found|introuvable/i.test(error?.message || "")) nativeHostMissing = true;
+        if (port !== bridgeWatch) return;
+        bridgeWatch = null;
+        bridgeListening = null;
+        if (!(bridgeLink && bridgeLink.alive)) scheduleBridgeReconnect();
+    });
+    try {
+        port.postMessage({ op: "watch" });
+    } catch (_) {}
+}
+
+/** Vrai tant que le guet est en place et que le pont n'écoute pas (ou pas encore dit). */
+function bridgeWaiting() {
+    return !!bridgeWatch && bridgeListening !== true;
+}
+
 let connectingBridge = false;
 
 function connectBridgeWS() {
@@ -441,6 +483,8 @@ function connectBridgeWS() {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
     }
+    watchBridge();
+    if (bridgeWaiting()) return;  // le guet rappelle dès que le pont écoute
     if (!nativeHostMissing) {
         openBridgeLink("native");
         return;
@@ -485,6 +529,7 @@ function openBridgeLink(auth) {
                     clearInterval(keepaliveInterval);
                     keepaliveInterval = null;
                 }
+                if (bridgeWatch) bridgeListening = null;  // pont peut-être arrêté : le prochain mot du guet tranche
                 scheduleBridgeReconnect();
             }
         });
@@ -596,6 +641,11 @@ if (typeof chrome !== "undefined") {
             }
             if (message.bridgeAuth) {
                 bridgeAuthMethod().then(sendResponse);
+                return true;
+            }
+            if (message.bridgeWait) {
+                watchBridge();
+                sendResponse({ wait: bridgeWaiting() });
                 return true;
             }
             if (message.bridgeState) {

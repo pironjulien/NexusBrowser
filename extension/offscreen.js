@@ -36,15 +36,18 @@ function connectWS() {
         clearTimeout(reconnectTimeout);
         reconnectTimeout = null;
     }
-    if (!askAuth) {
-        openLink("native");
-        return;
-    }
-    // Même méthode que le service worker (hôte natif, ou clé d'appairage s'il manque) : c'est lui qui prouve.
     connecting = true;
-    toBackground({ bridgeAuth: true }).then((answer) => {
+    // Le service worker guette le port du pont par l'hôte natif : aucune tentative tant qu'il n'écoute pas.
+    toBackground({ bridgeWait: true }).then(async (wait) => {
+        if (wait && wait.wait) {
+            connecting = false;
+            scheduleReconnect();
+            return;
+        }
+        // Même méthode que le service worker (hôte natif, ou clé d'appairage s'il manque) : c'est lui qui prouve.
+        const auth = askAuth && (await toBackground({ bridgeAuth: true })) === "paired" ? "paired" : "native";
         connecting = false;
-        if (!(link && link.alive)) openLink(answer === "paired" ? "paired" : "native");
+        if (!(link && link.alive)) openLink(auth);
     });
 }
 

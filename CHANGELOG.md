@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.34.1] - 2026-11-02
+
+### Fixed
+- No more `ERR_CONNECTION_REFUSED` errors piling up on the extension's Errors page while no agent runs: the native
+  host now watches the bridge port over one long-lived native port (`connectNative`): every second it says whether
+  port 9224 listens (a local connection closed at once, which the bridge ignores silently), and the extension opens
+  its WebSocket only then. It also connects within about a second of the bridge starting. An older native host, or none (Chrome from the Microsoft Store), keeps the
+  previous blind retries.
+
 ## [2.34.0] - 2026-10-31
 
 ### Added

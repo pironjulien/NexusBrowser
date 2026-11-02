@@ -190,6 +190,46 @@ public sealed class NativeAuthHostTests : IDisposable
     }
 
     [Fact]
+    public async Task WatchSaysWhenTheBridgePortListensAndEndsWhenChromeClosesThePort()
+    {
+        int port;
+        using (var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0))
+        {
+            probe.Start();
+            port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+        }
+        var toHost = new System.IO.Pipelines.Pipe();
+        var fromHost = new System.IO.Pipelines.Pipe();
+        using var hostIn = toHost.Reader.AsStream();
+        using var hostOut = fromHost.Writer.AsStream();
+        using var fromHostStream = fromHost.Reader.AsStream();
+        var watch = Task.Run(() => NativeAuthHost.Watch(hostIn, hostOut, port, intervalMs: 20));
+        var ct = TestContext.Current.CancellationToken;
+        // Le guet redit l'état à chaque intervalle : lu jusqu'à la valeur attendue, jamais plus de 10 s.
+        async Task Says(bool expected)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (true)
+            {
+                var message = await Task.Run(() => NativeAuthHost.ReadMessage(fromHostStream), ct).WaitAsync(TimeSpan.FromSeconds(10), ct);
+                Assert.Equal("watch", (string)message!["op"]!);
+                if ((bool)message["listening"]! == expected) return;
+                Assert.True(DateTime.UtcNow < deadline, $"le guet ne dit pas listening={expected}");
+            }
+        }
+
+        await Says(false);
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, port);
+        listener.Start();
+        try { await Says(true); }
+        finally { listener.Stop(); }
+        await Says(false);
+
+        await toHost.Writer.CompleteAsync();  // Chrome ferme le port : le guet s'arrête
+        await watch.WaitAsync(TimeSpan.FromSeconds(5), ct);
+    }
+
+    [Fact]
     public void OversizedFrameIsRefused()
     {
         using var input = new MemoryStream();

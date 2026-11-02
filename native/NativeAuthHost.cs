@@ -1,6 +1,8 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -135,6 +137,11 @@ public static class NativeAuthHost
         try
         {
             var message = ReadMessage(input);
+            if (message is JsonObject watch && TryGetString(watch, "op") == "watch" && CallerExtensionId(args) is not null)
+            {
+                Watch(input, output);
+                return 0;
+            }
             reply = Answer(message, CallerExtensionId(args), tokenFile);
         }
         catch (AuthError error)
@@ -149,6 +156,48 @@ public static class NativeAuthHost
 
         WriteMessage(output, reply);
         return 0;
+    }
+
+    public const int WatchIntervalMs = 1000;
+
+    /// <summary>Guet du pont (port natif permanent, chrome.runtime.connectNative) : redit à l'extension, à chaque
+    /// intervalle, si le port du pont écoute. L'extension n'ouvre son WebSocket que s'il écoute, sans erreur de
+    /// connexion refusée dans Chrome. Fin quand Chrome ferme le port (stdin fermé) ou ne lit plus (stdout fermé).</summary>
+    public static void Watch(Stream input, Stream output, int port = BridgeServer.DefaultPort, int intervalMs = WatchIntervalMs)
+    {
+        using var closed = new ManualResetEventSlim();
+        var reader = new Thread(() =>
+        {
+            try
+            {
+                byte[] buffer = new byte[MaxMessageBytes];
+                while (input.Read(buffer) > 0) { }
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException) { }
+            closed.Set();
+        }) { IsBackground = true, Name = "NexusBrowser watch stdin" };
+        reader.Start();
+        try
+        {
+            while (!closed.IsSet)
+            {
+                WriteMessage(output, new JsonObject { ["op"] = "watch", ["listening"] = Listening(port) });
+                closed.Wait(intervalMs);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException) { }
+    }
+
+    /// <summary>Connexion locale aussitôt refermée : le pont ignore une connexion sans en-têtes, sans rien noter
+    /// (la table TCP de Windows, elle, ne montre pas toutes les écoutes à un processus restreint).</summary>
+    public static bool Listening(int port)
+    {
+        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        try
+        {
+            return socket.ConnectAsync(IPAddress.Loopback, port).Wait(TimeSpan.FromMilliseconds(500)) && socket.Connected;
+        }
+        catch (AggregateException ex) when (ex.InnerException is SocketException) { return false; }
     }
 
     private static string? TryGetString(JsonObject obj, string key)
