@@ -20,8 +20,12 @@ internal static class Shells
         IDictionary<string, string?>? env = null, int timeoutSeconds = 60)
     {
         // A PSModulePath inherited from a pwsh 7 session makes Windows PowerShell 5.1 load pwsh's modules (Get-FileHash
-        // then missing): each shell computes its own, as on a fresh logon.
-        var environment = new Dictionary<string, string?>(env ?? new Dictionary<string, string?>()) { ["PSModulePath"] = null };
+        // then missing): each shell starts from the machine's Windows module folders and adds its own. Without any
+        // PSModulePath, pwsh leaves out those folders (ScheduledTasks...) when the user has a PSModulePath variable.
+        var environment = new Dictionary<string, string?>(env ?? new Dictionary<string, string?>())
+        {
+            ["PSModulePath"] = Environment.GetEnvironmentVariable("PSModulePath", EnvironmentVariableTarget.Machine),
+        };
         return ChildProcess.RunAsync(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, .. args ?? []], environment, timeoutSeconds: timeoutSeconds);
     }
 
