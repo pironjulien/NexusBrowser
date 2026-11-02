@@ -40,7 +40,7 @@ On your PC only:
 - under `~/.nexus/nexus-browser/`: the bridge token, a bridge log (connection and emergency-stop events, rotated at
   1 MB), the install log, screenshots (at most 50, each kept under 24 hours), the exports you ask for and, when the
   Gmail counter is on, the unread number;
-- under `%LOCALAPPDATA%\NexusJournal\browser\`: one line per tool call (calling AI, action, outcome, duration, the
+- under `~/.nexus/journal/browser/`: one line per tool call (calling AI, action, outcome, duration, the
   registrable domain of the tab such as `google.com`, never the address), never page text, typed value, title or
   image.
 

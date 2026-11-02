@@ -60,7 +60,7 @@ You stay in control:
 - an agent works in the tabs it owns; your tabs require your permission;
 - selecting a tab keeps Chrome in the background unless you explicitly request window focus;
 - sending, paying, publishing and submitting your data require explicit approval for the exact action;
-- Ctrl+Alt+Shift+Esc stops every agent.
+- an emergency stop (the `~/.nexus/stop` file, or Ctrl+Alt+Shift+Esc when NexusWindows is installed) stops every agent.
 
 No telemetry or hosted browser service. NexusBrowser does not send browsing data to its author. Websites you ask an agent to use still receive the usual requests and any data you choose to submit.
 Open source (MIT): https://github.com/pironjulien/NexusBrowser

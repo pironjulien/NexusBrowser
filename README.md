@@ -150,7 +150,7 @@ pwsh -NoProfile -File install.ps1
 
 - The engine is built outside the clone (`~\.nexus\build\nexus-browser`) and installed in
   `%LOCALAPPDATA%\NexusBrowser\versions\`; token, logs, screenshots and exports live in `~\.nexus\nexus-browser`;
-  the per-call journal lives in `%LOCALAPPDATA%\NexusJournal\browser\` (see [Privacy](#privacy)).
+  the per-call journal lives in `~\.nexus\journal\browser\` (see [Privacy](#privacy)).
 - Scheduled task `Nexus Browser Bridge` with **no trigger**: the bridge starts on demand (first agent call,
   `schtasks /Run`).
 - Native host `com.nexus.browser_auth` declared to Chrome (HKCU): it computes the extension's proofs, the token never
@@ -252,9 +252,8 @@ points to the one-time install.
   links and buttons stay free. The check fails closed only when the read
   really fails (script error, focus in a cross-origin frame, form of a field aimed at by Enter unreadable). Page text
   outputs (`browser_content`, `browser_axtree`, `browser_export`, Google and YouTube exports, network bodies) carry
-  `untrusted_note` when the text looks like instructions aimed at an AI (a signal only). The CLI runs the same check
-  but cannot carry a token from one command to the next (one process each): it refuses outward gestures with the
-  summary and points to the MCP server; every other gesture stays free.
+  `untrusted_note` when the text looks like instructions aimed at an AI (a signal only).
+  The check runs in the engine, the same for every MCP client (stdio or the shared HTTP daemon) and for each step of `browser_batch`.
 - **WebMCP tools** (sites that expose their own tools to agents through `document.modelContext`, native in Chrome
   149+ for sites in the origin trial): `browser_webmcp_tools` lists them and `browser_webmcp_call` runs one through
   Chrome's own `getTools()` / `executeTool()`, evaluated by `cdp-send` in the extension's isolated world (the page
@@ -268,7 +267,9 @@ points to the one-time install.
   `Input.dispatch*`) keep full page access by design and can click or submit without this check; the tool
   descriptions and the server instructions tell the model never to use them for an outward action. Bare coordinates
   of `browser_drag_and_drop` are not read either.
-- **Emergency stop** (Ctrl+Alt+Shift+Esc, `~\.nexus\stop`): commands already
+- **Emergency stop** (`~\.nexus\stop`): the engine watches this file and does not register a hotkey itself;
+  writing the file always works. Ctrl+Alt+Shift+Esc writes it when [NexusWindows](https://julienpiron.fr/nexuswindows/)
+  is installed (it owns the hotkey, see `~\.nexus\stop.owner`). Commands already
   running are cancelled (typing, drag, waits), debuggers detached, every action refused for 120 s. The same file
   protocol is shared with the [NexusWindows](https://julienpiron.fr/nexuswindows/) agents.
 - **Who drives what**: each agent's tabs sit in a Chrome tab group named after it; `browser_release_tab` gives a tab back.
@@ -317,7 +318,7 @@ to the author or to any third party.
   is left). This feed is the only non-local address in the extension's content security policy
   (`connect-src https://mail.google.com`, needed for the service worker to fetch it); the Chrome Web Store variant
   without the counter (`scripts/store-package.ps1 -WithoutGmailCounter`) drops it.
-- **Journal**, under `%LOCALAPPDATA%\NexusJournal\browser\<agent>\<YYYY-MM>.jsonl` (or `NEXUS_JOURNAL_HOME`), shared
+- **Journal**, under `~\.nexus\journal\browser\<agent>\<YYYY-MM>.jsonl` (or `NEXUS_JOURNAL_HOME`), shared
   format of the Nexus tools: one line per tool call with the calling AI, the action, the outcome, the duration, the
   technique, the registrable domain of the tab (`google.com`, never the address) and an error category from a fixed
   list. Never page text, typed value, title or image. Nothing is sent anywhere; months are kept until you delete
@@ -325,7 +326,7 @@ to the author or to any third party.
 - **Removing it**: remove the extension from Chrome, delete the scheduled tasks `Nexus Browser Bridge`,
   `Nexus Browser MCP` and `Nexus Browser Update` and the
   registry key `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth`, then delete
-  `~/.nexus/nexus-browser/` and `%LOCALAPPDATA%\NexusJournal\browser\` (and `%LOCALAPPDATA%\NexusBrowser\` after
+  `~/.nexus/nexus-browser/` and `~/.nexus/journal/browser/` (and `%LOCALAPPDATA%\NexusBrowser\` after
   the one-line install). The `nexus-browser` entries the installer declared: `claude mcp remove nexus-browser -s user`,
   `[mcp_servers.nexus-browser]` in `~/.codex/config.toml`, Antigravity's `plugins/nexus-browser` folder, and
   `nexus-browser` under `mcpServers` in Claude Desktop's `claude_desktop_config.json`.

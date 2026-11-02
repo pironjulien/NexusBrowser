@@ -92,7 +92,7 @@ Do not create a question card just to report progress.
 - Uploads from secret folders (`~/.ssh`, `~/.claude`, browser profile...) are refused by the bridge.
 
 ## Emergency stop
-**Ctrl+Alt+Shift+Esc** stops every agent for 120 s and cancels running commands. Never work around it: wait for the user.
+The user's emergency stop (`~/.nexus/stop`, written by Ctrl+Alt+Shift+Esc when NexusWindows is installed) stops every agent for 120 s and cancels running commands. Never work around it: wait for the user.
 
 ## Not installed yet?
 When the tools do not answer at all, the NexusBrowser daemon is not installed or not running; without the
