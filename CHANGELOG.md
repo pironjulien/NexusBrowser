@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.34.4] - 2026-11-03
+
 ### Fixed
 - `browser_close_tab` answers at once when the tab holds a JavaScript dialog or the page asks before closing
   (`beforeunload`): the dialog is named, never accepted, instead of a 20 s timeout (seen twice on x.com).
