@@ -36,6 +36,21 @@ public sealed class RepositoryTests
     }
 
     [Fact]
+    public void AntigravityMarketplaceBundleMatchesThePluginAndBridgesToTheLocalService()
+    {
+        // plugin/antigravity is what the Antigravity Marketplace installs: the same manifest, skill and logo as plugin/.
+        Assert.Equal(Text("plugin", "plugin.json"), Text("plugin", "antigravity", "plugin.json"));
+        Assert.Equal(Text("plugin", "skills", "nexus-browser", "SKILL.md"), Text("plugin", "antigravity", "skills", "nexus-browser", "SKILL.md"));
+        Assert.Equal(File.ReadAllBytes(Repo.File("plugin", "logo.png")), File.ReadAllBytes(Repo.File("plugin", "antigravity", "logo.png")));
+        Assert.InRange(((string)Json("plugin", "plugin.json")["description"]!).Length, 120, 160);
+        Assert.True(File.Exists(Repo.File("plugin", "antigravity", "README.md")));
+        var args = Json("plugin", "antigravity", "mcp_config.json")["mcpServers"]!["nexus-browser"]!["args"]!.AsArray().Select(a => (string?)a).ToList();
+        Assert.Equal(@"${PLUGIN_ROOT}\scripts\bridge.ps1", args[args.IndexOf("-File") + 1]);
+        Assert.Equal("http://127.0.0.1:16182/mcp?agent=antigravity", args[args.IndexOf("-Url") + 1]);
+        Assert.Contains(@".nexus"", ""mcp-token.txt""", Text("plugin", "antigravity", "scripts", "bridge.ps1"));
+    }
+
+    [Fact]
     public void RegistryPackageIsTheReleasedMcpb()
     {
         var package = Json("server.json")["packages"]![0]!;

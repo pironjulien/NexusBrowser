@@ -1,0 +1,28 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "nexus-browser",
+  "displayName": "NexusBrowser",
+  "version": "2.34.2",
+  "description": "Your real Chrome, with your sessions, in background tabs: forms, network, dialogs, cross-origin iframes, exports and downloads, for Antigravity on Windows.",
+  "logo": "logo.png",
+  "suggestedPrompts": [
+    "Open my Gmail inbox in a background tab and list the five most recent unread subjects.",
+    "Fill the contact form on this page with my details, then show me the form before submitting it.",
+    "Export this Google Doc as a PDF into my Downloads folder."
+  ],
+  "author": {
+    "name": "Julien Piron",
+    "url": "https://julienpiron.fr"
+  },
+  "homepage": "https://julienpiron.fr/nexusbrowser/",
+  "repository": "https://github.com/pironjulien/NexusBrowser",
+  "license": "MIT",
+  "keywords": [
+    "chrome",
+    "browser",
+    "automation",
+    "cdp",
+    "mcp",
+    "background"
+  ]
+}

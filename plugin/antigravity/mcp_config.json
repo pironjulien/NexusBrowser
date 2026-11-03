@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "nexus-browser": {
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${PLUGIN_ROOT}\\scripts\\bridge.ps1",
+        "-Url",
+        "http://127.0.0.1:16182/mcp?agent=antigravity",
+        "-Product",
+        "NexusBrowser"
+      ]
+    }
+  }
+}

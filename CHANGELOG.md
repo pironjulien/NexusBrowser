@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.34.2] - 2026-11-03
+
+### Added
+- Antigravity Marketplace bundle `plugin/antigravity` (passes `agy plugin validate --strict`): manifest with the
+  Marketplace fields, README for the detail page, the same skill and logo, and `scripts/bridge.ps1`. A Marketplace
+  copy cannot name this PC's token (Antigravity expands only `${PLUGIN_ROOT}`), so the bridge relays Antigravity's
+  stdio to the local service on `127.0.0.1:16182` with the token of `%USERPROFILE%\.nexus\mcp-token.txt` and answers
+  with how to install NexusBrowser when the service is missing. Installs by NexusSystem keep their own declaration;
+  `plugin/plugin.json` carries the same Marketplace fields.
+
 ## [2.34.1] - 2026-11-02
 
 ### Fixed
