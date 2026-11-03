@@ -594,6 +594,23 @@ test('tab lifecycle supports create_tab, close_tab and reload', async () => {
     assert.equal(closed.data.success, true);
 });
 
+test('close_tab rend aussitôt une boîte ouverte ou le beforeunload de la fermeture, sans attendre ni accepter', async () => {
+    let h;
+    h = harness({}, {tabs: {remove: () => {
+        // Chrome ne résout pas la fermeture tant que la page la retient par sa boîte beforeunload.
+        setTimeout(() => h.emit(1, 'Page.javascriptDialogOpening', {type: 'beforeunload', message: ''}), 0);
+        return new Promise(() => {});
+    }}});
+    await h.run('eval', {tabId: 1, code: '1'});
+    const asked = await h.run('close_tab', {tabId: 1});
+    assert.equal(asked.data.success, false);
+    assert.equal(asked.data.dialogOpened, true);
+    assert.match(asked.data.message, /beforeunload/);
+    assert.equal(h.calls.some(c => c.method === 'Page.handleJavaScriptDialog'), false);
+    // Boîte déjà ouverte : refus immédiat qui la nomme.
+    assert.match((await h.run('close_tab', {tabId: 1})).error, /beforeunload.*handle_dialog/);
+});
+
 test('get_cookies calls Network.getCookies', async () => {
     const h = harness();
     const res = await h.run('get_cookies', {tabId: 1});

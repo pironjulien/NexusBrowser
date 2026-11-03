@@ -4044,7 +4044,23 @@ async function releaseTab(params = {}) {
 
 async function closeTab(params = {}) {
     const tabId = await resolveTargetTab(params);
-    await chrome.tabs.remove(tabId);
+    // Une boîte ouverte (ou le beforeunload qu'ouvre la fermeture) bloque chrome.tabs.remove jusqu'au délai du pont
+    // (20 s, vu sur x.com le 03/11) : signalée aussitôt, sans l'accepter.
+    const open = pendingDialogs.get(tabId);
+    if (open) throw new Error(`${describeDialog(open)}. Answer it first with handle_dialog (browser_handle_dialog), then close the tab.`);
+    // Débogueur attaché d'abord, comme pour navigate : le beforeunload de la page est vu.
+    try { await ensureDebugger(tabId); } catch (_) {}
+    const watch = waitForDialog(tabId);
+    const removal = chrome.tabs.remove(tabId);
+    try {
+        const outcome = await Promise.race([removal.then(() => ({})), watch.promise.then(dialog => ({ dialog }))]);
+        if (outcome.dialog) {
+            removal.catch(() => {});
+            return { data: { success: false, closedTabId: null, ...dialogInterruption(outcome.dialog) } };
+        }
+    } finally {
+        watch.cancel();
+    }
     await forgetTabOwner(tabId);
     return { data: { success: true, closedTabId: tabId } };
 }
