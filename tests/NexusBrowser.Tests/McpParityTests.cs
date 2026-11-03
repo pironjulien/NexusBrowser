@@ -108,6 +108,10 @@ public sealed partial class McpParityTests
         Assert.NotEmpty(session.Actions);
         Assert.All(session.Actions, action => Assert.Equal("cdp-send", action));
         Assert.DoesNotContain("never-shown", (string)Payload(result)["error"]!);
+        string refusal = (string)Payload(result)["error"]!;
+        Assert.Contains("already covers the same operation", refusal);
+        Assert.Contains("otherwise ask once for that exact operation", refusal);
+        Assert.Contains("Each gesture needs its own matching, unexpired token", refusal);
     }
 
     [Fact]

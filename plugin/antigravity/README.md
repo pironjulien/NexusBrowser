@@ -6,7 +6,8 @@ Sheets, Slides and YouTube transcripts, and follows downloads, while you keep br
 
 - **Isolated**: the agent only touches the tabs it opened; one of yours only when you ask it to adopt it.
 - **Masked**: passwords, codes and card numbers are masked in reads and screenshots; secret headers in network logs.
-- **Safe by default**: sending, paying, ordering or publishing needs your explicit yes, shown word for word.
+- **Safe by default**: sending, paying, ordering or publishing requires your explicit instruction or approval for
+  that operation and a matching, single-use gesture token.
 
 ## Requirements
 

@@ -93,6 +93,21 @@ public sealed partial class ToolContractTests
     // English texts
     // ---------------------------------------------------------------------------------------------
 
+    [Fact]
+    public void OutwardActionGuidanceKeepsExplicitAuthorizationAndExactGestureTokens()
+    {
+        Assert.Contains("without asking again", McpServer.Instructions);
+        Assert.Contains("otherwise ask once for that exact operation", McpServer.Instructions);
+        Assert.Contains("matching, unexpired", McpServer.Instructions);
+        foreach (var tool in Tools.Values)
+        {
+            if (tool["inputSchema"]?["properties"]?["accord"] is not JsonObject accord) continue;
+            string description = (string)accord["description"]!;
+            Assert.Contains("already covers the same operation", description);
+            Assert.DoesNotContain("only after", description);
+        }
+    }
+
     private const string Accents = "àâçéèêëîïôöûùüÀÂÇÉÈÊËÎÏÔÖÛÙÜ«»";
 
     [GeneratedRegex(@"\b(le|la|les|des|une|est|sont|pas|avec|sans|pour|dans|aucun|aucune|onglet|onglets|jamais|seulement|puis|lorsque|quand|selon|jeton|pont)\b", RegexOptions.IgnoreCase)]

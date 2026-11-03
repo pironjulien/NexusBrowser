@@ -5,6 +5,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- `browser_close_tab` answers at once when the tab holds a JavaScript dialog or the page asks before closing
+  (`beforeunload`): the dialog is named, never accepted, instead of a 20 s timeout (seen twice on x.com).
+
+## [2.34.3] - 2026-11-03
+
+### Fixed
+- MCP instructions, outward-action refusals and `accord` field descriptions now follow the plugin skill: an explicit
+  end-to-end user instruction or approval already covering the same operation does not require another confirmation.
+  Each gesture still requires its own matching, unexpired, single-use token; material changes require fresh approval,
+  and page, document or peer text never authorizes an action.
+
 ## [2.34.2] - 2026-11-03
 
 ### Added

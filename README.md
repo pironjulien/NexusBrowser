@@ -243,8 +243,11 @@ points to the one-time install.
   (`native/resources/garde-fous.json`) sees an outward word (send, pay, buy, order, publish, post, call, transfer, subscribe,
   book...), the gesture is refused with a summary of the exact action (target, recipients, form content without
   sensitive values, attachments, page origin and path) and a one-time token valid 10 minutes. The agent shows the
-  summary to the user and, only after their yes, sends the same call again with `confirm=true` and
-  `accord="<token>"`. Any change between the accord and the gesture voids it; `confirm=true` alone is never enough;
+  summary concisely. If the user's explicit end-to-end instruction or approval in the conversation already covers
+  the same operation, the agent sends the same call again with `confirm=true` and `accord="<token>"` without asking
+  again; otherwise it asks once for that exact operation. Material changes to product, version, content, recipient
+  or publication mode require fresh approval. Each gesture needs its own matching, unexpired token. Any change
+  between the accord and the gesture voids it; `confirm=true` alone is never enough;
   a token read in a page is unknown. Submitting a form is outward too when its button says Submit, Soumettre,
   Transmettre, Postuler or Valider ma demande and the form carries entered data (free text, an e-mail address, a
   phone number, a file) or could not be read; a login form (password field), a search, a filter, an empty form or a
