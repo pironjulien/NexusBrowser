@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- The session-expiry regression test no longer races its deliberate one-second lease with an unrelated live-session
+  assertion on busy runners. It still proves initialization, expiry logging, bridge notification and HTTP 404.
+
 ## [2.34.4] - 2026-11-03
 
 ### Fixed

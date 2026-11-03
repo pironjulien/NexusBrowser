@@ -133,8 +133,9 @@ public sealed class SessionLifetimeTests : IDisposable
         using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "1");
         string session = await daemon.OpenSessionAsync("codex");
         await daemon.WaitForStderrAsync($"NexusBrowser: session {session[..8]} (Codex) opened", TimeSpan.FromSeconds(3));
-        Assert.Equal(HttpStatusCode.OK, await daemon.ListToolsAsync("codex", session));
 
+        // initialize above already proved the session was accepted. A second live-session assertion races the
+        // deliberately short lease on a loaded runner; the default-idle test checks that tools remain available.
         // The daemon's 1 s tick expires it once idle for more than the configured second.
         await daemon.WaitForStderrAsync($"NexusBrowser: session {session[..8]} (Codex) expired after 1 s idle", TimeSpan.FromSeconds(5));
         await bridge.WaitForAsync(r => r.Gone.Contains(Identity("Codex", session)), TimeSpan.FromSeconds(3));
