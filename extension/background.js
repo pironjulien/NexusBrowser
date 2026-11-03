@@ -3668,16 +3668,16 @@ async function resolveTargetTab(params = {}) {
 
 // -----------------------------------------------------------------------------
 // Indicateur « agent au travail » : le logo NexusBrowser de la barre d'outils tourne sur lui-même (axe vertical)
-// tant qu'un agent travaille, avec un point bleu. Rien n'est dessiné dans les pages : ni l'onglet que l'utilisateur
+// tant qu'un agent travaille, le logo seul (ni pastille ni point : Julien, 22/10 et 03/11). Rien n'est dessiné dans les pages : ni l'onglet que l'utilisateur
 // regarde ni celui de l'agent ne reçoivent d'élément (une page le verrait). Retiré après un court délai sans commande.
 // -----------------------------------------------------------------------------
 const BUSY_LINGER_MS = 1618;
-const BUSY_SPIN_FRAMES = 12;  // un tour en BUSY_LINGER_MS, comme l'ancien logo de la page
+const BUSY_SPIN_FRAMES = 32;  // un tour en BUSY_LINGER_MS, environ 20 images par seconde
 const busyAgents = new Map();  // agent → commandes en cours
 let busyHideTimer = null;
 let busySpinTimer = null;
 let busySpinFrame = 0;
-let busyFrames = null;  // [{16: ImageData, 32: ImageData}], calculées une fois
+let busyFrames = null;  // [{16, 24, 32: ImageData}], calculées une fois
 
 function busyStart(agent) {
     busyAgents.set(agent, (busyAgents.get(agent) || 0) + 1);
@@ -3698,19 +3698,28 @@ async function spinFrames() {
     if (busyFrames) return busyFrames;
     if (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined") return (busyFrames = []);
     try {
-        const bitmaps = {};
-        for (const size of [16, 32]) {
-            bitmaps[size] = await createImageBitmap(await (await fetch(chrome.runtime.getURL(`icons/icon${size}.png`))).blob());
-        }
+        // Source la plus fine (48 px) réduite à chaque taille : tranche nette même quand la pièce est de profil.
+        const source = await createImageBitmap(await (await fetch(chrome.runtime.getURL("icons/icon48.png"))).blob());
         const frames = [];
         for (let i = 0; i < BUSY_SPIN_FRAMES; i++) {
-            const scale = Math.max(0.08, Math.abs(Math.cos((2 * Math.PI * i) / BUSY_SPIN_FRAMES)));
+            const angle = (2 * Math.PI * i) / BUSY_SPIN_FRAMES;
+            const turn = Math.cos(angle);  // 1 de face, 0 de profil, négatif : revers
+            const scale = Math.max(0.06, Math.abs(turn));
             const frame = {};
-            for (const size of [16, 32]) {
+            for (const size of [16, 24, 32]) {
                 const canvas = new OffscreenCanvas(size, size);
                 const ctx = canvas.getContext("2d");
+                ctx.imageSmoothingQuality = "high";
                 const width = size * scale;
-                ctx.drawImage(bitmaps[size], (size - width) / 2, 0, width, size);
+                const left = (size - width) / 2;
+                ctx.save();
+                if (turn < 0) { ctx.translate(size, 0); ctx.scale(-1, 1); }  // revers : la face vue en miroir
+                ctx.drawImage(source, turn < 0 ? size - left - width : left, 0, width, size);
+                ctx.restore();
+                // Relief : la pièce s'assombrit en tournant vers son profil (aucun halo ni couleur ajoutée).
+                ctx.globalCompositeOperation = "source-atop";
+                ctx.fillStyle = `rgba(0, 0, 0, ${(0.45 * (1 - scale)).toFixed(3)})`;
+                ctx.fillRect(0, 0, size, size);
                 frame[size] = ctx.getImageData(0, 0, size, size);
             }
             frames.push(frame);
@@ -3747,10 +3756,7 @@ function stopBusySpin() {
 async function refreshBusyIndicator() {
     if (typeof chrome === "undefined") return;
     const on = busyAgents.size > 0;
-    try {
-        chrome.action?.setBadgeBackgroundColor?.({ color: "#4285f4" });
-        chrome.action?.setBadgeText?.({ text: on ? "•" : "" });
-    } catch (_) {}
+    try { chrome.action?.setBadgeText?.({ text: "" }); } catch (_) {}  // ancien point bleu d'une version précédente
     if (on) await startBusySpin();
     else stopBusySpin();
 }
@@ -4072,7 +4078,12 @@ async function settleNavigation(tabId, tab, { before = null, url = null } = {}) 
         if (current?.pendingUrl || current?.status === "loading") continue;
         if (url && before && current?.url === before && before !== url) {
             const scheme = String(url).split(":")[0].toLowerCase();
-            return { error: `Chrome refused to open ${scheme === "data" ? "a data: URL from an extension" : url}: the tab stays on ${before}. Nothing else was done.` };
+            if (scheme === "data") {
+                // Chrome refuse aux extensions toute page data: de premier niveau ; la même page se construit sans
+                // premier plan ni clavier dans un onglet vide (axe « invisible »), jamais par la barre d'adresse.
+                return { error: `Chrome refused to open a data: URL from an extension: the tab stays on ${before}. Nothing else was done. Same page, still in the background: browser_navigate to about:blank, then browser_eval with document.open(); document.write(<the HTML>); document.close().` };
+            }
+            return { error: `Chrome refused to open ${url}: the tab stays on ${before}. Nothing else was done.` };
         }
         return { data: current };
     }

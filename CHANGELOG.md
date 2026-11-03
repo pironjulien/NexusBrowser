@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.1] - 2026-11-03
+
+### Changed
+- When Chrome refuses a `data:` URL opened by the extension, the error now gives the background route to the same
+  page: `browser_navigate` to `about:blank`, then `browser_eval` with `document.open()`, `document.write(...)` and
+  `document.close()`. Antigravity, Claude and Codex no longer need the foreground or the keyboard for it.
+- Working indicator: the toolbar logo alone, without the blue dot badge, turns more smoothly (32 images per turn
+  instead of 12, drawn from the 48 px logo at 16, 24 and 32 px), shows its mirrored back and darkens slightly towards
+  its edge.
+
 ## [2.35.0] - 2026-11-03
 
 ### Changed

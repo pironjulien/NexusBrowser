@@ -5023,6 +5023,7 @@ test('navigate attend la nouvelle page ; une navigation refusée par Chrome (dat
     state = {id: 1, url: 'https://old.invalid/', status: 'complete', windowId: 10};
     const refused = await h.run('navigate', {tabId: 1, url: 'data:text/html,<p>x</p>'});
     assert.match(refused.error, /Chrome refused to open a data: URL/);
+    assert.match(refused.error, /about:blank, then browser_eval with document\.open\(\); document\.write/);
 });
 
 test('new_tab et navigate vers le Chrome Web Store : avertissement dès la réponse', async () => {
