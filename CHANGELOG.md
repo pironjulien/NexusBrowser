@@ -5,6 +5,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.2] - 2026-11-03
+
+### Changed
+- `browser_export` tells the agents to read with `format="text"`: on a link-heavy page it costs about half the
+  tokens of the Markdown default (Wikipedia article: 6,792 instead of 14,626), which stays the choice when links,
+  structure or a file are needed.
+
+### Added
+- Benchmark results of 2026-11-03 in `benchmarks/README.md`: NexusBrowser, Chrome DevTools MCP 1.12.0 and Playwright
+  MCP 0.0.84 on the three tasks (read, form, click), each result checked, plus the native browsers of Claude, Codex
+  and Antigravity on the same tasks.
+
 ## [2.35.1] - 2026-11-03
 
 ### Changed

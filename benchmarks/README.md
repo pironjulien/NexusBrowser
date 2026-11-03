@@ -33,6 +33,40 @@ Each engine uses its own tools the way an agent would:
 
 The check of the result (each engine's own script tool reads the page state) is not counted.
 
+## Results (2026-11-03, NexusBrowser 2.35.1, Chrome DevTools MCP 1.12.0, Playwright MCP 0.0.84)
+
+Run with the local harness `bench/compare.py` (see Run it), 5 rounds per task, medians, tokens of the tool responses (o200k_base proxy).
+NexusBrowser in the real Chrome, background tab; the other two in their own isolated headless Chrome. NexusBrowser
+reads with `browser_export(format="text")` and observes with `browser_axtree(mode="snapshot")`.
+
+| Engine | Task | Success | Tokens | Calls | Seconds |
+| --- | --- | --- | ---: | ---: | ---: |
+| NexusBrowser | read | 5/5 | 6,792 | 3 | 0.5 |
+| NexusBrowser | form | 5/5 | 727 | 4 | 0.8 |
+| NexusBrowser | click | 5/5 | 5,192 | 5 | 0.8 |
+| Chrome DevTools MCP | read | 5/5 | 56,078 | 2 | 0.5 |
+| Chrome DevTools MCP | form | 5/5 | 380 | 3 | 0.8 |
+| Chrome DevTools MCP | click | 5/5 | 10,029 | 3 | 0.8 |
+| Playwright MCP | read | 5/5 | 62,672 | 2 | 0.4 |
+| Playwright MCP | form | 5/5 | 802 | 3 | 0.7 |
+| Playwright MCP | click | 5/5 | 13,709 | 3 | 1.5 |
+
+Raw data: [results/results-2026-11-03.json](results/results-2026-11-03.json). The Markdown export of the same
+article costs 14,626 tokens (its 417 link URLs), hence the `format="text"` advice for reading in 2.35.2.
+
+### The AI apps' own browsers, same tasks (2026-11-03, one round each, rough sizes)
+
+| Browser | Real profile | Read | Form | Click | Notes |
+| --- | --- | --- | --- | --- | --- |
+| NexusBrowser | yes | 6.8k tokens | 7/7, 4 calls | 5 calls | background tab, nothing visible |
+| Claude, built-in browser (app pane) | no | about 7k tokens of page text | 7/7, 11 actions | 4 actions | its accessibility tree is empty while the pane is hidden (0x0 viewport); fields found by role only, without labels |
+| Claude in Chrome | yes | not measured | not measured | not measured | installed but not connected after a Chrome restart |
+| Codex, in-app browser | no | about 126k characters | 5/7 confirmed (capture failed hidden) | about 23k characters | separate profile |
+| Codex, Chrome extension | yes | about 130k characters | 7/7 (confirmed by a capture) | about 1.7k characters | refuses `visible:false`; tel/e-mail values redacted in its reads |
+| Antigravity, browser agent | yes | failed | not run | not run | uses chrome-devtools-mcp 1.9.0 on the running Chrome: Chrome's modal "allow remote debugging?" dialog blocks it |
+
+The Codex and Antigravity rows were measured by those agents themselves on request, as characters, not tokens.
+
 ## Results (2026-10-27, NexusBrowser 2.27.0, Chrome DevTools MCP 1.12.0, Playwright MCP 0.0.83)
 
 5 rounds per task, medians; tokens of the tool responses with the public o200k_base tokenizer (a proxy: Claude's
@@ -86,14 +120,21 @@ Details: [results/results-2026-10-31.md](results/results-2026-10-31.md).
 
 ## Not compared
 
-- **Claude in Chrome**: it cannot be driven from an ordinary MCP client, so it cannot be measured the same way.
+- **Claude in Chrome**: it cannot be driven from an ordinary MCP client, so it cannot be measured the same way
+  (see the AI apps' browsers above).
 - **BrowserOS**: it is a browser of its own to install; left out of this run.
 
 ## Run it
 
-The harness (`compare.py`, Python) was removed with the Python engine in 2.33.0: the results above are kept as a
-record of version 2.31 (same 49 tools and wire format as the native engine). Its method stays valid: the same
-fixed sequence of tool calls per engine, tokens counted with `tiktoken` on what the agent receives.
+The harness is a local Python script, `bench/compare.py`, kept outside the published repository like the other
+local benches (this repository tracks C# and the extension only). Its method is the one described above: the same
+fixed sequence of tool calls per engine, tokens counted with `tiktoken` (o200k_base) on what the agent receives, each
+result checked by the engine's own script tool.
 
-Chrome DevTools MCP (`--isolated --headless`) and Playwright MCP (`--isolated --headless`) always start their own
-browser.
+```powershell
+python -B bench\compare.py --rounds 5 --out results.json   # --engines nexus,devtools,playwright --tasks read,form,click
+```
+
+It needs Python with `mcp` and `tiktoken`, Node.js (`npx` fetches the pinned Chrome DevTools MCP and Playwright
+MCP), NexusBrowser installed with its shared daemon and the `NEXUS_MCP_TOKEN` user variable. NexusBrowser opens and
+closes its own background tabs only; the other two always start their own isolated headless browser.

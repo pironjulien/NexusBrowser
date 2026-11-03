@@ -1,0 +1,493 @@
+{
+  "meta": {
+    "date": "2026-11-03",
+    "rounds": 5,
+    "tokenizer": "o200k_base",
+    "tasks": {
+      "read": "https://en.wikipedia.org/wiki/Chromium_(web_browser)",
+      "form": "https://httpbin.org/forms/post",
+      "click": "https://news.ycombinator.com/"
+    }
+  },
+  "summary": [
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "read",
+      "success": "5/5",
+      "tokens": 14626,
+      "calls": 3,
+      "seconds": 0.5
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "form",
+      "success": "5/5",
+      "tokens": 727,
+      "calls": 4,
+      "seconds": 0.8
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "click",
+      "success": "5/5",
+      "tokens": 5192,
+      "calls": 5,
+      "seconds": 0.8
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "read",
+      "success": "5/5",
+      "tokens": 56078,
+      "calls": 2,
+      "seconds": 0.5
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "form",
+      "success": "5/5",
+      "tokens": 380,
+      "calls": 3,
+      "seconds": 0.8
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "click",
+      "success": "5/5",
+      "tokens": 10029,
+      "calls": 3,
+      "seconds": 0.8
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "read",
+      "success": "5/5",
+      "tokens": 62672,
+      "calls": 2,
+      "seconds": 0.4
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "form",
+      "success": "5/5",
+      "tokens": 802,
+      "calls": 3,
+      "seconds": 0.7
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "click",
+      "success": "5/5",
+      "tokens": 13709,
+      "calls": 3,
+      "seconds": 1.5
+    }
+  ],
+  "runs": [
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "read",
+      "round": 1,
+      "success": true,
+      "tokens": 14626,
+      "calls": 3,
+      "seconds": 0.53
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "read",
+      "round": 2,
+      "success": true,
+      "tokens": 14625,
+      "calls": 3,
+      "seconds": 0.45
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "read",
+      "round": 3,
+      "success": true,
+      "tokens": 14626,
+      "calls": 3,
+      "seconds": 0.44
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "read",
+      "round": 4,
+      "success": true,
+      "tokens": 14626,
+      "calls": 3,
+      "seconds": 0.45
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "read",
+      "round": 5,
+      "success": true,
+      "tokens": 14625,
+      "calls": 3,
+      "seconds": 0.45
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "form",
+      "round": 1,
+      "success": true,
+      "tokens": 727,
+      "calls": 4,
+      "seconds": 0.71
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "form",
+      "round": 2,
+      "success": true,
+      "tokens": 727,
+      "calls": 4,
+      "seconds": 0.75
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "form",
+      "round": 3,
+      "success": true,
+      "tokens": 727,
+      "calls": 4,
+      "seconds": 0.91
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "form",
+      "round": 4,
+      "success": true,
+      "tokens": 727,
+      "calls": 4,
+      "seconds": 0.75
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "form",
+      "round": 5,
+      "success": true,
+      "tokens": 728,
+      "calls": 4,
+      "seconds": 0.73
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "click",
+      "round": 1,
+      "success": true,
+      "tokens": 5192,
+      "calls": 5,
+      "seconds": 1.12
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "click",
+      "round": 2,
+      "success": true,
+      "tokens": 5192,
+      "calls": 5,
+      "seconds": 0.8
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "click",
+      "round": 3,
+      "success": true,
+      "tokens": 5192,
+      "calls": 5,
+      "seconds": 0.78
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "click",
+      "round": 4,
+      "success": true,
+      "tokens": 5192,
+      "calls": 5,
+      "seconds": 0.81
+    },
+    {
+      "engine": "NexusBrowser 2.35.1",
+      "task": "click",
+      "round": 5,
+      "success": true,
+      "tokens": 5192,
+      "calls": 5,
+      "seconds": 0.79
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "read",
+      "round": 1,
+      "success": true,
+      "tokens": 56078,
+      "calls": 2,
+      "seconds": 0.89
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "read",
+      "round": 2,
+      "success": true,
+      "tokens": 56078,
+      "calls": 2,
+      "seconds": 0.48
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "read",
+      "round": 3,
+      "success": true,
+      "tokens": 56078,
+      "calls": 2,
+      "seconds": 0.45
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "read",
+      "round": 4,
+      "success": true,
+      "tokens": 56078,
+      "calls": 2,
+      "seconds": 0.46
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "read",
+      "round": 5,
+      "success": true,
+      "tokens": 56078,
+      "calls": 2,
+      "seconds": 0.48
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "form",
+      "round": 1,
+      "success": true,
+      "tokens": 380,
+      "calls": 3,
+      "seconds": 1.09
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "form",
+      "round": 2,
+      "success": true,
+      "tokens": 380,
+      "calls": 3,
+      "seconds": 0.85
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "form",
+      "round": 3,
+      "success": true,
+      "tokens": 380,
+      "calls": 3,
+      "seconds": 0.87
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "form",
+      "round": 4,
+      "success": true,
+      "tokens": 380,
+      "calls": 3,
+      "seconds": 0.85
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "form",
+      "round": 5,
+      "success": true,
+      "tokens": 380,
+      "calls": 3,
+      "seconds": 0.85
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "click",
+      "round": 1,
+      "success": true,
+      "tokens": 10029,
+      "calls": 3,
+      "seconds": 1.52
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "click",
+      "round": 2,
+      "success": true,
+      "tokens": 10029,
+      "calls": 3,
+      "seconds": 1.24
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "click",
+      "round": 3,
+      "success": true,
+      "tokens": 10029,
+      "calls": 3,
+      "seconds": 0.84
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "click",
+      "round": 4,
+      "success": true,
+      "tokens": 10029,
+      "calls": 3,
+      "seconds": 0.83
+    },
+    {
+      "engine": "Chrome DevTools MCP 1.12.0",
+      "task": "click",
+      "round": 5,
+      "success": true,
+      "tokens": 10029,
+      "calls": 3,
+      "seconds": 0.82
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "read",
+      "round": 1,
+      "success": true,
+      "tokens": 59252,
+      "calls": 2,
+      "seconds": 0.85
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "read",
+      "round": 2,
+      "success": true,
+      "tokens": 62672,
+      "calls": 2,
+      "seconds": 0.44
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "read",
+      "round": 3,
+      "success": true,
+      "tokens": 62672,
+      "calls": 2,
+      "seconds": 0.43
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "read",
+      "round": 4,
+      "success": true,
+      "tokens": 62672,
+      "calls": 2,
+      "seconds": 0.4
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "read",
+      "round": 5,
+      "success": true,
+      "tokens": 62687,
+      "calls": 2,
+      "seconds": 0.39
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "form",
+      "round": 1,
+      "success": true,
+      "tokens": 864,
+      "calls": 3,
+      "seconds": 0.99
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "form",
+      "round": 2,
+      "success": true,
+      "tokens": 802,
+      "calls": 3,
+      "seconds": 0.72
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "form",
+      "round": 3,
+      "success": true,
+      "tokens": 802,
+      "calls": 3,
+      "seconds": 0.73
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "form",
+      "round": 4,
+      "success": true,
+      "tokens": 802,
+      "calls": 3,
+      "seconds": 0.71
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "form",
+      "round": 5,
+      "success": true,
+      "tokens": 802,
+      "calls": 3,
+      "seconds": 0.7
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "click",
+      "round": 1,
+      "success": true,
+      "tokens": 13709,
+      "calls": 3,
+      "seconds": 2.07
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "click",
+      "round": 2,
+      "success": true,
+      "tokens": 13709,
+      "calls": 3,
+      "seconds": 1.46
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "click",
+      "round": 3,
+      "success": true,
+      "tokens": 13709,
+      "calls": 3,
+      "seconds": 1.49
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "click",
+      "round": 4,
+      "success": true,
+      "tokens": 13709,
+      "calls": 3,
+      "seconds": 1.47
+    },
+    {
+      "engine": "Playwright MCP 0.0.84",
+      "task": "click",
+      "round": 5,
+      "success": true,
+      "tokens": 13709,
+      "calls": 3,
+      "seconds": 1.48
+    }
+  ]
+}
