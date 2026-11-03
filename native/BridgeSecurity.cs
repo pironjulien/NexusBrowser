@@ -15,7 +15,7 @@ namespace NexusBrowser.Native;
 
 public static partial class BridgeSecurity
 {
-    public const string Version = "2.35.2";
+    public const string Version = "2.35.3";
     public const string TokenFileName = "bridge-token";
     public const string TokenHeader = "X-Nexus-Browser-Token";
     public const string AgentHeader = "X-Nexus-Browser-Agent";
@@ -424,10 +424,51 @@ public static partial class BridgeSecurity
             text = $"{drive}:\\{rest}";
         }
 
-        string full = Path.GetFullPath(text);
+        string full = Path.GetFullPath(CleanTrailingDotsAndSpaces(WithoutStreams(Path.GetFullPath(text))));
         string resolved = ResolveRealPath(full);
         string cleaned = CleanTrailingDotsAndSpaces(resolved);
         return cleaned.ToLowerInvariant().TrimEnd('\\', '/');
+    }
+
+    // Each name without its stream (name:stream:type): Windows opens "dir::$INDEX_ALLOCATION\file" as "dir\file" and
+    // writes "out.exe::$DATA" as out.exe, so a secrets folder or a runnable file hid behind a stream (found by RobustnessTests).
+    private static string WithoutStreams(string full)
+    {
+        var root = Path.GetPathRoot(full) ?? "";
+        var parts = full[root.Length..].Split('\\').Select(p => p.IndexOf(':') is int at and >= 0 ? p[..at] : p);
+        return root + string.Join(@"\", parts);
+    }
+
+    [LibraryImport("kernel32.dll", EntryPoint = "CreateFileW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "GetFinalPathNameByHandleW", SetLastError = true)]
+    private static unsafe partial uint GetFinalPathNameByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle handle, char* path, uint size, uint flags);
+
+    // The path Windows really opens for an existing file or folder: every junction, symbolic link and 8.3 short name on
+    // the way resolved. Only the last name's link was resolved before, so "C:\x\link\id_rsa" (link -> .ssh) and
+    // "...\SSH~1\id_rsa" reached a secrets folder (found by RobustnessTests). Null when Windows cannot open it.
+    private static string? FinalPath(string existing)
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return null;
+        const uint FILE_SHARE_ALL = 7, OPEN_EXISTING = 3, FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+        using var handle = CreateFile(existing, 0, FILE_SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero);
+        if (handle.IsInvalid)
+            return null;
+        var buffer = new char[32768];
+        uint length;
+        unsafe
+        {
+            fixed (char* text = buffer)
+                length = GetFinalPathNameByHandle(handle, text, (uint)buffer.Length, 0);
+        }
+        if (length == 0 || length >= buffer.Length)
+            return null;
+        var path = new string(buffer, 0, (int)length);
+        if (path.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
+            return @"\\" + path[8..];
+        return path.StartsWith(@"\\?\", StringComparison.Ordinal) ? path[4..] : path;
     }
 
     private static string ResolveRealPath(string fullPath)
@@ -438,20 +479,14 @@ public static partial class BridgeSecurity
             var suffixParts = new Stack<string>();
             while (!string.IsNullOrEmpty(current))
             {
-                if (File.Exists(current))
+                if (File.Exists(current) || Directory.Exists(current))
                 {
-                    var fi = new FileInfo(current);
-                    var target = fi.ResolveLinkTarget(returnFinalTarget: true);
-                    if (target != null)
-                        current = target.FullName;
-                    break;
-                }
-                if (Directory.Exists(current))
-                {
-                    var di = new DirectoryInfo(current);
-                    var target = di.ResolveLinkTarget(returnFinalTarget: true);
-                    if (target != null)
-                        current = target.FullName;
+                    if (FinalPath(current) is { } final)
+                        current = final;
+                    else if (new FileInfo(current) is { Exists: true } fi && fi.ResolveLinkTarget(returnFinalTarget: true) is { } fileTarget)
+                        current = fileTarget.FullName;
+                    else if (new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true) is { } dirTarget)
+                        current = dirTarget.FullName;
                     break;
                 }
                 var parent = Path.GetDirectoryName(current);
@@ -578,14 +613,16 @@ public static partial class BridgeSecurity
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
         };
         string own = CanonicalPath(Path.Join(home, ".nexus", "nexus-browser"));
-        if (key.StartsWith(own + @"", StringComparison.Ordinal)) return null;
+        // A whole folder name, never a bare prefix: ~\.nexus\nexus-browser2 passed as the engine's own folder and ~\.awsome
+        // was refused as ~\.aws (found by RobustnessTests).
+        if (key == own || key.StartsWith(own + @"\", StringComparison.Ordinal)) return null;
         foreach (var root in roots)
         {
             if (string.IsNullOrEmpty(root)) continue;
             string rootKey;
             try { rootKey = CanonicalPath(root); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { continue; }
-            if (key == rootKey || key.StartsWith(rootKey + @"", StringComparison.Ordinal))
+            if (key == rootKey || key.StartsWith(rootKey + @"\", StringComparison.Ordinal))
                 return $"output_path refused: {fullPath} is in a protected folder ({root}). Write to a project, Documents, Downloads or temporary folder.";
         }
         return null;

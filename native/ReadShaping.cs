@@ -136,13 +136,16 @@ public sealed partial class McpServer
     /// </summary>
     internal static void ApplyJsonPath(JsonObject data, string jsonPath, int maxBytes)
     {
+        // A negative max_bytes cut at a negative length and failed with an index error (found by RobustnessTests).
+        if (maxBytes < 0) throw new ArgumentException($"max_bytes: 0 or more (not {maxBytes})");
         if (GetBool(data, "binary", false)) throw new ArgumentException("json_path: the body is binary, not JSON");
         if (GetBool(data, "truncated", false)) throw new ArgumentException($"json_path: body larger than {WholeBodyBytes / (1024 * 1024)} MB, it cannot be read whole");
         string body = GetString(data, "body") ?? "";
         var prefix = Regex.Match(body, @"^(\)\]\}'[^\n]*\n?|for\s*\(;;\);|while\s*\(1\);)");
         JsonNode? document;
-        try { document = JsonNode.Parse(body[prefix.Length..]); }
-        catch (JsonException) { throw new ArgumentException($"json_path: the body is not JSON ({GetString(data, "mimeType") ?? "unknown type"})"); }
+        // A repeated name or a lone surrogate is "not JSON" too, not an index or encoding error later on.
+        try { document = JsonNode.Parse(body[prefix.Length..], documentOptions: BridgeAuth.StrictJson); }
+        catch (Exception ex) when (ex is JsonException or ArgumentException) { throw new ArgumentException($"json_path: the body is not JSON ({GetString(data, "mimeType") ?? "unknown type"})"); }
         var selected = JsonPathSelect(document, jsonPath);
         string text = selected is null ? "null" : selected.ToJsonString(CompactJson);
         data["json_path"] = jsonPath;

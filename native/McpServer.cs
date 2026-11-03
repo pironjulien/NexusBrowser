@@ -695,8 +695,12 @@ public sealed partial class McpServer : IDisposable
             }
 
             string bodyJson = Encoding.UTF8.GetString(body, 0, offset);
-            JsonNode? parsed = JsonNode.Parse(bodyJson);
-            string? rpcMethod = (parsed as JsonObject)?["method"]?.GetValue<string>();
+            // A body that is not JSON, or whose method is not a string, threw here and the connection was dropped without
+            // an answer: the dispatcher answers it with its JSON-RPC error.
+            JsonNode? parsed;
+            try { parsed = JsonNode.Parse(bodyJson, documentOptions: BridgeAuth.StrictJson); }
+            catch (JsonException) { parsed = null; }
+            string? rpcMethod = parsed is JsonObject rpc ? GetString(rpc, "method") : null;
 
             string activeSessionId;
             if (!string.IsNullOrEmpty(sessionId))
@@ -832,7 +836,9 @@ public sealed partial class McpServer : IDisposable
         JsonNode? node;
         try
         {
-            node = JsonNode.Parse(line);
+            // A repeated name is a parse error: it threw an ArgumentException out of the dispatcher, and the request
+            // stayed unanswered (found by RobustnessTests).
+            node = JsonNode.Parse(line, documentOptions: BridgeAuth.StrictJson);
         }
         catch (JsonException)
         {
@@ -844,12 +850,24 @@ public sealed partial class McpServer : IDisposable
             };
         }
 
-        if (node is not JsonObject req)
-            return null;
+        // Only a JSON-RPC 2.0 object with a string method and a string or number id (none for a notification) is run.
+        // Without jsonrpc "2.0", with an object or boolean id, a method that is not a string or a value that is not an
+        // object, a request was run or left unanswered (found by RobustnessTests).
+        JsonNode? rawId = (node as JsonObject)?["id"];
+        if (node is not JsonObject req || GetString(req, "jsonrpc") != "2.0" || GetString(req, "method") is not { Length: > 0 } method ||
+            rawId?.GetValueKind() is not (null or JsonValueKind.String or JsonValueKind.Number))
+        {
+            var id = rawId?.GetValueKind() is JsonValueKind.String or JsonValueKind.Number ? rawId.DeepClone() : null;
+            return new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = id,
+                ["error"] = new JsonObject { ["code"] = -32600, ["message"] = "Invalid Request: a JSON-RPC 2.0 object with a string method and a string or number id" },
+            };
+        }
 
-        JsonNode? idNode = req["id"]?.DeepClone();
+        JsonNode? idNode = rawId?.DeepClone();
         bool hasId = idNode is not null;
-        string? method = GetString(req, "method");
         JsonObject? @params = req["params"] as JsonObject;
 
         if (!hasId)
@@ -858,7 +876,6 @@ public sealed partial class McpServer : IDisposable
                 _requests.TryGetValue((identity.Id, cancelled.ToJsonString()), out var pending)) pending.Cancel();
             return null;
         }
-        if (string.IsNullOrEmpty(method)) return null;
         using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var requestKey = (identity.Id, idNode!.ToJsonString());
         if (!_requests.TryAdd(requestKey, requestCts))
@@ -1053,17 +1070,17 @@ public sealed partial class McpServer : IDisposable
         {
             int? tabId = TryGetInt(arguments, "tab_id");
             var data = answer?["data"] as JsonObject;
-            string? url = data?["url"]?.GetValue<string>() ?? data?["pendingUrl"]?.GetValue<string>();
+            string? url = data is null ? null : GetString(data, "url") ?? GetString(data, "pendingUrl");
             if (string.IsNullOrEmpty(url) && name is "browser_navigate" or "browser_new_tab")
-                url = arguments["url"]?.GetValue<string>();
+                url = GetString(arguments, "url");
             tabId ??= TryGetInt(data, "id");
 
             if (!string.IsNullOrEmpty(url) && tabId.HasValue && Journal.Domaine(url) is { } foundDomain)
                 _tabDomains[(identity.Id, tabId.Value)] = foundDomain;
 
             string? appDomain = tabId.HasValue && _tabDomains.TryGetValue((identity.Id, tabId.Value), out var d) ? d : null;
-            string? method = !FreeDataTools.Contains(name) ? data?["method"]?.GetValue<string>() : null;
-            string? rawError = answer?["error"]?.GetValue<string>();
+            string? method = !FreeDataTools.Contains(name) && data is not null ? GetString(data, "method") : null;
+            string? rawError = answer is null ? null : GetString(answer, "error");
 
             var ligne = new JsonObject
             {
@@ -1942,11 +1959,14 @@ public sealed partial class McpServer : IDisposable
         return "";
     }
 
-    private static JsonNode? MaskWebMcpInput(JsonNode? value, string key = "")
+    // Everything under a secret key is masked, objects and arrays included: only the value right under it was, so
+    // {"card":{"number":"4111..."}} showed the card number in the summary (found by RobustnessTests).
+    internal static JsonNode? MaskWebMcpInput(JsonNode? value, string key = "", bool secret = false)
     {
-        if (value is JsonObject obj) return new JsonObject(obj.Select(kv => new KeyValuePair<string, JsonNode?>(kv.Key, MaskWebMcpInput(kv.Value, kv.Key))));
-        if (value is JsonArray arr) return new JsonArray(arr.Select(v => MaskWebMcpInput(v, key)).ToArray());
-        if (value is not null && value.ToString().Length > 0 && Regex.IsMatch(key, "pass(word|wd|code)?|pin|otp|cvv|cvc|card|iban|secret|token|ssn", RegexOptions.IgnoreCase))
+        secret |= Regex.IsMatch(key, "pass(word|wd|code)?|pin|otp|cvv|cvc|card|iban|secret|token|ssn", RegexOptions.IgnoreCase);
+        if (value is JsonObject obj) return new JsonObject(obj.Select(kv => new KeyValuePair<string, JsonNode?>(kv.Key, MaskWebMcpInput(kv.Value, kv.Key, secret))));
+        if (value is JsonArray arr) return new JsonArray(arr.Select(v => MaskWebMcpInput(v, key, secret)).ToArray());
+        if (secret && value is not null && value.ToString().Length > 0)
             return JsonValue.Create("[masked value]");
         return value?.DeepClone();
     }

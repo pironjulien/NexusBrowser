@@ -18,8 +18,14 @@ public static class BridgeAuth
     public const string Protocol = "nexus-browser/1";
     public const int NonceBytes = 32;
 
-    private static readonly Regex Base64UrlRegex = new(@"^[A-Za-z0-9_-]+$", RegexOptions.Compiled);
-    private static readonly Regex ExtensionIdRegex = new(@"^[a-p]{32}$", RegexOptions.Compiled);
+    // \z, not $: $ also matches before a final line feed, which let 42 characters and a line feed pass as a nonce and
+    // 32 letters and a line feed as an extension id (found by RobustnessTests).
+    private static readonly Regex Base64UrlRegex = new(@"^[A-Za-z0-9_-]+\z", RegexOptions.Compiled);
+    private static readonly Regex ExtensionIdRegex = new(@"^[a-p]{32}\z", RegexOptions.Compiled);
+
+    /// <summary>JSON read from the extension or a file: a repeated property name is a parse error (JsonException), never
+    /// an ArgumentException on first access.</summary>
+    public static readonly JsonDocumentOptions StrictJson = new() { AllowDuplicateProperties = false };
 
     public static string ToBase64Url(ReadOnlySpan<byte> data)
     {

@@ -446,9 +446,9 @@ public sealed class BridgeServer : IAsyncDisposable
                 JsonObject? data;
                 try
                 {
-                    var outerNode = JsonNode.Parse(rawMessage);
+                    var outerNode = JsonNode.Parse(rawMessage, documentOptions: BridgeAuth.StrictJson);
                     string innerJson = client.Channel.Open(outerNode);
-                    data = JsonNode.Parse(innerJson) as JsonObject;
+                    data = JsonNode.Parse(innerJson, documentOptions: BridgeAuth.StrictJson) as JsonObject;
                 }
                 catch (Exception ex) when (ex is AuthError or JsonException)
                 {
@@ -516,7 +516,7 @@ public sealed class BridgeServer : IAsyncDisposable
             JsonNode? node;
             try
             {
-                node = JsonNode.Parse(raw);
+                node = JsonNode.Parse(raw, documentOptions: BridgeAuth.StrictJson);
             }
             catch (JsonException)
             {

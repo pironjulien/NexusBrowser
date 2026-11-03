@@ -273,13 +273,19 @@ public static class GardeFous
         return "";
     }
 
+    /// <summary>A field read from a page as text: a string as it is, a number, object or array as its JSON, nothing as "".
+    /// GetValue&lt;string&gt; threw on a field whose type, label or value was not a string, so the check of a gesture or the
+    /// journal line failed instead of answering (found by RobustnessTests).</summary>
+    public static string Text(JsonNode? node) =>
+        node is JsonValue v && v.GetValueKind() == JsonValueKind.String ? v.GetValue<string>() : node?.ToJsonString() ?? "";
+
     public static string FormSubmission(string? label, JsonObject? data)
     {
         var match = SubmitWordsRegex.Match(Plain(label));
         if (!match.Success)
             return "";
         var fields = (data?["fields"] as JsonArray)?.OfType<JsonObject>().ToList() ?? [];
-        if (fields.Any(f => string.Equals(f["type"]?.GetValue<string>(), "password", StringComparison.OrdinalIgnoreCase)))
+        if (fields.Any(f => string.Equals(Text(f["type"]), "password", StringComparison.OrdinalIgnoreCase)))
             return "";
         bool formUnknown = data?["formUnknown"] is JsonValue fv && fv.GetValueKind() == JsonValueKind.True;
         bool hasForm = data?["form"] is JsonValue fm && fm.GetValueKind() == JsonValueKind.True;
@@ -289,12 +295,12 @@ public static class GardeFous
         bool entered = (data["recipients"] as JsonArray)?.Count > 0 || (data["attachments"] as JsonArray)?.Count > 0;
         foreach (var f in fields)
         {
-            string kind = (f["type"]?.GetValue<string>() ?? "").ToLowerInvariant();
-            string hint = Plain($"{f["label"]?.GetValue<string>()} {kind}");
+            string kind = Text(f["type"]).ToLowerInvariant();
+            string hint = Plain($"{Text(f["label"])} {kind}");
             if (NoDataTypes.Contains(kind) || SearchHintRegex.IsMatch(hint))
                 continue;
             bool masked = f["masked"] is JsonValue mv && mv.GetValueKind() == JsonValueKind.True;
-            string val = (f["value"]?.GetValue<string>() ?? "").Trim();
+            string val = Text(f["value"]).Trim();
             if (masked || !string.IsNullOrEmpty(val))
                 entered = true;
         }
@@ -806,8 +812,8 @@ public static class Journal
     {
         if (failed || answer is null)
             return "✗";
-        string error = answer["error"]?.GetValue<string>() ?? "";
-        string status = answer["status"]?.GetValue<string>() ?? "";
+        string error = GardeFous.Text(answer["error"]);
+        string status = GardeFous.Text(answer["status"]);
         if (status == "error")
         {
             if (answer["accord_required"] is JsonValue ar && ar.GetValueKind() == JsonValueKind.True)

@@ -5,6 +5,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.3] - 2026-11-04
+
+### Added
+- Property-based robustness tests (FsCheck 3.4.0, `RobustnessTests.cs`) on every reader of outside data: identities,
+  nonces and signed frames of the bridge, the pairing file, upload and `output_path` paths, `json_path` on response
+  bodies, console entries, the WebMCP confirmation summary, page forms, the journal and JSON-RPC requests, on any input
+  and on real inputs damaged at random.
+
+### Fixed
+- Uploads and `output_path` resolve the path Windows really opens: a junction on the way, an 8.3 short name (`SSH~1`)
+  or a directory stream (`.ssh::$INDEX_ALLOCATION\id_rsa`) no longer reaches a secrets folder, and `out.exe::$DATA` is
+  refused as a runnable file.
+- `output_path` compares whole folder names: `~\.nexus\nexus-browser2` is no longer taken for the engine's own folder,
+  and `~\.awsome` is no longer refused as `~\.aws`.
+- The WebMCP confirmation summary masks everything under a secret key: `{"card":{"number":"..."}}` no longer shows the
+  card number.
+- A nonce or extension id ending with a line feed is refused during the bridge handshake.
+- JSON-RPC: a request without `jsonrpc` "2.0", with an object or boolean id, a method that is not a string or a value
+  that is not an object is refused (Invalid Request) instead of run or left unanswered; a repeated property name is a
+  parse error instead of a failure without an answer, and an HTTP body that is not JSON gets its parse error instead of
+  a dropped connection.
+- A negative `max_bytes` with `json_path` is a clear error, and a form field or answer whose type, label, value or
+  error is not a string is read as text instead of failing the gesture check or losing its journal line.
+
 ## [2.35.2] - 2026-11-03
 
 ### Changed

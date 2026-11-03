@@ -138,7 +138,7 @@ public sealed class PairingStore
         try
         {
             var raw = File.ReadAllText(_path, Encoding.UTF8);
-            var node = JsonNode.Parse(raw);
+            var node = JsonNode.Parse(raw, documentOptions: BridgeAuth.StrictJson);
             if (node is not JsonObject obj)
                 return new Dictionary<string, string>(StringComparer.Ordinal);
             var dict = new Dictionary<string, string>(StringComparer.Ordinal);
