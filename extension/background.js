@@ -36,6 +36,7 @@ chrome.runtime?.onUpdateAvailable?.addListener(details => { pendingExtensionUpda
 // porte son tab_id, et l'extension vérifie que cet onglet appartient au client qui la demande (voir « Propriété »).
 // Débogueur détaché après cette inactivité (bandeau « en cours de débogage » retiré, onglet rendu à Julien).
 const DEBUGGER_IDLE_MS = 30000;
+const NAVIGATION_SETTLE_MS = 15000;  // navigate et reload rendent la page chargée (délai du pont : 20 s)
 const debuggerIdleTimers = new Map();
 // tabId -> boîte de dialogue JavaScript ouverte ({type, message, ...}) : jamais acceptée d'office.
 const pendingDialogs = new Map();
@@ -3350,7 +3351,6 @@ async function performMouseAction(params, options) {
     const sequence = kind === "hover"
         ? [{ type: "mouseMoved", x, y, button: "none", buttons: 0 }]
         : mouseClickSequence(x, y, button, clickCount);
-    if (kind !== "hover") notifyRipple(tabId, x, y);
     let run;
     try {
         run = await runMouseSequence(target, sequence);
@@ -3667,17 +3667,17 @@ async function resolveTargetTab(params = {}) {
 }
 
 // -----------------------------------------------------------------------------
-// Indicateur « agent au travail » : le logo NexusBrowser tourne sur lui-même en bas à droite de l'onglet que
-// l'utilisateur regarde (les agents travaillent dans des onglets de fond), comme un écran de chargement de jeu, et un
-// point sur l'icône de la barre d'outils le dit aussi sur les pages internes de Chrome, où rien ne s'affiche. Dessiné
-// par chrome.scripting (monde isolé) : il marche aussi dans un onglet ouvert avant une mise à jour de l'extension, dont
-// le script de contenu ne reçoit plus de messages. Affiché tout de suite, retiré après un court délai sans commande.
+// Indicateur « agent au travail » : le logo NexusBrowser de la barre d'outils tourne sur lui-même (axe vertical)
+// tant qu'un agent travaille, avec un point bleu. Rien n'est dessiné dans les pages : ni l'onglet que l'utilisateur
+// regarde ni celui de l'agent ne reçoivent d'élément (une page le verrait). Retiré après un court délai sans commande.
 // -----------------------------------------------------------------------------
 const BUSY_LINGER_MS = 1618;
+const BUSY_SPIN_FRAMES = 12;  // un tour en BUSY_LINGER_MS, comme l'ancien logo de la page
 const busyAgents = new Map();  // agent → commandes en cours
-let busyShownTab = null;
 let busyHideTimer = null;
-let busyLogo = null;  // logo en data: URL, lu une fois (aucune ressource exposée aux pages)
+let busySpinTimer = null;
+let busySpinFrame = 0;
+let busyFrames = null;  // [{16: ImageData, 32: ImageData}], calculées une fois
 
 function busyStart(agent) {
     busyAgents.set(agent, (busyAgents.get(agent) || 0) + 1);
@@ -3693,106 +3693,66 @@ function busyEnd(agent) {
     busyHideTimer = setTimeout(() => { busyHideTimer = null; refreshBusyIndicator(); }, BUSY_LINGER_MS);
 }
 
-async function busyLogoUrl() {
-    if (busyLogo) return busyLogo;
+/** Images du logo vu de face puis de biais (rotation sur l'axe vertical), pour l'icône de la barre d'outils. */
+async function spinFrames() {
+    if (busyFrames) return busyFrames;
+    if (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined") return (busyFrames = []);
     try {
-        const bytes = new Uint8Array(await (await fetch(chrome.runtime.getURL("icons/logo96.png"))).arrayBuffer());
-        let binary = "";
-        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        busyLogo = `data:image/png;base64,${btoa(binary)}`;
-    } catch (_) {
-        busyLogo = "";
-    }
-    return busyLogo;
-}
-
-/** Exécutée DANS l'onglet (monde isolé) : autonome, sans variable extérieure. */
-function drawBusyIndicator(on, logo, label) {
-    const ID = "__nexus_busy";
-    let host = document.getElementById(ID);
-    if (!on) {
-        if (host) {
-            host.style.opacity = "0";
-            host.style.transform = "scale(0.6)";
-            setTimeout(() => { const h = document.getElementById(ID); if (h && h.style.opacity === "0") h.remove(); }, 300);
+        const bitmaps = {};
+        for (const size of [16, 32]) {
+            bitmaps[size] = await createImageBitmap(await (await fetch(chrome.runtime.getURL(`icons/icon${size}.png`))).blob());
         }
-        return true;
+        const frames = [];
+        for (let i = 0; i < BUSY_SPIN_FRAMES; i++) {
+            const scale = Math.max(0.08, Math.abs(Math.cos((2 * Math.PI * i) / BUSY_SPIN_FRAMES)));
+            const frame = {};
+            for (const size of [16, 32]) {
+                const canvas = new OffscreenCanvas(size, size);
+                const ctx = canvas.getContext("2d");
+                const width = size * scale;
+                ctx.drawImage(bitmaps[size], (size - width) / 2, 0, width, size);
+                frame[size] = ctx.getImageData(0, 0, size, size);
+            }
+            frames.push(frame);
+        }
+        busyFrames = frames;
+    } catch (_) {
+        busyFrames = [];
     }
-    if (!host) {
-        host = document.createElement("div");
-        host.id = ID;
-        Object.assign(host.style, {
-            position: "fixed", right: "28px", bottom: "28px", width: "72px", height: "72px", zIndex: "2147483647",
-            pointerEvents: "none", opacity: "0", transform: "scale(0.6)", perspective: "320px",
-            transition: "opacity 0.3s ease-out, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)"
-        });
-        // Racine fermée : la page ne lit ni ne restyle l'indicateur.
-        const root = host.attachShadow({ mode: "closed" });
-        const coin = document.createElement("div");
-        Object.assign(coin.style, { position: "absolute", inset: "0", transformStyle: "preserve-3d" });
-        const face = document.createElement("div");
-        Object.assign(face.style, {
-            position: "absolute", inset: "0", borderRadius: "50%", backfaceVisibility: "visible",
-            background: logo ? `center / cover no-repeat url("${logo}")` : "#1e1f20",
-            boxShadow: "0 0 0 2px rgba(255, 255, 255, 0.18), 0 8px 22px rgba(0, 0, 0, 0.55)"
-        });
-        coin.appendChild(face);
-        root.append(coin);  // sans halo bleu-violet (demande de Julien du 22/10) : le logo seul, avec son ombre
-        document.documentElement.appendChild(host);
-        // Le logo roule sur lui-même (axe vertical).
-        coin.animate([{ transform: "rotateY(0deg)" }, { transform: "rotateY(360deg)" }],
-            { duration: 1618, iterations: Infinity, easing: "cubic-bezier(0.45, 0, 0.55, 1)" });
-    }
-    host.title = label;
-    requestAnimationFrame(() => { host.style.opacity = "1"; host.style.transform = "scale(1)"; });
-    setTimeout(() => { host.style.opacity = "1"; host.style.transform = "scale(1)"; }, 50);
-    return true;
+    return busyFrames;
 }
 
-async function drawBusy(tabId, on) {
-    if (!chrome.scripting?.executeScript) return;
-    const label = `${[...busyAgents.keys()].slice(0, 3).join(", ")} au travail`;
+async function startBusySpin() {
+    if (busySpinTimer) return;
+    busySpinTimer = setInterval(() => {}, 1000);  // réservé tout de suite : un second appel ne double pas l'animation
+    const frames = await spinFrames();
+    clearInterval(busySpinTimer);
+    busySpinTimer = null;
+    if (!busyAgents.size || !frames.length || !chrome.action?.setIcon) return;
+    busySpinTimer = setInterval(() => {
+        busySpinFrame = (busySpinFrame + 1) % frames.length;
+        try { chrome.action.setIcon({ imageData: frames[busySpinFrame] })?.catch?.(() => {}); } catch (_) {}
+    }, Math.round(BUSY_LINGER_MS / BUSY_SPIN_FRAMES));
+}
+
+function stopBusySpin() {
+    if (busySpinTimer) { clearInterval(busySpinTimer); busySpinTimer = null; }
+    busySpinFrame = 0;
     try {
-        await chrome.scripting.executeScript({
-            target: { tabId, frameIds: [0] }, world: "ISOLATED", func: drawBusyIndicator,
-            args: [on, on ? await busyLogoUrl() : "", label]
-        });
-    } catch (_) {}  // page interne de Chrome, Web Store, PDF : le point de l'icône suffit
+        const icons = chrome.runtime?.getManifest?.()?.action?.default_icon;
+        if (icons) chrome.action?.setIcon?.({ path: icons })?.catch?.(() => {});
+    } catch (_) {}
 }
 
 async function refreshBusyIndicator() {
-    if (typeof chrome === "undefined" || !chrome.tabs?.query) return;
+    if (typeof chrome === "undefined") return;
     const on = busyAgents.size > 0;
     try {
         chrome.action?.setBadgeBackgroundColor?.({ color: "#4285f4" });
         chrome.action?.setBadgeText?.({ text: on ? "•" : "" });
     } catch (_) {}
-    let target = null;
-    if (on) {
-        try {
-            const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-            target = tab?.id ?? null;
-        } catch (_) {}
-    }
-    if (busyShownTab !== null && busyShownTab !== target) drawBusy(busyShownTab, false);
-    const already = on && target !== null && busyShownTab === target;
-    busyShownTab = on ? target : null;
-    if (on && target !== null && !already) await drawBusy(target, true);
-}
-
-if (typeof chrome !== "undefined") {
-    // L'utilisateur change d'onglet ou de fenêtre pendant que l'agent travaille : le logo le suit.
-    chrome.tabs?.onActivated?.addListener?.(() => { if (busyAgents.size) refreshBusyIndicator(); });
-    chrome.windows?.onFocusChanged?.addListener?.(() => { if (busyAgents.size) refreshBusyIndicator(); });
-}
-
-/** Point visé par un vrai clic, montré dans l'onglet (canal du script de contenu). */
-function notifyRipple(tabId, x, y) {
-    if (!tabId || typeof chrome === "undefined" || !chrome.tabs?.sendMessage) return;
-    try {
-        const pending = chrome.tabs.sendMessage(tabId, { nexusRipple: { x, y } }, { frameId: 0 });
-        if (pending && typeof pending.catch === "function") pending.catch(() => {});
-    } catch (_) {}
+    if (on) await startBusySpin();
+    else stopBusySpin();
 }
 
 async function groupTabs(params = {}) {
@@ -4090,8 +4050,33 @@ async function navigateTab(params) {
     resetNetworkTracking(tabId);
     // Débogueur attaché d'abord : une boîte beforeunload de la page quittée est vue (rapportée, onglet gardé derrière).
     try { await ensureDebugger(tabId); } catch (_) {}
+    let before = null;
+    try { before = (await chrome.tabs.get(tabId))?.url || null; } catch (_) {}
     const updatedTab = await chrome.tabs.update(tabId, { url });
-    return { data: updatedTab };
+    return await settleNavigation(tabId, updatedTab, { before, url });
+}
+
+/**
+ * Attend la fin d'une navigation lancée par l'extension : la réponse décrit la NOUVELLE page, jamais l'ancienne
+ * encore en place (un geste ou un wait_load enchaîné visait la page quittée, mesuré le 03/11). Une navigation que
+ * Chrome refuse sans erreur (data: de premier niveau ouverte par une extension) est dite, pas annoncée réussie.
+ */
+async function settleNavigation(tabId, tab, { before = null, url = null } = {}) {
+    if (!tab?.pendingUrl && tab?.status !== "loading") return { data: tab };
+    const deadline = Date.now() + NAVIGATION_SETTLE_MS;
+    let current = tab;
+    while (Date.now() < deadline) {
+        if (pendingDialogs.has(tabId)) return { data: { ...current, ...dialogInterruption(pendingDialogs.get(tabId)) } };
+        await sleepMs(100);
+        try { current = await chrome.tabs.get(tabId); } catch (_) { break; }
+        if (current?.pendingUrl || current?.status === "loading") continue;
+        if (url && before && current?.url === before && before !== url) {
+            const scheme = String(url).split(":")[0].toLowerCase();
+            return { error: `Chrome refused to open ${scheme === "data" ? "a data: URL from an extension" : url}: the tab stays on ${before}. Nothing else was done.` };
+        }
+        return { data: current };
+    }
+    return { data: { ...current, note: `Still loading after ${NAVIGATION_SETTLE_MS / 1000} s: browser_wait_load or browser_wait_for before acting.` } };
 }
 
 /** Enregistrement réseau gardé (débogueur attaché) pendant une durée bornée, même sans commande. */
@@ -4116,7 +4101,11 @@ async function reloadTab(params) {
     const tabId = await resolveTargetTab(params);
     resetNetworkTracking(tabId);
     await chrome.tabs.reload(tabId, { bypassCache: params.bypassCache || false });
-    return { data: { success: true } };
+    let tab = null;
+    try { tab = await chrome.tabs.get(tabId); } catch (_) {}
+    const settled = await settleNavigation(tabId, tab);
+    if (settled.error || settled.data?.dialogOpened) return settled;
+    return { data: { success: true, ...(settled.data?.note ? { note: settled.data.note } : {}) } };
 }
 
 /**
@@ -5628,8 +5617,47 @@ async function uploadFiles(params = {}) {
 }
 
 /**
+ * Numéros des éléments (Set-of-Mark) dessinés sur la CAPTURE, dans le service worker : la page n'en voit rien.
+ * Sans OffscreenCanvas (tests hors Chrome), la capture est rendue telle quelle.
+ */
+async function drawSomBadges(base64, markers, ratio) {
+    if (!markers.length || typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined") return base64;
+    try {
+        const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(bitmap, 0, 0);
+        const font = Math.round(11 * ratio);
+        ctx.font = `bold ${font}px monospace`;
+        ctx.textBaseline = "top";
+        for (const marker of markers) {
+            const label = String(marker.mark);
+            const x = Math.max(0, Math.round(marker.rect.x * ratio));
+            const y = Math.max(0, Math.round(marker.rect.y * ratio));
+            const width = ctx.measureText(label).width + 10 * ratio;
+            const height = font + 4 * ratio;
+            ctx.fillStyle = "#ff0055";
+            ctx.fillRect(x, y, width, height);
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = Math.max(1, ratio);
+            ctx.strokeRect(x, y, width, height);
+            ctx.fillStyle = "#ffffff";
+            ctx.fillText(label, x + 5 * ratio, y + 2 * ratio);
+        }
+        const blob = await canvas.convertToBlob({ type: "image/png" });
+        const out = new Uint8Array(await blob.arrayBuffer());
+        let binary = "";
+        for (let i = 0; i < out.length; i += 0x8000) binary += String.fromCharCode(...out.subarray(i, i + 0x8000));
+        return btoa(binary);
+    } catch (_) {
+        return base64;
+    }
+}
+
+/**
  * Gemini Set-of-Mark (SoM) Visual Grounding
- * Renders numbered neon badges on all interactive elements, captures high-res screenshot, and cleans up.
+ * Numbers the interactive elements, captures the page as it is, and draws the numbers on the capture only.
  */
 async function visionInspect(params = {}) {
     let tabId = await resolveTargetTab(params);
@@ -5648,11 +5676,6 @@ async function visionInspect(params = {}) {
             } else {
                 window.__nexus_som_elements.clear();
             }
-            document.querySelectorAll(".__nexus_som_marker").forEach(m => {
-                if (m && typeof m.remove === "function") m.remove();
-                else if (m?.parentNode) m.parentNode.removeChild(m);
-            });
-
             const selector = "button, a, input, select, textarea, [role='button'], [role='link'], [role='tab'], [role='checkbox'], [role='menuitem'], [onclick], [tabindex]";
             const w = window.innerWidth || (document.documentElement ? document.documentElement.clientWidth : 1) || 1;
             const h = window.innerHeight || (document.documentElement ? document.documentElement.clientHeight : 1) || 1;
@@ -5695,25 +5718,6 @@ async function visionInspect(params = {}) {
                 try { style = window.getComputedStyle(el); } catch(_) {}
                 if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) continue;
 
-                const badge = document.createElement("div");
-                badge.className = "__nexus_som_marker";
-                badge.innerText = String(markerId);
-                badge.style.position = "fixed";
-                badge.style.left = Math.max(0, Math.round(rect.left)) + "px";
-                badge.style.top = Math.max(0, Math.round(rect.top)) + "px";
-                badge.style.backgroundColor = "#ff0055";
-                badge.style.color = "#ffffff";
-                badge.style.fontSize = "11px";
-                badge.style.fontWeight = "bold";
-                badge.style.padding = "1px 5px";
-                badge.style.borderRadius = "3px";
-                badge.style.border = "1px solid #ffffff";
-                badge.style.boxShadow = "0 2px 5px rgba(0,0,0,0.6)";
-                badge.style.zIndex = "2147483646";
-                badge.style.pointerEvents = "none";
-                badge.style.fontFamily = "monospace";
-
-                document.documentElement.appendChild(badge);
                 window.__nexus_som_elements.set(markerId, el);
 
                 const ymin = Math.max(0, Math.min(1000, Math.round((rect.top / h) * 1000)));
@@ -5739,31 +5743,22 @@ async function visionInspect(params = {}) {
         })()`
     });
 
-    // 2. Court délai de rendu des badges (lecture : permise pendant l'arrêt d'urgence, donc pas sleepMs)
-    await new Promise(r => setTimeout(r, 50));
-
-    // 3. High-res visual screenshot
+    // 2. Capture telle que la page s'affiche : aucun badge n'est ajouté au document (une page le verrait).
     const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, {
         format: "png"
     }));
-
-    // 4. Clean up visual marker badges from DOM (keeps window.__nexus_som_elements for clicks by mark)
-    await evaluateIsolated({
-        tabId,
-        code: `document.querySelectorAll(".__nexus_som_marker").forEach(m => {
-            if (m && typeof m.remove === "function") m.remove();
-            else if (m?.parentNode) m.parentNode.removeChild(m);
-        })`
-    });
+    const markers = markerData?.data?.markers || [];
+    const ratio = Number(markerData?.data?.devicePixelRatio) > 0 ? Number(markerData.data.devicePixelRatio) : 1;
+    const image = await drawSomBadges(shot.data, markers, ratio);
 
     return {
         data: {
             title: markerData?.data?.title,
             url: markerData?.data?.url,
-            markerCount: markerData?.data?.markers?.length || 0,
-            markers: markerData?.data?.markers || [],
+            markerCount: markers.length,
+            markers,
             devicePixelRatio: Number(markerData?.data?.devicePixelRatio) > 0 ? Number(markerData.data.devicePixelRatio) : null,
-            screenshotDataUrl: `data:image/png;base64,${shot.data}`
+            screenshotDataUrl: `data:image/png;base64,${image}`
         }
     };
 }

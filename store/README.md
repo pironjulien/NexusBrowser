@@ -86,7 +86,7 @@ Let the user's local AI agents drive Chrome in their own background tabs, throug
 | `offscreen` | Keeps the connection to the local bridge alive while the service worker sleeps (an offscreen document holds the WebSocket to 127.0.0.1). |
 | `storage` | Remembers which agent session owns which tab (session storage, cleared when Chrome closes) and the popup's one setting, the optional Gmail unread counter (local storage). |
 | `alarms` | A once-a-minute check that the connection to the local bridge is still up, without keeping the service worker awake. |
-| Host permission `<all_urls>` and the content script | The agent may be asked to work on any site the user names. The content script only answers requests for the agent's own tab (locators, dialogs, cross-origin frames) and does nothing on other tabs. |
+| Host permission `<all_urls>` and the content script | The agent may be asked to work on any site the user names. The content script only wakes the extension's service worker when a page loads: it reads nothing, receives no message and adds nothing to any page. |
 
 ## Remote code
 

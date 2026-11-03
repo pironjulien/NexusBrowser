@@ -2343,6 +2343,7 @@ public sealed partial class McpServer : IDisposable
                     string base64Part = capKey == "pdfBase64" ? encoded : (encoded.Contains(',') ? encoded.Split(',', 2)[1] : encoded);
                     byte[] rawBytes = Convert.FromBase64String(base64Part);
                     string fullDest = Path.GetFullPath(output);
+                    if (BridgeSecurity.OutputRefusal(fullDest) is { } refusal) throw new UnauthorizedAccessException(refusal);
                     var dir = Path.GetDirectoryName(fullDest);
                     if (!string.IsNullOrEmpty(dir))
                         Directory.CreateDirectory(dir);

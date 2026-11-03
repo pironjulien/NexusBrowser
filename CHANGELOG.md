@@ -5,6 +5,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.0] - 2026-11-03
+
+### Changed
+- Nothing NexusBrowser draws reaches a web page any more:
+  - the working indicator is the toolbar icon, spinning on itself with its blue dot, no longer a logo added to the
+    page the user is looking at;
+  - the point of each click is no longer drawn in the page;
+  - `browser_vision_inspect` draws its numbers on the capture, never in the page's document.
+  The content script only wakes the service worker; it receives no message and adds nothing.
+- Tool definitions are lighter (98 KB to 86 KB): input schemas drop their repeated titles and nullable `anyOf`
+  wrappers, and the `tab_id`, `accord` and `confirm` fields share shorter descriptions with the same rules.
+
+### Fixed
+- `browser_navigate` and `browser_reload` answer once the new page has loaded (15 s at most, then a note). A
+  `browser_wait_load` or a gesture chained right after a navigation no longer lands on the page being left, which
+  could leave a tab ignoring every click while reporting success.
+- A navigation Chrome refuses without an error (a top-level `data:` URL opened by an extension) is reported as
+  refused instead of a success.
+- `output_path` (and the capture `output`) no longer writes a runnable file (`.cmd`, `.ps1`, `.exe`, `.lnk`...), into
+  the agents' configuration or secrets folders, a startup folder or a system folder: what is written can come from a
+  web page. NexusBrowser's own cache and every other folder stay writable.
+
 ## [2.34.5] - 2026-11-03
 
 ### Fixed

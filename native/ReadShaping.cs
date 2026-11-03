@@ -152,11 +152,13 @@ public sealed partial class McpServer
         data["body"] = text.Length > maxBytes ? text[..maxBytes] : text;
     }
 
-    /// <summary>Absolute path of output_path; a relative one is refused (the engine's folder is not the agent's).</summary>
+    /// <summary>Absolute path of output_path; a relative one is refused (the engine's folder is not the agent's), a protected one too.</summary>
     internal static string OutputFile(string outputPath)
     {
         if (!Path.IsPathFullyQualified(outputPath)) throw new ArgumentException($"output_path must be an absolute path (not {outputPath})");
-        return Path.GetFullPath(outputPath);
+        string full = Path.GetFullPath(outputPath);
+        if (BridgeSecurity.OutputRefusal(full) is { } refusal) throw new UnauthorizedAccessException(refusal);
+        return full;
     }
 
     private static async Task<long> WriteOutputAsync(string destination, byte[] content, CancellationToken ct)

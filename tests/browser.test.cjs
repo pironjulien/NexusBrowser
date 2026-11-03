@@ -4020,28 +4020,23 @@ test('discussion du panneau retirée : son fil est effacé, le pont ne reçoit p
     assert.ok(res.error);
 });
 
-test('point du clic (plus de pastille) : seulement sur message de l\'extension, jamais sur un événement de la page', () => {
+test('script de contenu : rien dans la page (ni point du clic ni logo), aucun écouteur ni message reçu', () => {
     const appended = [];
     const windowListeners = {};
     let listener = null;
-    const node = () => ({style: {}, appendChild() {}, querySelector: () => ({textContent: ''}), parentNode: null});
+    const pings = [];
     const win = {addEventListener: (type, fn) => { windowListeners[type] = fn; }, dispatchEvent() {}};
     win.top = win;
     const ctx = vm.createContext({
-        window: win, document: {documentElement: {appendChild: (n) => appended.push(n)}, getElementById: () => null, createElement: node},
-        chrome: {runtime: {id: EXT_ID, lastError: undefined, sendMessage() {}, onMessage: {addListener(fn) { listener = fn; }}}},
+        window: win, document: {documentElement: {appendChild: (n) => appended.push(n)}, getElementById: () => null, createElement: () => ({style: {}})},
+        chrome: {runtime: {id: EXT_ID, lastError: undefined, sendMessage(m) { pings.push(m); }, onMessage: {addListener(fn) { listener = fn; }}}},
         requestAnimationFrame: () => 0, setTimeout: () => 0, clearTimeout() {}
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/content_script.js'), 'utf8'), ctx);
-    assert.deepEqual(Object.keys(windowListeners), []);  // aucun écouteur d'événement de la page
-    listener({nexusRipple: {x: 1, y: 2}}, {id: EXT_ID, tab: {id: 3}});  // script de contenu ou page
-    listener({nexusRipple: {x: 1, y: 2}}, {id: 'autre-extension'});
+    assert.deepEqual(Object.keys(windowListeners), []);
+    assert.equal(listener, null);
     assert.equal(appended.length, 0);
-    // Pastille d'état retirée (Julien, 22/10 : du bruit ; le logo et les groupes d'onglets suffisent) : ignorée.
-    listener({nexusPill: {agent: 'Claude', text: 'Onglet créé'}}, {id: EXT_ID});
-    assert.equal(appended.length, 0);
-    listener({nexusRipple: {x: 5, y: 6}}, {id: EXT_ID});
-    assert.equal(appended.length, 1);
+    assert.deepEqual(plain(pings), [{target: 'background', ping: true}]);
 });
 // =============================================================================
 // Revue d'Antigravity du 17/10 (partie 2) : régressions de la 2.7.0
@@ -4728,26 +4723,18 @@ test("fenêtre de l'icône : lecture seule (état du pont, groupes des agents) s
         [['Claude', '2 onglets'], ['Codex', 'aucun'], ['Antigravity', 'aucun']]);
 });
 
-test("logo de travail : dessiné dans l'onglet regardé pendant une commande d'agent, jamais pour un battement", async () => {
+test("logo de travail : il tourne sur l'icône de la barre d'outils pendant une commande, jamais dans une page", async () => {
     const h = harness();
-    const drawn = () => h.scriptCalls.filter(c => c.name === 'drawBusyIndicator');
     await h.run('heartbeat', {}, AGENT_A);
-    assert.equal(drawn().length, 0);
+    assert.equal(h.evalInContext('busyAgents.size'), 0);
     assert.equal((await h.run('eval', {tabId: 1, code: '1'}, AGENT_A)).data, 1);
     await settle();
-    assert.equal(drawn().length, 1);
-    assert.deepEqual(plain(drawn()[0].target), {tabId: 1, frameIds: [0]});
-    assert.equal(drawn()[0].world, 'ISOLATED');
-    assert.equal(drawn()[0].args[0], true);
-    assert.match(drawn()[0].args[2], /au travail$/);
-    // Commande suivante dans le même onglet regardé : pas de nouveau dessin.
-    await h.run('eval', {tabId: 1, code: '2'}, AGENT_A);
-    await settle();
-    assert.equal(drawn().length, 1);
-    // Fin du délai sans commande : le logo est retiré.
+    assert.equal(h.scriptCalls.filter(c => c.name === 'drawBusyIndicator').length, 0);
+    assert.equal(h.evalInContext('typeof drawBusyIndicator'), 'undefined');
+    // Fin du délai sans commande : l'animation s'arrête.
     h.evalInContext('clearTimeout(busyHideTimer); busyHideTimer = null; refreshBusyIndicator();');
     await settle();
-    assert.equal(drawn().at(-1).args[0], false);
+    assert.equal(h.evalInContext('busySpinTimer'), null);
 });
 
 // =============================================================================
@@ -5011,6 +4998,31 @@ test('page protégée : erreur brute de Chrome traduite, quelle que soit la comm
     assert.equal(h.ctx.isChromeProtectedPage('https://chrome.google.com/webstore'), true);
     assert.equal(h.ctx.isChromeProtectedPage('chrome://settings'), true);
     assert.equal(h.ctx.isChromeProtectedPage('https://example.invalid/'), false);
+});
+
+test('navigate attend la nouvelle page ; une navigation refusée par Chrome (data:) est dite, jamais annoncée réussie', async () => {
+    let state = {id: 1, url: 'https://old.invalid/', status: 'complete', windowId: 10};
+    let gets = 0;
+    let target = null;
+    const h = harness({}, {tabs: {
+        get: async () => {
+            gets++;
+            // La navigation aboutit (ou est abandonnée par Chrome) au troisième relevé.
+            if (gets >= 3 && state.pendingUrl) state = target === 'refused' ? {id: 1, url: 'https://old.invalid/', status: 'complete', windowId: 10} : {id: 1, url: state.pendingUrl, status: 'complete', windowId: 10};
+            return state;
+        },
+        update: async (id, p) => { state = {...state, pendingUrl: p.url, status: 'loading'}; return state; }
+    }});
+    target = 'ok';
+    const ok = await h.run('navigate', {tabId: 1, url: 'https://new.invalid/'});
+    assert.equal(ok.error, undefined);
+    assert.equal(ok.data.url, 'https://new.invalid/');
+    assert.equal(ok.data.status, 'complete');
+    gets = 0;
+    target = 'refused';
+    state = {id: 1, url: 'https://old.invalid/', status: 'complete', windowId: 10};
+    const refused = await h.run('navigate', {tabId: 1, url: 'data:text/html,<p>x</p>'});
+    assert.match(refused.error, /Chrome refused to open a data: URL/);
 });
 
 test('new_tab et navigate vers le Chrome Web Store : avertissement dès la réponse', async () => {

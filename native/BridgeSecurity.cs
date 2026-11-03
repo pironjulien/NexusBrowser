@@ -15,7 +15,7 @@ namespace NexusBrowser.Native;
 
 public static partial class BridgeSecurity
 {
-    public const string Version = "2.34.5";
+    public const string Version = "2.35.0";
     public const string TokenFileName = "bridge-token";
     public const string TokenHeader = "X-Nexus-Browser-Token";
     public const string AgentHeader = "X-Nexus-Browser-Agent";
@@ -540,6 +540,53 @@ public static partial class BridgeSecurity
                            "No token, key, Chrome profile or agent configuration is ever sent to a web page.";
                 }
             }
+        }
+        return null;
+    }
+
+    private static readonly HashSet<string> RunnableExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".exe", ".dll", ".com", ".scr", ".msi", ".msix", ".appx", ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".vbs",
+        ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".lnk", ".url", ".reg", ".cpl", ".sys", ".inf",
+    };
+
+    /// <summary>
+    /// Refusal for a file the engine would write (output_path, output): never in a secrets or configuration folder of
+    /// the agents (their settings run commands), a system folder or a startup folder, and never a runnable file, since
+    /// what is written may come from a web page. NexusBrowser's own cache stays writable; anything else is free.
+    /// </summary>
+    public static string? OutputRefusal(string fullPath)
+    {
+        string key;
+        try { key = CanonicalPath(fullPath); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return $"output_path refused: unreadable path '{fullPath}' ({ex.Message}).";
+        }
+        if (RunnableExtensions.Contains(Path.GetExtension(key)))
+            return $"output_path refused: {fullPath} would be a runnable file ({Path.GetExtension(key)}). Use .md, .txt, .json, .csv, .html, .png, .pdf...";
+
+        var home = HomeDir();
+        var appDataEnv = Environment.GetEnvironmentVariable("APPDATA")?.Trim();
+        var appData = !string.IsNullOrEmpty(appDataEnv) ? appDataEnv : Path.Join(home, "AppData", "Roaming");
+        var roots = new List<string>(ProtectedUploadRoots())
+        {
+            Path.Join(appData, "Microsoft", "Windows", "Start Menu"),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu),
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+        };
+        string own = CanonicalPath(Path.Join(home, ".nexus", "nexus-browser"));
+        if (key.StartsWith(own + @"", StringComparison.Ordinal)) return null;
+        foreach (var root in roots)
+        {
+            if (string.IsNullOrEmpty(root)) continue;
+            string rootKey;
+            try { rootKey = CanonicalPath(root); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { continue; }
+            if (key == rootKey || key.StartsWith(rootKey + @"", StringComparison.Ordinal))
+                return $"output_path refused: {fullPath} is in a protected folder ({root}). Write to a project, Documents, Downloads or temporary folder.";
         }
         return null;
     }

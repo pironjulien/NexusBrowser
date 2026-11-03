@@ -114,6 +114,24 @@ public sealed class ReadShapingTests : IDisposable
         var relative = await session.CallAsync("browser_export", Args("""{"tab_id":1,"output_path":"page.md"}"""));
         Assert.True((bool)relative["isError"]!);
         Assert.Contains("absolute", (string)Payload(relative)["error"]!);
+
+        // What is written may come from a web page: never a runnable file, a startup folder or a secrets folder.
+        // The test profile (TestEnvironment.Home), never the real one: a missed refusal must not touch the user's files.
+        string home = BridgeSecurity.HomeDir();
+        Assert.StartsWith(TestEnvironment.Root, home, StringComparison.OrdinalIgnoreCase);
+        foreach (string refused in new[]
+        {
+            Path.Join(_folder, "run.cmd"),
+            Path.Join(Environment.GetEnvironmentVariable("APPDATA") is { Length: > 0 } roaming ? roaming : Path.Join(home, "AppData", "Roaming"), "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "nexus-browser-test-refused.md"),
+            Path.Join(home, ".claude", "settings.json"),
+            Path.Join(home, ".ssh", "notes.txt"),
+        })
+        {
+            var answer = await session.CallAsync("browser_export", Args($$"""{"tab_id":1,"output_path":{{System.Text.Json.JsonSerializer.Serialize(refused)}}}"""));
+            Assert.True((bool)answer["isError"]!, refused);
+            Assert.Contains("output_path refused", (string)Payload(answer)["error"]!);
+            Assert.False(File.Exists(refused) && refused.StartsWith(_folder, StringComparison.Ordinal));
+        }
     }
 
     [Fact]
