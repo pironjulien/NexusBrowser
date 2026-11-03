@@ -5,7 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.34.5] - 2026-11-03
+
 ### Fixed
+- The extension now has a distinct version for the dialog-aware close fix shipped in 2.34.4. The installer no longer
+  mistakes the previous 2.34.1 service worker for the updated one; reload still waits until no agent owns a tab.
+  A regression check rejects the previous worker even when its feature set matches, and accepts the updated one.
 - The session-expiry regression test no longer races its deliberate one-second lease with an unrelated live-session
   assertion on busy runners. It still proves initialization, expiry logging, bridge notification and HTTP 404.
 

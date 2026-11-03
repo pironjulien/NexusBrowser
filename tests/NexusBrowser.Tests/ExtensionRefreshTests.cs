@@ -75,6 +75,22 @@ public sealed class ExtensionRefreshTests
     }
 
     [Fact]
+    public async Task DialogCloseUpdateRejectsThePreviousWorkerEvenWhenItsFeaturesMatch()
+    {
+        // 2.34.4 shipped changed background code under 2.34.1 with no new feature: the previous worker matched.
+        Assert.NotEqual("2.34.1", Expected.Version);
+        var bridge = new Bridge((action, _) => action == "ping" ? Ping("2.34.1", Expected.Features) : new JsonArray());
+        var (code, report) = await Run(bridge, checkOnly: true);
+        Assert.Equal(ExtensionRefresh.Stale, code);
+        Assert.False((bool)report["verified"]!);
+        Assert.Equal(["ping", "list-tabs"], bridge.Calls);
+
+        var updated = new Bridge((action, _) => action == "ping" ? CurrentPing : new JsonArray());
+        Assert.Equal(ExtensionRefresh.Current, (await Run(updated, checkOnly: true)).Code);
+        Assert.Equal(["ping", "list-tabs"], updated.Calls);
+    }
+
+    [Fact]
     public async Task StaleExtensionReloadIsRechecked()
     {
         var bridge = new Bridge((action, calls) => action switch
