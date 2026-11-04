@@ -85,6 +85,9 @@ public sealed class BridgeServer : IAsyncDisposable
     private readonly TaskCompletionSource _shutdown = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _draining;
     private int _httpCommands;
+    // Answer to a command that meets an extension reloading for an update: it never ran (retry_safe, "not_done").
+    internal const string ReloadingMessage = "The NexusBrowser extension is reloading for an update: nothing was done. " +
+        "Retry in a few seconds; your tabs are kept.";
 
     internal Task ShutdownRequested => _shutdown.Task;
 
@@ -99,6 +102,9 @@ public sealed class BridgeServer : IAsyncDisposable
         public string ExtensionId { get; }
         public int Order { get; }
         public BridgeAuth.Channel Channel { get; }
+        // Set once the extension accepted the installer's reload: no further command is sent on this connection.
+        private volatile bool _reloading;
+        public bool Reloading { get => _reloading; set => _reloading = value; }
         private readonly SemaphoreSlim _sendLock = new(1, 1);
 
         public BridgeClientConnection(WebSocket webSocket, string role, string extensionId, byte[] sessionKey, int order)
@@ -343,6 +349,7 @@ public sealed class BridgeServer : IAsyncDisposable
             if (_activeConnections.Count == 0)
                 return null;
             return _activeConnections
+                .Where(c => !c.Reloading)
                 .OrderBy(c => c.Role == "service_worker" ? 0 : c.Role == "offscreen" ? 1 : 99)
                 .ThenByDescending(c => c.Order)
                 .FirstOrDefault();
@@ -499,7 +506,9 @@ public sealed class BridgeServer : IAsyncDisposable
             }
             foreach (var p in orphaned)
             {
-                p.Future.TrySetException(new IOException("Chrome Extension disconnected while processing request"));
+                p.Future.TrySetException(client.Reloading
+                    ? new IOException(ReloadingMessage)
+                    : new IOException("Chrome Extension disconnected while processing request"));
             }
         }
     }
@@ -853,18 +862,22 @@ public sealed class BridgeServer : IAsyncDisposable
 
         string reqId;
         TaskCompletionSource<JsonObject> tcs;
+        BridgeClientConnection? chosen;
 
         while (true)
         {
             if (normalizedAction != "emergency_stop" && !BridgeSecurity.IsReadOnlyAction(action) && _emergencyStop.Check() is { } stop)
                 throw new CommandCancelledException(stop);
-            BridgeClientConnection? chosen;
+            bool reloading;
             lock (_stateLock)
             {
                 if (shutdownProbe && target is not null && !_activeConnections.Contains(target))
                     throw new InvalidOperationException("An extension disconnected during ownership verification; bridge kept.");
-                chosen = target != null && _activeConnections.Contains(target) ? target : SelectTarget();
+                chosen = target != null && _activeConnections.Contains(target) && !target.Reloading ? target : SelectTarget();
+                reloading = chosen is null && _activeConnections.Any(c => c.Reloading);
             }
+            if (reloading)
+                throw new InvalidOperationException(ReloadingMessage);
             if (chosen is null)
             {
                 throw new InvalidOperationException(
@@ -909,6 +922,15 @@ public sealed class BridgeServer : IAsyncDisposable
             {
                 string err = TryGetString(response, "error") ?? "Unknown error from Chrome extension";
                 throw new InvalidOperationException(err);
+            }
+            // The installer's reload was accepted: the extension has drained its commands and refuses new ones until it
+            // reloads. Its connections take no further command; one still waiting there was never run (ReloadingMessage).
+            if (normalizedAction == "reload_extension" && client?.Agent == ExtensionRefresh.InstallerAgent &&
+                response["data"]?["reloading"] is JsonValue r && r.GetValueKind() == JsonValueKind.True)
+            {
+                lock (_stateLock)
+                    foreach (var connection in _activeConnections.Where(c => c.ExtensionId == chosen.ExtensionId))
+                        connection.Reloading = true;
             }
             return response["data"]?.DeepClone();
         }

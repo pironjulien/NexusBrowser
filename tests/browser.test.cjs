@@ -4986,10 +4986,13 @@ test('store update check downloads only when idle and never reloads or touches a
         reload() { reloads++; }
     }});
     assert.match((await h.run('update_extension', {}, AGENT_A)).error, /reserved to the installer/);
-    await h.own(5, AGENT_A);
-    assert.match((await h.run('update_extension', {}, INSTALLER)).error, /still working/);
+    // Commande d'agent en cours : recherche remise à plus tard.
+    h.evalInContext('commandsRunning = 1');
+    assert.match((await h.run('update_extension', {}, INSTALLER)).error, /deferred: agent commands are still running/);
     assert.equal(checks, 0);
-    h.evalInContext('tabOwners.delete(5)');
+    h.evalInContext('commandsRunning = 0');
+    // Un onglet tenu par un agent ne bloque plus : il survit au rechargement qui suivra.
+    await h.own(5, AGENT_A);
     const result = await h.run('update_extension', {}, INSTALLER);
     assert.equal(result.data.downloaded, true);
     assert.equal(checks, 1);
@@ -5006,7 +5009,7 @@ test('development extension update check never requests a Store download', async
     assert.equal(checks, 0);
 });
 
-test('reload_extension : réservé à l\'installeur, et refusé tant qu\'un agent travaille', async () => {
+test('reload_extension : réservé à l\'installeur ; un onglet d\'agent ne bloque plus, une commande qui ne finit pas le remet à plus tard', async () => {
     let reloads = 0;
     const h = harness({}, {autoOwn: false, runtime: {reload() { reloads++; }}});
     const wait = () => new Promise(resolve => setTimeout(resolve, 150));
@@ -5015,22 +5018,66 @@ test('reload_extension : réservé à l\'installeur, et refusé tant qu\'un agen
         assert.match((await h.run('reload_extension', {}, client)).error, /reserved to the installer/, client.agent);
     }
     assert.match((await h.run('reload_extension', {}, null)).error, /without client identity/);
-    // L'installeur, tant qu'un onglet est tenu par une session vivante : refusé, l'agent est nommé.
-    await h.run('heartbeat', {}, AGENT_A);
-    await h.own(5, AGENT_A);
-    assert.match((await h.run('reload_extension', {}, INSTALLER)).error, /Claude is still working/);
-    h.evalInContext('tabOwners.delete(5)');
-    // Commande d'agent en cours (nouvel onglet en train de s'ouvrir) : refusé aussi.
-    h.evalInContext('busyAgents.set("Codex", 1)');
-    assert.match((await h.run('reload_extension', {}, INSTALLER)).error, /Codex is still working/);
-    h.evalInContext('busyAgents.delete("Codex")');
+    assert.ok(h.evalInContext('AGY_FEATURES').includes('reload-drain'));
+    // Commande d'agent qui ne finit pas dans le délai : rien n'est rechargé, l'admission est rouverte.
+    h.evalInContext('commandsRunning = 1');
+    const deferred = await h.run('reload_extension', {drain_s: 0.3}, INSTALLER);
+    assert.match(deferred.error, /reload_extension deferred: 1 command\(s\) still running after 0\.3 s\. Nothing was reloaded/);
+    assert.equal(h.evalInContext('reloadDraining'), false);
+    h.evalInContext('commandsRunning = 0');
     await wait();
     assert.equal(reloads, 0);
-    // Personne au travail : l'installeur recharge.
+    // Onglet tenu par une session vivante : rechargé quand même, la table est gardée dans chrome.storage.local.
+    await h.run('heartbeat', {}, AGENT_A);
+    await h.own(5, AGENT_A);
     const ok = await h.run('reload_extension', {}, INSTALLER);
     assert.equal(ok.data.reloading, true);
+    assert.equal(h.localData.nexusBrowserTabOwners['5'].agent, 'Claude');
     await wait();
     assert.equal(reloads, 1);
+});
+
+test('reload_extension avec un agent au travail : sa commande finit, les nouvelles sont refusées « nothing was done », il retrouve son onglet', async () => {
+    let reloads = 0;
+    let holding = true;
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let entered;
+    const evaluating = new Promise(resolve => { entered = resolve; });
+    const tabs = {query: async () => [{id: 5}, {id: 1}]};
+    const h = harness({}, {autoOwn: false, tabs, runtime: {reload() { reloads++; }},
+        debuggerSendCommand: async (target, method) => {
+            if (method === 'Runtime.evaluate' && holding) { holding = false; entered(); await gate; }
+            return undefined;
+        }});
+    await h.run('heartbeat', {}, AGENT_A);
+    await h.own(5, AGENT_A);
+    // Commande de Claude en cours sur son onglet (la page n'a pas encore répondu).
+    const running = h.run('eval', {tabId: 5, code: '7'}, AGENT_A);
+    await evaluating;
+    const reload = h.run('reload_extension', {drain_s: 10}, INSTALLER);
+    await settle();
+    assert.equal(h.evalInContext('reloadDraining'), true);
+    // Pendant l'attente : toute nouvelle commande est refusée tout de suite, sans rien faire.
+    for (const [action, params] of [['eval', {tabId: 5, code: '1'}], ['create_tab', {url: 'https://a.invalid'}], ['navigate', {tabId: 5, url: 'https://b.invalid'}]]) {
+        const refused = await h.run(action, params, AGENT_A);
+        assert.match(refused.error, /reloading for an update: nothing was done/, action);
+    }
+    // Contrôle de vie et liste des onglets restent servis ; l'onglet est toujours celui de Claude.
+    assert.equal((await h.run('ping', {}, INSTALLER)).data.status, 'pong');
+    assert.equal((await h.run('list_tabs', {}, AGENT_A)).data.find(t => t.id === 5).state, 'mine');
+    assert.equal(reloads, 0);
+    // La commande en cours finit et répond ; alors seulement l'extension se recharge.
+    release();
+    assert.equal((await running).data, 7);
+    const ok = await reload;
+    assert.equal(ok.data.reloading, true);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal(reloads, 1);
+    // Extension rechargée (chrome.storage.session vide, chrome.storage.local intact) : Claude retrouve son onglet.
+    const reloaded = harness({}, {autoOwn: false, tabs, localStorage: plain(h.localData), sessionStorage: {}});
+    assert.equal((await reloaded.run('eval', {tabId: 5, code: '3'}, AGENT_A)).data, 3);
+    assert.match((await reloaded.run('eval', {tabId: 5, code: '3'}, AGENT_B)).error, /driven by Claude/);
 });
 
 test('reload_extension : un onglet orphelin (session morte) ne bloque pas l\'installeur', async () => {

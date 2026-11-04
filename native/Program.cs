@@ -62,7 +62,8 @@ public static class Program
         {
             int bridgePort = int.TryParse(GetArgValue(args, "--port"), out int rp) && rp > 0 ? rp : 9225;
             return await ExtensionRefresh.MainAsync(args.Contains("--check-only", StringComparer.OrdinalIgnoreCase),
-                GetArgValue(args, "--wait-ready"), tokenFile, bridgePort, GetArgValue(args, "--source-root"));
+                GetArgValue(args, "--wait-ready"), tokenFile, bridgePort, GetArgValue(args, "--source-root"),
+                args.Contains("--force-reload", StringComparer.OrdinalIgnoreCase));
         }
 
         if (args.Contains("--register", StringComparer.OrdinalIgnoreCase))

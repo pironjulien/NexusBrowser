@@ -20,16 +20,125 @@ public sealed class ExtensionRefreshTests
     private sealed class Bridge(Func<string, List<string>, JsonNode?> answer)
     {
         public List<string> Calls { get; } = [];
+        public List<(string Action, double Timeout, JsonObject? Parameters)> Sent { get; } = [];
 
-        public Task<JsonNode?> Call(string action, double timeout, CancellationToken ct)
+        public Task<JsonNode?> Call(string action, double timeout, CancellationToken ct, JsonObject? parameters = null)
         {
             Calls.Add(action);
+            Sent.Add((action, timeout, parameters));
             return Task.FromResult(answer(action, Calls));
         }
     }
 
-    private static Task<(int Code, JsonObject Report)> Run(Bridge bridge, bool checkOnly = false, double waitReady = 0) =>
-        ExtensionRefresh.RunAsync(bridge.Call, checkOnly, waitReady, Expected.Version, Expected.Features, NoDelay, TestContext.Current.CancellationToken);
+    private static Task<(int Code, JsonObject Report)> Run(Bridge bridge, bool checkOnly = false, double waitReady = 0, bool forceReload = false) =>
+        ExtensionRefresh.RunAsync(bridge.Call, checkOnly, waitReady, Expected.Version, Expected.Features, NoDelay, TestContext.Current.CancellationToken, forceReload);
+
+    // Loaded extension 2.35.10 or later: keeps agent tabs across a reload and drains its commands first.
+    private static JsonObject DrainingPing(string version = "2.35.10") => Ping(version, ["tab-ownership", ExtensionRefresh.ReloadDrainFeature]);
+
+    private static JsonArray AgentTab(int id = 42, string owner = "Claude") => new(new JsonObject { ["id"] = id, ["owner"] = owner, ["state"] = "other" }, new JsonObject { ["id"] = 1, ["owner"] = null, ["state"] = "user" });
+
+    [Fact]
+    public void TheExtensionShippedHereKeepsAgentTabsAcrossAReload()
+    {
+        Assert.Contains(ExtensionRefresh.ReloadDrainFeature, Expected.Features);
+        Assert.True(ExtensionRefresh.KeepsTabsAcrossReload(CurrentPing));
+        Assert.False(ExtensionRefresh.KeepsTabsAcrossReload(Ping("2.35.7", ["tab-ownership", "installer-reload"])));
+    }
+
+    [Fact]
+    public async Task AnAgentDrivingTabsNoLongerBlocksAnExtensionThatKeepsThem()
+    {
+        var bridge = new Bridge((action, calls) => action switch
+        {
+            "list-tabs" => AgentTab(),
+            "ping" => calls.Contains("reload_extension") ? CurrentPing : DrainingPing(),
+            _ => new JsonObject { ["reloading"] = true, ["drained_ms"] = 120 },
+        });
+        var (code, report) = await Run(bridge);
+        Assert.Equal(ExtensionRefresh.Current, code);
+        Assert.Equal(["ping", "list-tabs", "reload_extension", "ping", "list-tabs"], bridge.Calls);
+        // The reload waits for the commands in flight, within a bounded delay that the call outlasts.
+        var reload = bridge.Sent.Single(s => s.Action == "reload_extension");
+        Assert.Equal(ExtensionRefresh.DrainSeconds, (double)reload.Parameters!["drain_s"]!);
+        Assert.True(reload.Timeout > ExtensionRefresh.DrainSeconds);
+        Assert.True((bool)report["reloaded"]!);
+        Assert.Equal(1, (int)report["agent_tabs"]!);
+        Assert.Equal(1, (int)report["agent_tabs_kept"]!);
+        Assert.Null(report["warning"]);
+    }
+
+    [Fact]
+    public async Task CommandsStillRunningAfterTheDrainDelayDeferTheReload()
+    {
+        var bridge = new Bridge((action, _) => action switch
+        {
+            "list-tabs" => AgentTab(),
+            "ping" => DrainingPing(),
+            _ => throw new InvalidOperationException("reload_extension deferred: 1 command(s) still running after 20 s. Nothing was reloaded; agents keep working."),
+        });
+        var (code, report) = await Run(bridge);
+        Assert.Equal(ExtensionRefresh.Busy, code);
+        Assert.Equal(["ping", "list-tabs", "reload_extension"], bridge.Calls);
+        Assert.Contains("still running", (string?)report["error"]);
+        Assert.False((bool)report["verified"]!);
+    }
+
+    [Fact]
+    public async Task CheckOnlyStillReportsAgentTabsSoTheRunningBridgeIsKept()
+    {
+        var bridge = new Bridge((action, _) => action == "ping" ? DrainingPing() : AgentTab());
+        Assert.Equal(ExtensionRefresh.Busy, (await Run(bridge, checkOnly: true)).Code);
+        Assert.Equal(["ping", "list-tabs"], bridge.Calls);
+    }
+
+    [Fact]
+    public async Task AnOlderExtensionWithAgentTabsIsRefusedAndNamesTheForceOption()
+    {
+        var bridge = new Bridge((action, _) => action == "ping" ? Ping("2.35.7", ["tab-ownership"]) : AgentTab());
+        var (code, report) = await Run(bridge);
+        Assert.Equal(ExtensionRefresh.Busy, code);
+        Assert.Equal(["ping", "list-tabs"], bridge.Calls);
+        Assert.Equal("extension-cannot-keep-agent-tabs", (string?)report["reason"]);
+        Assert.Contains("--force-reload", (string?)report["hint"]);
+    }
+
+    [Fact]
+    public async Task ForceReloadsAnOlderExtensionAndSaysTheAgentTabsAreLost()
+    {
+        var bridge = new Bridge((action, calls) => action switch
+        {
+            // After the reload of a 2.35.7 extension, the agent tab is the user's.
+            "list-tabs" => calls.Contains("reload_extension") ? new JsonArray(new JsonObject { ["id"] = 42, ["owner"] = null, ["state"] = "user" }) : AgentTab(),
+            "ping" => calls.Contains("reload_extension") ? CurrentPing : Ping("2.35.7", ["tab-ownership"]),
+            _ => new JsonObject { ["reloading"] = true },
+        });
+        var (code, report) = await Run(bridge, forceReload: true);
+        Assert.Equal(ExtensionRefresh.Current, code);
+        Assert.Equal(["ping", "list-tabs", "reload_extension", "ping", "list-tabs"], bridge.Calls);
+        Assert.Null(bridge.Sent.Single(s => s.Action == "reload_extension").Parameters);
+        Assert.True((bool)report["forced"]!);
+        Assert.Equal(ExtensionRefresh.ForceWarning, (string?)report["warning"]);
+        Assert.Contains("lost one last time", (string?)report["warning"]);
+        Assert.Equal(0, (int)report["agent_tabs_kept"]!);
+    }
+
+    [Fact]
+    public async Task ForceNeverOverridesAnOlderExtensionProtectingALiveSessionOrARunningCommand()
+    {
+        // The 2.35.7 extension refuses on its own while a live session drives a tab or a command runs: nothing reloads.
+        var bridge = new Bridge((action, _) => action switch
+        {
+            "list-tabs" => AgentTab(),
+            "ping" => Ping("2.35.7", ["tab-ownership"]),
+            _ => throw new InvalidOperationException("reload_extension refused: Claude is still working in Chrome (driven tabs or running commands). Run install.ps1 again once the agents have closed their tabs."),
+        });
+        var (code, report) = await Run(bridge, forceReload: true);
+        Assert.Equal(ExtensionRefresh.Busy, code);
+        Assert.Equal(["ping", "list-tabs", "reload_extension"], bridge.Calls);
+        Assert.True((bool)report["forced"]!);
+        Assert.Contains("still working", (string?)report["error"]);
+    }
 
     [Fact]
     public async Task LiveAgentTabsPreventEveryRefresh()

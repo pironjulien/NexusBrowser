@@ -167,6 +167,78 @@ public sealed class BridgeEndToEndTests : IDisposable
         try { await responderTask; } catch (OperationCanceledException) { /* stopped on purpose */ }
     }
 
+    private static async Task<JsonObject> CommandAsync(HttpClient http, int port, string action, JsonObject parameters, string agent, string clientId, double timeout = 10)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{port}/api/command")
+        {
+            Content = new StringContent(new JsonObject { ["action"] = action, ["params"] = parameters, ["timeout"] = timeout }.ToJsonString(), Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Add(BridgeSecurity.AgentHeader, agent);
+        request.Headers.Add(BridgeSecurity.ClientHeader, clientId);
+        using var response = await http.SendAsync(request, ct);
+        return (JsonObject)JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))!;
+    }
+
+    [Fact]
+    public async Task ACommandMeetingTheExtensionReloadIsAnsweredNotDoneNeverLeftWaiting()
+    {
+        await using var bridge = StartBridge();
+        using var http = Http();
+        var ct = TestContext.Current.CancellationToken;
+        using var workerWs = await FakeExtension.ConnectAsync(bridge.WsPort);
+        var (_, _, channel) = await FakeExtension.HandshakeAsync(workerWs, _token, "native", "service_worker");
+
+        // Simulated extension: an agent command lost in transit (never answered), then the installer's reload accepted,
+        // then the service worker goes away as chrome.runtime.reload() does.
+        var agentCommandSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reloadAnswered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closeNow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var extension = Task.Run(async () =>
+        {
+            while (true)
+            {
+                string? raw = await FakeExtension.ReceiveAsync(workerWs, ct);
+                if (raw is null) return;
+                var command = (JsonObject)JsonNode.Parse(channel.Open(JsonNode.Parse(raw)))!;
+                if ((string?)command["action"] == "navigate") { agentCommandSeen.TrySetResult(); continue; }
+                Assert.Equal("reload_extension", (string?)command["action"]);
+                var reply = new JsonObject { ["requestId"] = command["requestId"]!.DeepClone(), ["success"] = true, ["data"] = new JsonObject { ["reloading"] = true } };
+                await FakeExtension.SendAsync(workerWs, channel.Seal(reply.ToJsonString()), ct);
+                reloadAnswered.TrySetResult();
+                await closeNow.Task;
+                workerWs.Abort();  // chrome.runtime.reload(): the service worker vanishes without a close handshake
+                return;
+            }
+        }, ct);
+
+        var lost = CommandAsync(http, bridge.HttpPort, "navigate", new JsonObject { ["tab_id"] = 42, ["url"] = "https://example.com" }, "Claude", "claude-session1");
+        await agentCommandSeen.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        var reload = await CommandAsync(http, bridge.HttpPort, "reload_extension", new JsonObject { ["drain_s"] = 20 }, ExtensionRefresh.InstallerAgent, "installer-0123456789ab", 25);
+        Assert.True((bool)reload["success"]!, reload.ToJsonString());
+        await reloadAnswered.Task;
+
+        // Sent after the reload was accepted: refused at once, nothing reaches the extension.
+        var stopwatch = Stopwatch.StartNew();
+        var refused = await CommandAsync(http, bridge.HttpPort, "click", new JsonObject { ["tab_id"] = 42, ["selector"] = "#go" }, "Codex", "codex-session1");
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5));
+        Assert.False((bool)refused["success"]!);
+        Assert.Equal(BridgeServer.ReloadingMessage, (string?)refused["error"]);
+
+        // The command still waiting when the extension reloads gets its answer too: never run, safe to resend.
+        closeNow.TrySetResult();
+        var lostAnswer = await lost.WaitAsync(TimeSpan.FromSeconds(8), ct);
+        Assert.False((bool)lostAnswer["success"]!);
+        Assert.Equal(BridgeServer.ReloadingMessage, (string?)lostAnswer["error"]);
+        foreach (var answer in new[] { refused, lostAnswer })
+        {
+            var outcome = (JsonObject)JsonNode.Parse(McpServer.WithOutcome(new JsonObject { ["status"] = "error", ["error"] = answer["error"]!.DeepClone() }.ToJsonString(), idempotent: false))!;
+            Assert.Equal("not_done", (string?)outcome["outcome"]);
+            Assert.True((bool)outcome["retry_safe"]!);
+        }
+        await extension;
+    }
+
     [Fact]
     public async Task UploadFromASecretsFolderIsRefusedBeforeReachingTheExtension()
     {

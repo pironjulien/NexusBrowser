@@ -22,7 +22,7 @@ const AGY_FEATURES = [
     "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree",
     "history-navigation-cdp", "full-page-capture", "opener-tabs-webnav",
     "installer-reload", "tab-list-redaction", "download-ownership", "gmail-counter", "wait-load-navigation",
-    "map-field-labels", "bridge-pairing", "scroll-panel", "bridge-watch"
+    "map-field-labels", "bridge-pairing", "scroll-panel", "bridge-watch", "reload-drain"
 ];
 
 let attachedDebuggers = new Set();
@@ -50,6 +50,19 @@ const tabCommandsInFlight = new Map();
 // tabId -> échéance (ms) de l'enregistrement réseau demandé (browser_network_record) : débogueur gardé jusque-là.
 const networkRecording = new Map();
 const NETWORK_RECORD_MAX_S = 600;
+// Rechargement demandé par l'installeur (fonction « reload-drain ») : l'admission des commandes est fermée, les
+// commandes en cours finissent (délai borné), puis chrome.runtime.reload(). La propriété des onglets, gardée dans
+// chrome.storage.local, survit au rechargement : les agents retrouvent leurs onglets. Une commande arrivée pendant ce
+// temps est refusée tout de suite (« nothing was done » : retry_safe, outcome « not_done »), jamais laissée sans réponse.
+let reloadDraining = false;
+let commandsRunning = 0;  // commandes admises et pas encore terminées (le rechargement lui-même exclu)
+const idleWaiters = new Set();
+const RELOAD_DRAIN_DEFAULT_S = 20;
+const RELOAD_DRAIN_MAX_S = 60;
+// Admises pendant le rechargement : contrôle de vie, battements, liste des onglets, arrêt d'urgence (rien ne touche une page).
+const RELOAD_ADMITTED_ACTIONS = new Set(["ping", "heartbeat", "list_tabs", "emergency_stop"]);
+const RELOADING_MESSAGE = "The NexusBrowser extension is reloading for an update: nothing was done. Retry in a few " +
+    "seconds; your tabs are kept.";
 
 // -----------------------------------------------------------------------------
 // Propriété des onglets : chaque client du pont (agent + identifiant de session, posés par le pont dans le canal
@@ -919,24 +932,79 @@ function foreignTabMessage(tabId, owner, client) {
 }
 
 /**
- * Rechargement de l'extension : il coupe les commandes en cours de TOUS les agents et leur fait perdre leurs onglets.
- * Réservé à l'installeur (identité « Installer », NexusBrowser.exe --refresh-extension), et seulement quand aucun agent ne
- * travaille : aucune commande en cours, aucun onglet tenu par une session vivante. Même un client qui prendrait le nom
- * de l'installeur ne peut donc rien interrompre.
+ * Rechargement et mise à jour de l'extension : réservés à l'installeur (identité « Installer », NexusBrowser.exe
+ * --refresh-extension). Les onglets des agents survivent au rechargement (propriété dans chrome.storage.local) : un agent
+ * qui pilote des onglets ne bloque plus la mise à jour. Seules les commandes en cours comptent : le rechargement les
+ * attend (reloadWhenIdle), la recherche d'une mise à jour du Store est remise à plus tard tant qu'il y en a.
  */
-function reloadRefusal(client) {
+function reloadRefusal(client, action) {
     if (client.agent !== INSTALLER_AGENT) {
-        return "reload_extension is reserved to the installer (install.ps1): refused. Reloading the extension would cut " +
-            "every agent's running commands and tabs.";
+        return `${action} is reserved to the installer (install.ps1): refused. Reloading the extension would cut ` +
+            "every agent's running commands.";
     }
-    const working = new Set([...busyAgents.keys()]);
-    for (const owner of tabOwners.values()) if (sessionAlive(owner)) working.add(owner.agent);
-    if (working.size || tabCommandsInFlight.size) {
-        const who = [...working].sort().join(", ") || "an agent";
-        return `reload_extension refused: ${who} is still working in Chrome (driven tabs or running commands). ` +
-            "Run install.ps1 again once the agents have closed their tabs.";
+    if (action === "update_extension" && extensionBusy()) {
+        return "update_extension deferred: agent commands are still running. Nothing was checked; run install.ps1 again.";
     }
     return null;
+}
+
+/** Travail en cours que le rechargement couperait : commandes, envois de fichiers, enregistrements réseau. */
+function extensionBusy() {
+    const now = Date.now();
+    return commandsRunning > 0 || activeUploads.size > 0 || [...networkRecording.values()].some(until => until > now);
+}
+
+function runningWorkLabel() {
+    const parts = [];
+    if (commandsRunning) parts.push(`${commandsRunning} command(s)`);
+    if (activeUploads.size) parts.push(`${activeUploads.size} upload(s)`);
+    const now = Date.now();
+    const recordings = [...networkRecording.values()].filter(until => until > now).length;
+    if (recordings) parts.push(`${recordings} network recording(s)`);
+    return parts.join(", ") || "agent work";
+}
+
+/** Fin d'attente : vrai dès que plus rien ne tourne, faux à l'échéance. */
+function waitExtensionIdle(ms) {
+    if (!extensionBusy()) return Promise.resolve(true);
+    return new Promise(resolve => {
+        const deadline = Date.now() + ms;
+        let timer = null;
+        const check = () => {
+            if (!extensionBusy() || Date.now() >= deadline) {
+                idleWaiters.delete(check);
+                if (timer) clearTimeout(timer);
+                resolve(!extensionBusy());
+                return;
+            }
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(check, Math.min(250, Math.max(0, deadline - Date.now())));
+        };
+        idleWaiters.add(check);
+        check();
+    });
+}
+
+/**
+ * Rechargement sans perte : admission fermée, attente des commandes en cours (drain_s, borné), état écrit, puis
+ * chrome.runtime.reload(). Délai dépassé : admission rouverte, rien n'est rechargé, l'installeur réessaiera.
+ */
+async function reloadWhenIdle(params = {}) {
+    if (reloadDraining) return { error: "reload_extension is already in progress: nothing was done." };
+    const asked = Number(params.drain_s ?? RELOAD_DRAIN_DEFAULT_S);
+    const drainS = Number.isFinite(asked) ? Math.min(Math.max(asked, 0), RELOAD_DRAIN_MAX_S) : RELOAD_DRAIN_DEFAULT_S;
+    reloadDraining = true;
+    const started = Date.now();
+    if (!await waitExtensionIdle(drainS * 1000)) {
+        const running = runningWorkLabel();
+        reloadDraining = false;
+        return { error: `reload_extension deferred: ${running} still running after ${drainS} s. Nothing was reloaded; ` +
+            "agents keep working." };
+    }
+    // Table des onglets écrite avant le rechargement : les agents la retrouvent telle quelle.
+    try { await saveExtensionState(); } catch (_) {}
+    setTimeout(() => { try { chrome.runtime.reload(); } catch(e) {} }, 100);
+    return { data: { reloading: true, version: extensionVersion(), drained_ms: Date.now() - started } };
 }
 
 /** Refus (message) d'une commande, ou null : identité, arrêt d'urgence, propriété de l'onglet visé. */
@@ -944,7 +1012,7 @@ function authorizeCommand(action, params, client) {
     if (BRIDGE_ACTIONS.has(action)) return null;
     if (!client) return "Command without client identity (agent and session set by the bridge): refused. Run install.ps1 again (up-to-date bridge).";
     if (stopActive() && !STOP_ALLOWED_ACTIONS.has(action)) return stopMessage();
-    if (action === "reload_extension" || action === "update_extension") return reloadRefusal(client);
+    if (action === "reload_extension" || action === "update_extension") return reloadRefusal(client, action);
     if (TAB_FREE_ACTIONS.has(action)) return null;
     // Toute commande qui vise plusieurs onglets (tabIds), quel que soit son nom : chacun doit être au client. Le contrôle
     // ne dépend plus du nom d'action (l'alias tabs_group le contournait, relevé par Codex le 24/10).
@@ -983,6 +1051,10 @@ async function handleCommand(req) {
     if (client) await noteClientAlive(client, req.gone);
     const refusal = authorizeCommand(action, params, client);
     if (refusal) return { error: refusal };
+    // Rechargement en cours : refus immédiat (rien n'a été fait), sans attente entre ce contrôle et le compte ci-dessous.
+    if (reloadDraining && !RELOAD_ADMITTED_ACTIONS.has(action)) return { error: RELOADING_MESSAGE };
+    const counted = action !== "reload_extension";
+    if (counted) commandsRunning++;
     const tabId = requestedTabId(params);
     if (tabId !== null) tabCommandsInFlight.set(tabId, (tabCommandsInFlight.get(tabId) || 0) + 1);
     // Travail d'agent visible pour l'utilisateur (logo qui tourne) : commandes de page et ouverture d'onglet, jamais
@@ -999,6 +1071,7 @@ async function handleCommand(req) {
             else tabCommandsInFlight.delete(tabId);
         }
         if (busyAgent) busyEnd(busyAgent);
+        if (counted && --commandsRunning === 0) for (const wake of [...idleWaiters]) wake();
     }
     const visible = tabId !== null && ownedBy(tabOwners.get(tabId), client) ? tabId : null;
     // Evaluation may legitimately return an object containing an error field.
@@ -1321,8 +1394,7 @@ async function routeCommand(req, client = null) {
             }
 
             case "reload_extension":
-                setTimeout(() => { try { chrome.runtime.reload(); } catch(e) {} }, 100);
-                return { data: { reloading: true, version: extensionVersion() } };
+                return await reloadWhenIdle(params);
 
             default:
                 return { error: `Unknown action '${action}'` };

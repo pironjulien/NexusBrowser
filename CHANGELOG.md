@@ -5,6 +5,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.10] - 2026-11-04
+
+### Fixed
+- An extension update is no longer held back while an agent drives tabs. Since 2.35.8 agent tabs survive a reload, but
+  the installer (`--refresh-extension`) still refused to reload as soon as an agent owned a tab (exit code 3), so the
+  update waited until the three AIs had stopped. The extension now announces `reload-drain`: when the loaded extension
+  has it, the installer reloads even while agents own tabs. The extension first closes command admission, waits for the
+  commands in flight (20 s at most; past that, nothing is reloaded and exit code 3 says so), writes its tab table, then
+  reloads; agents find their tabs afterwards. A command sent meanwhile is answered at once, "nothing was done"
+  (`retry_safe`, outcome `not_done`), and never left waiting: the bridge also stops sending to an extension that
+  accepted the reload and answers the same way a command it was still waiting on.
+
+### Added
+- `--refresh-extension --force-reload`: reloads an older extension (without `reload-drain`) even though agents own
+  tabs, when the user asks for it. With 2.35.7 and earlier, the report warns that those tabs are lost one last time
+  (2.35.8 and 2.35.9 already keep them). An older extension still refuses on its own while a live session drives a tab
+  or a command runs: forcing never cuts a running command.
+
 ## [2.35.9] - 2026-11-04
 
 ### Changed

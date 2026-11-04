@@ -305,6 +305,8 @@ if (-not $SkipLaunch) {
         Write-Warning 'Chrome is open but its NexusBrowser extension is not connected to the bridge.'
     } elseif ($refresh.Code -eq 1) {
         Write-Warning 'The loaded extension is not this version yet: reload it in chrome://extensions.'
+    } elseif ($refresh.Code -eq 3) {
+        Write-Warning 'Extension reload deferred while agents work (commands still running, or an extension older than 2.35.10 that would lose their tabs). NexusBrowser.exe --refresh-extension --force-reload reloads it anyway, when the user asks.'
     }
     if ($token -and -not $busy -and -not $UpdateOnly) {
         $deadline = [DateTime]::UtcNow.AddSeconds(60)
