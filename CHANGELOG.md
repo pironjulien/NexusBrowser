@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.7] - 2026-11-04
+
+### Changed
+- Toolbar icons at 16 and 32 px are the small icon of the Nexus family: the silver ring drawn plain, without the
+  "JULIENPIRON.FR" lettering unreadable at that size, and the pictogram enlarged; 48 px and more keep the medallion.
+
 ## [2.35.6] - 2026-11-04
 
 ### Fixed
