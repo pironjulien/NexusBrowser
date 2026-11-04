@@ -205,7 +205,7 @@ points to the one-time install.
   signed messages as with the native host, which stays first whenever it is installed. Revoke:
   `POST /api/pair/revoke`.
 - **Tab ownership**: every bridge client identifies itself (agent + session headers, forwarded by the bridge in the
-  signed channel). A tab opened by `browser_new_tab` belongs to that session (`chrome.storage.session`); any page
+  signed channel). A tab opened by `browser_new_tab` belongs to that session (`chrome.storage.local`: kept across service worker restarts and extension reloads or updates, cleared when Chrome starts); any page
   command on another tab (the user's, another agent's) is refused. A tab of the user only through
   `browser_adopt_tab(tab_id, user_asked=True)`. `tab_id` is mandatory on
   every page tool. A session whose MCP process is gone (or silent for 1.618 x 60 s; servers beat every 37 s) leaves

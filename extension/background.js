@@ -54,8 +54,14 @@ const NETWORK_RECORD_MAX_S = 600;
 // -----------------------------------------------------------------------------
 // Propriété des onglets : chaque client du pont (agent + identifiant de session, posés par le pont dans le canal
 // signé) possède les onglets qu'il a ouverts. Toute commande de page sur un autre onglet (Julien, autre agent, autre
-// session du même agent) est refusée. Gardée dans chrome.storage.session : elle survit au redémarrage du service
-// worker, et disparaît avec la fermeture de Chrome (comme les onglets).
+// session du même agent) est refusée. Gardée dans chrome.storage.local : elle survit au redémarrage du service
+// worker ET au rechargement ou à la mise à jour de l'extension (chrome.storage.session est alors effacé : les onglets
+// des agents redevenaient ceux de Julien). Au démarrage de Chrome (runtime.onStartup), les numéros d'onglets repartent
+// de zéro : la table est vidée, jamais un onglet neuf de Julien attribué par erreur à un agent. Au chargement, les
+// onglets qui n'existent plus sont oubliés.
+//
+// Arrêt d'urgence, dates de vie des sessions et téléchargements attribués suivent la même table : un rechargement ne
+// lève jamais un arrêt demandé par Julien, et une session vivante reste protégée contre une autre session de son agent.
 //
 // Sessions vivantes : chaque commande (et le battement « heartbeat » des serveurs MCP) date le dernier signe de vie
 // de son client. Une session MORTE (silence de plus de SESSION_DEAD_MS, ou processus disparu, signalé par le pont dans
@@ -74,12 +80,13 @@ const SESSION_DEAD_MS = Math.round(1.618 * 60000);
 const SEEN_SAVE_MS = 15000;  // date de vie écrite au plus toutes les 15 s par session (pas une écriture par commande)
 const tabOwners = new Map();  // tabId -> { agent, client, adopted, since }
 const clientSeen = new Map();  // clientKey -> dernier signe de vie (ms) ; 0 : session morte (processus disparu)
-const seenSaved = new Map();  // clientKey -> date de vie déjà écrite dans chrome.storage.session
+const seenSaved = new Map();  // clientKey -> date de vie déjà écrite dans chrome.storage.local
 // downloadId -> { agent, client } : téléchargement attribué par wait_download à un onglet de ce client. Seul ce client
 // peut en retirer l'entrée (download_erase) ; jamais un téléchargement de Julien ni d'un autre agent.
 const downloadOwners = new Map();
 let stoppedUntil = 0;  // échéance (ms) de l'arrêt d'urgence vu par l'extension
 let stateChain = Promise.resolve();
+let browserStarted = false;  // Chrome vient de démarrer (runtime.onStartup) : table des onglets d'avant à ne pas relire
 
 function validClient(client) {
     return !!(client && typeof client === "object"
@@ -127,9 +134,9 @@ async function noteClientAlive(client, gone) {
 
 async function loadExtensionState() {
     try {
-        const stored = await chrome.storage.session.get([OWNERS_KEY, STOP_KEY, SEEN_KEY, DOWNLOADS_KEY]);
+        const stored = await chrome.storage.local.get([OWNERS_KEY, STOP_KEY, SEEN_KEY, DOWNLOADS_KEY]);
         const owners = stored?.[OWNERS_KEY];
-        if (owners && typeof owners === "object") {
+        if (owners && typeof owners === "object" && !browserStarted) {
             for (const [id, owner] of Object.entries(owners)) {
                 const tabId = Number(id);
                 if (Number.isInteger(tabId) && owner && typeof owner.agent === "string" && typeof owner.client === "string") {
@@ -154,7 +161,7 @@ async function loadExtensionState() {
                 }
             }
         }
-        // Onglets fermés pendant que le service worker dormait : propriété oubliée.
+        // Onglets fermés pendant que le service worker dormait ou que l'extension se rechargeait : propriété oubliée.
         if (tabOwners.size && chrome.tabs?.query) {
             const alive = new Set((await chrome.tabs.query({})).map(t => t.id));
             let changed = false;
@@ -168,6 +175,14 @@ async function loadExtensionState() {
     }
 }
 
+/** Démarrage de Chrome : les numéros d'onglets de la session précédente ne désignent plus les mêmes onglets. */
+function forgetPreviousBrowserTabs() {
+    // Vidée tout de suite (avant ou après la relecture de la table), puis écrite une fois l'état relu.
+    browserStarted = true;
+    tabOwners.clear();
+    return extensionStateReady.then(() => saveExtensionState()).catch(() => {});
+}
+
 function saveExtensionState() {
     // Dates de vie gardées pour les sessions qui possèdent un onglet, ou vues dans l'heure.
     const now = Date.now();
@@ -176,7 +191,7 @@ function saveExtensionState() {
         if (!owning.has(key) && now - at > 3600000) { clientSeen.delete(key); seenSaved.delete(key); }
     }
     for (const [key, at] of clientSeen.entries()) seenSaved.set(key, at);
-    const run = stateChain.then(() => chrome.storage.session.set({
+    const run = stateChain.then(() => chrome.storage.local.set({
         [OWNERS_KEY]: Object.fromEntries([...tabOwners.entries()].map(([id, owner]) => [String(id), owner])),
         [STOP_KEY]: stoppedUntil,
         [SEEN_KEY]: Object.fromEntries(clientSeen.entries()),
@@ -186,8 +201,8 @@ function saveExtensionState() {
     return run;
 }
 
-// Propriété relue avant la toute première commande (redémarrage du service worker compris).
-const extensionStateReady = (typeof chrome !== "undefined" && chrome.storage?.session) ? loadExtensionState() : Promise.resolve();
+// Propriété relue avant la toute première commande (redémarrage du service worker et rechargement de l'extension compris).
+const extensionStateReady = (typeof chrome !== "undefined" && chrome.storage?.local) ? loadExtensionState() : Promise.resolve();
 
 async function rememberTabOwner(tabId, client, how = "created") {
     if (!Number.isInteger(tabId) || !validClient(client)) return;
@@ -593,6 +608,7 @@ if (typeof chrome !== "undefined") {
     // Fil de l'ancienne discussion du panneau (retirée le 20/10/2026) : effacé des installations existantes.
     chrome.storage?.local?.remove?.(["agyChat", "agyInstance"])?.catch?.(() => {});
     if (chrome.runtime?.onStartup) chrome.runtime.onStartup.addListener(() => {
+        forgetPreviousBrowserTabs();
         ensureOffscreenDocument();
         setTimeout(connectBridgeWS, 300);
     });
@@ -3699,17 +3715,20 @@ async function spinFrames() {
     if (busyFrames) return busyFrames;
     if (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined") return (busyFrames = []);
     try {
-        // Source la plus fine (48 px) réduite à chaque taille : tranche nette même quand la pièce est de profil.
-        const icon = await createImageBitmap(await (await fetch(chrome.runtime.getURL("icons/icon48.png"))).blob());
-        // Le rond du logo est posé sur un carré arrondi sombre : découpé au cercle, sinon ses coins noirs
-        // se voient dès que la pièce tourne. L'icône fixe n'est pas modifiée.
-        const disc = new OffscreenCanvas(icon.width, icon.height);
-        const discCtx = disc.getContext("2d");
-        discCtx.beginPath();
-        discCtx.arc(icon.width / 2, icon.height / 2, icon.width / 2, 0, 2 * Math.PI);
-        discCtx.clip();
-        discCtx.drawImage(icon, 0, 0);
-        const source = disc;
+        // Chaque taille part de l'icône fixe de la barre de la même taille (cerclage fin, logo agrandi) : la pièce
+        // qui tourne garde exactement la taille de l'icône au repos. L'icône 48 est le médaillon complet, plus petit
+        // une fois réduit. Découpée au cercle : rien ne dépasse du rond quand la pièce tourne.
+        const sources = {};
+        for (const size of [16, 24, 32]) {
+            const icon = await createImageBitmap(await (await fetch(chrome.runtime.getURL(`icons/icon${size}.png`))).blob());
+            const disc = new OffscreenCanvas(icon.width, icon.height);
+            const discCtx = disc.getContext("2d");
+            discCtx.beginPath();
+            discCtx.arc(icon.width / 2, icon.height / 2, icon.width / 2, 0, 2 * Math.PI);
+            discCtx.clip();
+            discCtx.drawImage(icon, 0, 0);
+            sources[size] = disc;
+        }
         const frames = [];
         for (let i = 0; i < BUSY_FLASH_FRAMES; i++) {
             // Éclat : le logo de face s'illumine puis revient, sans rien dessiner autour (logo seul).
@@ -3719,7 +3738,7 @@ async function spinFrames() {
                 const canvas = new OffscreenCanvas(size, size);
                 const ctx = canvas.getContext("2d");
                 ctx.imageSmoothingQuality = "high";
-                ctx.drawImage(source, 0, 0, size, size);
+                ctx.drawImage(sources[size], 0, 0, size, size);
                 ctx.globalCompositeOperation = "source-atop";
                 ctx.fillStyle = `rgba(255, 255, 255, ${glow.toFixed(3)})`;
                 ctx.fillRect(0, 0, size, size);
@@ -3740,7 +3759,7 @@ async function spinFrames() {
                 const left = (size - width) / 2;
                 ctx.save();
                 if (turn < 0) { ctx.translate(size, 0); ctx.scale(-1, 1); }  // revers : la face vue en miroir
-                ctx.drawImage(source, turn < 0 ? size - left - width : left, 0, width, size);
+                ctx.drawImage(sources[size], turn < 0 ? size - left - width : left, 0, width, size);
                 ctx.restore();
                 // Relief : la pièce s'assombrit en tournant vers son profil (aucun halo ni couleur ajoutée).
                 ctx.globalCompositeOperation = "source-atop";

@@ -5,6 +5,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.8] - 2026-11-04
+
+### Fixed
+- Agents keep their tabs when the extension is reloaded or updated. Tab ownership, the emergency stop, session
+  liveness and download attribution moved from `chrome.storage.session`, which Chrome clears on every reload or
+  update, to `chrome.storage.local`. Before, every agent tab became a user tab after an update: an agent lost its tab
+  mid-task and the tab stayed with the user. Now a live session keeps its tabs; once its session has ended, a tab is
+  "orphan" for that same agent only, and the agent's new session takes it back as after a server restart. A tab is
+  never handed to the user or to another agent, and an emergency stop survives the reload. When Chrome starts, tab IDs
+  are reassigned, so the previous table is cleared; tabs closed in the meantime are dropped when the state is loaded.
+
+### Changed
+- Larger toolbar icon. Chrome's toolbar now uses its own 16, 20, 24 and 32 px icon: same medallion and colours, a
+  thinner ring and a larger pictogram with heavier strokes. On a dark toolbar, the logo now spans 70 to 75 % of the
+  icon's width instead of 56 to 62 %. The 48 and 128 px icons and the Store icon are unchanged. The spinning logo
+  starts from the toolbar icon of the same size, so it matches the static icon.
+
 ## [2.35.7] - 2026-11-04
 
 ### Changed

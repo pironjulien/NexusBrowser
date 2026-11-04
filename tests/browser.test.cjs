@@ -269,6 +269,7 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
     let onRemoved;
     let onCreated;
     let onNavTarget;
+    let onStartup;
     const detached = [];
     const idleTimers = [];
     const sessionData = {...(chromeOverrides.sessionStorage || {})};
@@ -277,7 +278,7 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
     const messageEvent = {addListener(fn) { onMessage = fn; }};
     const chrome = {
         management: chromeOverrides.management,
-        runtime: {onStartup: event, onInstalled: event, onMessage: messageEvent, ...(chromeOverrides.runtime || {})},
+        runtime: {onStartup: {addListener(fn) { onStartup = fn; }}, onInstalled: event, onMessage: messageEvent, ...(chromeOverrides.runtime || {})},
         offscreen: {hasDocument: async () => true}, alarms: {create() {}, onAlarm: event},
         tabGroups: {
             query: async () => [],
@@ -331,7 +332,8 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
                     return Object.fromEntries(list.filter(k => k in localData).map(k => [k, localData[k]]));
                 },
                 set: async (items) => { Object.assign(localData, JSON.parse(JSON.stringify(items))); },
-                remove: async (keys) => { for (const key of [].concat(keys)) delete localData[key]; }
+                remove: async (keys) => { for (const key of [].concat(keys)) delete localData[key]; },
+                ...(chromeOverrides.storageLocal || {})
             }
         },
         debugger: {
@@ -437,6 +439,8 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
         }),
         // Code exécuté dans le contexte du service worker (accès à ses variables de script).
         evalInContext: (code) => vm.runInContext(code, ctx),
+        // Démarrage de Chrome (runtime.onStartup) : les numéros d'onglets de la session précédente sont réattribués.
+        browserStartup: () => onStartup?.(),
         event: (tabId) => onEvent({tabId}, 'Page.fileChooserOpened', {backendNodeId: 9}),
         emit: (tabId, method, params = {}) => onEvent({tabId}, method, params),
         emitFrom: (source, method, params = {}) => onEvent(source, method, params),
@@ -3750,6 +3754,47 @@ test('version annoncée lue dans le manifeste, jamais une valeur codée en dur',
     assert.ok(!/["v]2\.0\.0/.test(source), 'version codée en dur');
 });
 
+test('icône de la barre : 16, 20, 24 et 32 px déclarés à leur taille ; la pièce qui tourne part de l\'icône fixe de même taille', async () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../extension/manifest.json'), 'utf8'));
+    const icons = manifest.action.default_icon;
+    for (const size of ['16', '20', '24', '32', '48', '128']) {
+        const png = fs.readFileSync(path.join(__dirname, '../extension', icons[size]));
+        assert.equal(png.readUInt32BE(16), Number(size), `${icons[size]} : largeur`);
+        assert.equal(png.readUInt32BE(20), Number(size), `${icons[size]} : hauteur`);
+    }
+    // Animation : chaque taille dessinée depuis icons/icon<taille>.png, de face sur toute la case (jamais l'icône 48,
+    // dont le médaillon complet rend le logo plus petit que l'icône au repos).
+    const fetched = [];
+    const draws = [];
+    const h = harness({}, {runtime: {getURL: (p) => p}, globals: {
+        fetch: async (url) => { fetched.push(url); return {blob: async () => ({url})}; },
+        createImageBitmap: async (blob) => ({url: blob.url, width: Number(/icon(\d+)/.exec(blob.url)[1]), height: Number(/icon(\d+)/.exec(blob.url)[1])}),
+        OffscreenCanvas: class {
+            constructor(w, h) { this.width = w; this.height = h; }
+            getContext() {
+                const canvas = this;
+                return {
+                    beginPath() {}, arc() {}, clip() {}, save() {}, restore() {}, translate() {}, scale() {}, fillRect() {},
+                    drawImage: (img, ...box) => draws.push({into: canvas.width, from: img.url, source: img.width, box}),
+                    getImageData: (x, y, w) => ({width: w})
+                };
+            }
+        }
+    }});
+    await h.evalInContext('extensionStateReady');
+    const frames = await h.evalInContext('spinFrames()');
+    assert.ok(frames.length > 1);
+    assert.deepEqual(fetched.sort(), ['icons/icon16.png', 'icons/icon24.png', 'icons/icon32.png']);
+    const discs = draws.filter(d => d.from);  // découpe au cercle, à la taille de chaque icône
+    assert.deepEqual(discs.map(d => [d.into, d.from]).sort(), [[16, 'icons/icon16.png'], [24, 'icons/icon24.png'], [32, 'icons/icon32.png']]);
+    const painted = draws.filter(d => !d.from);
+    assert.ok(painted.length >= frames.length * 3);
+    for (const d of painted) assert.equal(d.source, d.into, 'image de même taille que la case');
+    for (const size of [16, 24, 32]) {
+        assert.ok(painted.some(d => d.into === size && d.box.join() === `0,0,${size},${size}`), `face ${size} px`);
+    }
+});
+
 // =============================================================================
 // Revue de Claude du 17/10 (partie C) : isolation entre agents et secrets tenus PAR L'EXTENSION
 // =============================================================================
@@ -3843,16 +3888,92 @@ test('adoption : onglet de Julien refusé par défaut, seulement avec userAsked,
     assert.match((await shielded.run('adopt_tab', {tabId: 9, userAsked: true}, AGENT_A)).error, /protected/);
 });
 
-test('propriété conservée après redémarrage du service worker (chrome.storage.session), oubliée si l\'onglet a disparu', async () => {
+test('propriété conservée après redémarrage du service worker (chrome.storage.local), oubliée si l\'onglet a disparu', async () => {
     const tabs = {create: async (p) => ({id: 300, url: p.url, active: false, windowId: 10}), query: async () => [{id: 300}]};
     const first = harness({}, {autoOwn: false, tabs});
     await first.run('create_tab', {url: 'https://a.invalid', group: false}, AGENT_A);
-    assert.equal(first.sessionData.nexusBrowserTabOwners['300'].agent, 'Claude');
-    const restarted = harness({}, {autoOwn: false, tabs, sessionStorage: first.sessionData});
+    assert.equal(first.localData.nexusBrowserTabOwners['300'].agent, 'Claude');
+    const restarted = harness({}, {autoOwn: false, tabs, localStorage: first.localData});
     assert.equal((await restarted.run('eval', {tabId: 300, code: '4'}, AGENT_A)).data, 4);
     assert.match((await restarted.run('eval', {tabId: 300, code: '4'}, AGENT_B)).error, /driven by Claude/);
-    const gone = harness({}, {autoOwn: false, tabs: {...tabs, query: async () => []}, sessionStorage: first.sessionData});
+    const gone = harness({}, {autoOwn: false, tabs: {...tabs, query: async () => []}, localStorage: first.localData});
     assert.match((await gone.run('eval', {tabId: 300, code: '4'}, AGENT_A)).error, /user's tab/);
+});
+
+test('rechargement de l\'extension (chrome.storage.session effacé) : onglets gardés par leur agent, jamais à Julien ni à un autre agent', async () => {
+    // Relevé le 04/11 pendant la mise à jour 2.35.7 : table effacée, onglets des agents devenus ceux de Julien.
+    let next = 310;
+    const tabs = {create: async (p) => ({id: next++, url: p.url, active: false, windowId: 10}), query: async () => [{id: 310}, {id: 311}, {id: 1}]};
+    const old = {agent: 'Claude', id: 'claude-avant-recharge'};
+    const fresh = {agent: 'Claude', id: 'claude-apres-recharge'};
+    const first = harness({}, {autoOwn: false, virtualTime: true, tabs});
+    await first.run('create_tab', {url: 'https://a.invalid', group: false}, old);
+    await first.run('create_tab', {url: 'https://b.invalid', group: false}, AGENT_B);
+    assert.deepEqual(first.sessionData, {});
+    // Rechargement : chrome.storage.session vide, chrome.storage.local intact.
+    const reloaded = harness({}, {autoOwn: false, virtualTime: true, tabs, localStorage: plain(first.localData), sessionStorage: {}});
+    // La session encore vivante garde son onglet ; les autres le voient « other », jamais « user ».
+    assert.equal((await reloaded.run('eval', {tabId: 310, code: '5'}, old)).data, 5);
+    assert.deepEqual(plain((await reloaded.run('list_tabs', {}, AGENT_B)).data.map(t => [t.id, t.state])), [[310, 'other'], [311, 'mine'], [1, 'user']]);
+    assert.match((await reloaded.run('eval', {tabId: 310, code: '5'}, AGENT_B)).error, /driven by Claude/);
+    assert.match((await reloaded.run('adopt_tab', {tabId: 310, userAsked: true}, AGENT_B)).error, /Claude/);
+    assert.match((await reloaded.run('adopt_tab', {tabId: 310}, fresh)).error, /in another session/);
+    // Session close (processus disparu, signalé par le pont) : orphelin pour son agent seul, que la nouvelle session reprend.
+    await reloaded.run('heartbeat', {reclaim: false}, fresh, {gone: [old.id]});
+    assert.equal((await reloaded.run('list_tabs', {}, fresh)).data.find(t => t.id === 310).state, 'orphan');
+    assert.equal((await reloaded.run('list_tabs', {}, AGENT_B)).data.find(t => t.id === 310).state, 'other');
+    assert.match((await reloaded.run('adopt_tab', {tabId: 310}, AGENT_B)).error, /refused|Claude/);
+    assert.equal((await reloaded.run('adopt_tab', {tabId: 310}, fresh)).data.reclaimed, true);
+    assert.equal((await reloaded.run('eval', {tabId: 310, code: '6'}, fresh)).data, 6);
+    assert.equal(reloaded.localData.nexusBrowserTabOwners['310'].client, 'claude-apres-recharge');
+});
+
+test('rechargement de l\'extension : une session vivante reste protégée par sa date de vie gardée, puis ses onglets deviennent orphelins', async () => {
+    const tabs = {create: async (p) => ({id: 320, url: p.url, active: false, windowId: 10}), query: async () => [{id: 320}]};
+    const old = {agent: 'Codex', id: 'codex-avant-recharge'};
+    const fresh = {agent: 'Codex', id: 'codex-apres-recharge'};
+    const first = harness({}, {autoOwn: false, virtualTime: true, tabs});
+    await first.run('create_tab', {url: 'https://a.invalid', group: false}, old);
+    first.advanceTime(90000);
+    await first.run('heartbeat', {reclaim: false}, old);  // battement à 90 s, écrit
+    const reloaded = harness({}, {autoOwn: false, virtualTime: true, tabs, localStorage: plain(first.localData)});
+    // 110 s après l'ouverture, 20 s après le battement : vivante (l'ouverture seule la dirait morte).
+    reloaded.advanceTime(110000);
+    assert.match((await reloaded.run('adopt_tab', {tabId: 320}, fresh)).error, /in another session/);
+    assert.equal((await reloaded.run('list_tabs', {}, fresh)).data[0].state, 'other');
+    reloaded.advanceTime(80000);  // 100 s sans signe de vie : morte
+    assert.equal((await reloaded.run('list_tabs', {}, fresh)).data[0].state, 'orphan');
+    assert.equal((await reloaded.run('adopt_tab', {tabId: 320}, fresh)).data.reclaimed, true);
+});
+
+test('rechargement de l\'extension : l\'arrêt d\'urgence survit ; onglets disparus oubliés', async () => {
+    const tabs = {create: async (p) => ({id: 330, url: p.url, active: false, windowId: 10}), query: async () => [{id: 330}]};
+    const first = harness({}, {autoOwn: false, tabs});
+    await first.run('create_tab', {url: 'https://a.invalid', group: false}, AGENT_A);
+    await first.run('emergency_stop', {hold_s: 120}, null);
+    const reloaded = harness({}, {autoOwn: false, tabs, localStorage: plain(first.localData)});
+    assert.match((await reloaded.run('eval', {tabId: 330, code: '1'}, AGENT_A)).error, /Emergency stop/);
+    // Onglet fermé pendant le rechargement : propriété oubliée, table réécrite.
+    const closed = harness({}, {autoOwn: false, tabs: {...tabs, query: async () => []}, localStorage: plain(first.localData)});
+    await closed.evalInContext('extensionStateReady');
+    assert.deepEqual(closed.owners(), {});
+    assert.deepEqual(plain(closed.localData.nexusBrowserTabOwners), {});
+});
+
+test('démarrage de Chrome (runtime.onStartup) : numéros d\'onglets réattribués, la table d\'avant n\'attribue rien à un agent', async () => {
+    const tabs = {create: async (p) => ({id: 340, url: p.url, active: false, windowId: 10}), query: async () => [{id: 340}]};
+    const first = harness({}, {autoOwn: false, tabs});
+    await first.run('create_tab', {url: 'https://a.invalid', group: false}, AGENT_A);
+    // onStartup avant la relecture de la table, puis après : l'onglet 340 (désormais celui de Julien) reste à Julien.
+    const early = harness({}, {autoOwn: false, tabs, localStorage: plain(first.localData)});
+    early.browserStartup();
+    assert.match((await early.run('eval', {tabId: 340, code: '1'}, AGENT_A)).error, /user's tab/);
+    assert.deepEqual(plain(early.localData.nexusBrowserTabOwners), {});
+    const late = harness({}, {autoOwn: false, tabs, localStorage: plain(first.localData)});
+    await late.evalInContext('extensionStateReady');
+    await late.browserStartup();
+    assert.match((await late.run('eval', {tabId: 340, code: '1'}, AGENT_A)).error, /user's tab/);
+    assert.deepEqual(plain(late.localData.nexusBrowserTabOwners), {});
 });
 
 test('réseau : champs secrets des corps masqués à toute profondeur (JSON, préfixe XSSI, formulaire, JSON tronqué)', async () => {
@@ -3914,7 +4035,7 @@ test('arrêt d\'urgence : la frappe touche par touche s\'interrompt au caractèr
     assert.match((await h.run('click', {tabId: 1, locator: {testId: 'submit-zone'}})).error, /Emergency stop/);
     assert.equal((await h.run('list_tabs', {})).error, undefined);
     assert.ok(h.detached.includes(1));
-    assert.ok(h.sessionData.nexusBrowserStopUntil > Date.now());
+    assert.ok(h.localData.nexusBrowserStopUntil > Date.now());
 });
 
 test('arrêt d\'urgence : le glisser en cours s\'arrête et le bouton est relâché', async () => {
@@ -3960,7 +4081,7 @@ test('repli windows.create : id de l\'ONGLET créé (relu par tabs.query), jamai
 test('onglet ouvert mais attribution non enregistrée : refermé, sans fenêtre de repli', async () => {
     const removed = [];
     let windows = 0;
-    const h = harness({}, {autoOwn: false, storageSession: {set: async (items) => {
+    const h = harness({}, {autoOwn: false, storageLocal: {set: async (items) => {
         if (Object.values(items).some(v => v && typeof v === 'object' && '99' in v)) throw new Error('quota');
     }},
         windows: {getLastFocused: async () => ({id: 5, type: 'normal'}), create: async () => { windows++; return {id: 12}; }},
@@ -3971,7 +4092,7 @@ test('onglet ouvert mais attribution non enregistrée : refermé, sans fenêtre 
     assert.equal(windows, 0);
     assert.equal(h.owners()['99'], undefined);
     // Fermeture refusée par Chrome : jamais dit « closed », l'onglet reste à l'agent pour browser_close_tab.
-    const stuck = harness({}, {autoOwn: false, storageSession: {set: async (items) => {
+    const stuck = harness({}, {autoOwn: false, storageLocal: {set: async (items) => {
         if (Object.values(items).some(v => v && typeof v === 'object' && '99' in v)) throw new Error('quota');
     }}, windows: {getLastFocused: async () => ({id: 5, type: 'normal'})},
         tabs: {remove: async () => { throw new Error('Chrome unavailable'); }}});
@@ -4208,7 +4329,7 @@ test('2.1 orphelins : fermeture permise, mort retenue après redémarrage du ser
     assert.match((await h.run('close_tab', {tabId: 520, gone: ['codex-ancienne-1']}, fresh)).error, /Codex in another session/);
     await h.run('list_tabs', {}, fresh, {gone: ['codex-ancienne-1', 'codex-nouvelle-2']});  // jamais soi-même
     assert.equal((await h.run('close_tab', {tabId: 520}, fresh)).data.closedTabId, 520);
-    const restarted = harness({}, {autoOwn: false, tabs, sessionStorage: h.sessionData});
+    const restarted = harness({}, {autoOwn: false, tabs, localStorage: h.localData});
     assert.deepEqual(plain((await restarted.run('list_tabs', {}, fresh)).data.map(t => [t.id, t.state])), [[520, 'user'], [521, 'orphan']]);
     assert.equal((await restarted.run('adopt_tab', {tabId: 521}, fresh)).data.reclaimed, true);
     assert.equal((await restarted.run('eval', {tabId: 521, code: '1'}, fresh)).data, 1);
@@ -4224,7 +4345,7 @@ test('a heartbeat already in flight cannot revive an explicitly closed session',
     await h.run('heartbeat', {reclaim: false}, daemon, {gone: [old.id]});
     await h.run('heartbeat', {reclaim: false}, old); // arrived after the close announcement
     assert.equal((await h.run('list_tabs', {}, fresh)).data[0].state, 'orphan');
-    const restarted = harness({}, {autoOwn: false, tabs, sessionStorage: h.sessionData});
+    const restarted = harness({}, {autoOwn: false, tabs, localStorage: h.localData});
     await restarted.run('heartbeat', {reclaim: false}, old);
     assert.equal((await restarted.run('adopt_tab', {tabId: 590}, fresh)).data.reclaimed, true);
 });
@@ -4934,12 +5055,12 @@ test('download_erase : seulement un téléchargement attribué à un onglet du c
     assert.match((await h.run('download_erase', {id: 7}, {agent: 'Claude', id: 'claude-autre-session'})).error, /not started from one of your tabs/);
     assert.match((await h.run('download_erase', {id: 9}, AGENT_A)).error, /not started from one of your tabs/);
     assert.deepEqual(dl.erased, []);
-    // Attribution gardée dans chrome.storage.session (redémarrage du service worker).
-    assert.deepEqual(plain(h.sessionData.nexusBrowserDownloadOwners), {7: {agent: 'Claude', client: 'claude-aaaa1111'}});
-    const restarted = harness({}, {autoOwn: false, downloads: dl.api, sessionStorage: plain(h.sessionData)});
+    // Attribution gardée dans chrome.storage.local (redémarrage du service worker, rechargement de l'extension).
+    assert.deepEqual(plain(h.localData.nexusBrowserDownloadOwners), {7: {agent: 'Claude', client: 'claude-aaaa1111'}});
+    const restarted = harness({}, {autoOwn: false, downloads: dl.api, localStorage: plain(h.localData)});
     assert.equal((await restarted.run('download_erase', {id: 7}, AGENT_A)).data.success, true);
     assert.deepEqual(dl.erased, [7]);
-    assert.deepEqual(plain(restarted.sessionData.nexusBrowserDownloadOwners), {});
+    assert.deepEqual(plain(restarted.localData.nexusBrowserDownloadOwners), {});
 });
 
 test('list_tabs / active_tab : URL et titre complets pour ses onglets, domaine seul pour Julien et les autres agents', async () => {
