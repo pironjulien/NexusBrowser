@@ -3673,11 +3673,12 @@ async function resolveTargetTab(params = {}) {
 // -----------------------------------------------------------------------------
 const BUSY_LINGER_MS = 1618;
 const BUSY_SPIN_FRAMES = 32;  // un tour en BUSY_LINGER_MS, environ 20 images par seconde
+const BUSY_FLASH_FRAMES = 8;  // éclat du logo au démarrage, avant le premier tour (Julien, 04/11)
 const busyAgents = new Map();  // agent → commandes en cours
 let busyHideTimer = null;
 let busySpinTimer = null;
 let busySpinFrame = 0;
-let busyFrames = null;  // [{16, 24, 32: ImageData}], calculées une fois
+let busyFrames = null;  // [{16, 24, 32: ImageData}] : l'éclat puis un tour, calculées une fois
 
 function busyStart(agent) {
     busyAgents.set(agent, (busyAgents.get(agent) || 0) + 1);
@@ -3699,8 +3700,33 @@ async function spinFrames() {
     if (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined") return (busyFrames = []);
     try {
         // Source la plus fine (48 px) réduite à chaque taille : tranche nette même quand la pièce est de profil.
-        const source = await createImageBitmap(await (await fetch(chrome.runtime.getURL("icons/icon48.png"))).blob());
+        const icon = await createImageBitmap(await (await fetch(chrome.runtime.getURL("icons/icon48.png"))).blob());
+        // Le rond du logo est posé sur un carré arrondi sombre : découpé au cercle, sinon ses coins noirs
+        // se voient dès que la pièce tourne. L'icône fixe n'est pas modifiée.
+        const disc = new OffscreenCanvas(icon.width, icon.height);
+        const discCtx = disc.getContext("2d");
+        discCtx.beginPath();
+        discCtx.arc(icon.width / 2, icon.height / 2, icon.width / 2, 0, 2 * Math.PI);
+        discCtx.clip();
+        discCtx.drawImage(icon, 0, 0);
+        const source = disc;
         const frames = [];
+        for (let i = 0; i < BUSY_FLASH_FRAMES; i++) {
+            // Éclat : le logo de face s'illumine puis revient, sans rien dessiner autour (logo seul).
+            const glow = Math.sin((Math.PI * (i + 1)) / (BUSY_FLASH_FRAMES + 1)) * 0.55;
+            const frame = {};
+            for (const size of [16, 24, 32]) {
+                const canvas = new OffscreenCanvas(size, size);
+                const ctx = canvas.getContext("2d");
+                ctx.imageSmoothingQuality = "high";
+                ctx.drawImage(source, 0, 0, size, size);
+                ctx.globalCompositeOperation = "source-atop";
+                ctx.fillStyle = `rgba(255, 255, 255, ${glow.toFixed(3)})`;
+                ctx.fillRect(0, 0, size, size);
+                frame[size] = ctx.getImageData(0, 0, size, size);
+            }
+            frames.push(frame);
+        }
         for (let i = 0; i < BUSY_SPIN_FRAMES; i++) {
             const angle = (2 * Math.PI * i) / BUSY_SPIN_FRAMES;
             const turn = Math.cos(angle);  // 1 de face, 0 de profil, négatif : revers
@@ -3739,7 +3765,8 @@ async function startBusySpin() {
     busySpinTimer = null;
     if (!busyAgents.size || !frames.length || !chrome.action?.setIcon) return;
     busySpinTimer = setInterval(() => {
-        busySpinFrame = (busySpinFrame + 1) % frames.length;
+        // L'éclat ne passe qu'une fois ; ensuite les tours s'enchaînent.
+        busySpinFrame = busySpinFrame + 1 < frames.length ? busySpinFrame + 1 : Math.min(BUSY_FLASH_FRAMES, frames.length - 1);
         try { chrome.action.setIcon({ imageData: frames[busySpinFrame] })?.catch?.(() => {}); } catch (_) {}
     }, Math.round(BUSY_LINGER_MS / BUSY_SPIN_FRAMES));
 }

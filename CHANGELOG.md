@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.4] - 2026-11-04
+
+### Changed
+- The toolbar logo flashes briefly when an agent starts working, then spins as before (logo only, nothing drawn
+  around it).
+
+### Fixed
+- The spinning logo is cut to its circle: the dark rounded square behind it no longer shows as black corners while it
+  turns. The still icon is unchanged.
+
 ## [2.35.3] - 2026-11-04
 
 ### Added
