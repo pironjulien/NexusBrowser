@@ -1,0 +1,4 @@
+# Same rules in every Nexus repository: LF in Git and on disk, CRLF only where Windows requires it.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
