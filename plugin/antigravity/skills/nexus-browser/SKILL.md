@@ -100,3 +100,11 @@ extension, every call answers with an error giving the one-time install (Windows
 with the NexusSystem app, or downloads the get.ps1 file of NexusBrowser's latest release, checks its SHA-256 and
 runs it with -File, then loads the extension in
 `chrome://extensions` as the installer shows (https://github.com/pironjulien/NexusBrowser#install).
+
+## Extension older than the installation?
+When the installer or the NexusSystem app reports `unpacked-extension-loaded-from-another-folder`, Chrome loads the
+extension from an old folder, and reloading brings back the same old version. No extension can open `chrome://` pages,
+so NexusBrowser cannot fix it. Use the first of these that you have: NexusWindows (`act(foreground=true)` on the Chrome
+window: "Load unpacked", then the folder dialog, then "Select Folder"), or your own desktop control (computer use).
+Choose `%LOCALAPPDATA%\NexusBrowser\app\extension` (standard install); the same ID keeps the settings. Without either,
+give the user these three clicks.

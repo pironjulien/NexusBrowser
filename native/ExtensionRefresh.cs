@@ -223,8 +223,25 @@ public static partial class ExtensionRefresh
                 // The bridge or the extension is not back yet: next try until the deadline.
             }
         }
-        return (Stale, new JsonObject { ["connected"] = true, ["verified"] = false, ["error"] = "extension-refresh-unconfirmed" });
+        var unconfirmed = new JsonObject { ["connected"] = true, ["verified"] = false, ["error"] = "extension-refresh-unconfirmed" };
+        // An unpacked extension reloads from the folder Chrome recorded at "Load unpacked": when that folder is not the one
+        // this installation updates (an old checkout, a copy that is no longer kept up to date), the reload brings back
+        // the same older version. Only Chrome's own page can change the folder, and no extension may open it.
+        if (ping["installation_type"]?.GetValue<string>() == "development")
+        {
+            unconfirmed["reason"] = "unpacked-extension-loaded-from-another-folder";
+            unconfirmed["version"] = ping["version"]?.DeepClone();
+            unconfirmed["hint"] = OtherFolderHint;
+        }
+        return (Stale, unconfirmed);
     }
+
+    /// <summary>What to do when a reloaded unpacked extension stays older than this build (2.35.11).</summary>
+    internal const string OtherFolderHint =
+        "Chrome reloads this unpacked extension from another folder, which holds an older version. In chrome://extensions, " +
+        "click \"Load unpacked\" and choose the extension folder of this installation (%LOCALAPPDATA%\\NexusBrowser\\app\\extension " +
+        "for a standard install): the same ID replaces the old entry and keeps its settings. NexusBrowser cannot open " +
+        "chrome:// pages. An AI with desktop control (NexusWindows, or its own computer use) can do it; otherwise give the user these steps.";
 
     /// <summary>IDs of the tabs an agent owns (live or orphaned session) in a list-tabs answer.</summary>
     private static int[] AgentTabs(JsonNode? tabs) =>

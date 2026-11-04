@@ -124,6 +124,26 @@ public sealed class ExtensionRefreshTests
     }
 
     [Fact]
+    public async Task AnUnpackedExtensionStillOlderAfterItsReloadNamesTheFolderToLoad()
+    {
+        // 04/11/2026: Chrome loaded the extension from an old checkout; every reload brought back 2.35.4.
+        var bridge = new Bridge((action, _) => action switch
+        {
+            "list-tabs" => new JsonArray(),
+            "ping" => Ping("2.35.4", ["tab-ownership"]),
+            _ => new JsonObject { ["reloading"] = true },
+        });
+        var (code, report) = await Run(bridge);
+        Assert.Equal(ExtensionRefresh.Stale, code);
+        Assert.Equal("unpacked-extension-loaded-from-another-folder", (string?)report["reason"]);
+        Assert.Equal("2.35.4", (string?)report["version"]);
+        string hint = (string)report["hint"]!;
+        Assert.Contains("Load unpacked", hint);
+        Assert.Contains(@"NexusBrowser\app\extension", hint);
+        Assert.Contains("NexusWindows", hint);
+    }
+
+    [Fact]
     public async Task ForceNeverOverridesAnOlderExtensionProtectingALiveSessionOrARunningCommand()
     {
         // The 2.35.7 extension refuses on its own while a live session drives a tab or a command runs: nothing reloads.

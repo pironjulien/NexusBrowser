@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.11] - 2026-11-04
+
+### Fixed
+- An unpacked extension that Chrome reloads from another folder (an old checkout, a copy no longer kept up to date) is
+  now named as such. Every reload brought back the same older version, and the installer only answered
+  `extension-refresh-unconfirmed`. `--refresh-extension` now reports `unpacked-extension-loaded-from-another-folder`
+  with the loaded version and what to do: "Load unpacked" in `chrome://extensions` with this installation's
+  `extension` folder (same ID, settings kept).
+- The skills (Claude, Codex, Antigravity) say who can do it, since no extension may open `chrome://` pages:
+  NexusWindows, or the agent's own desktop control; otherwise the agent gives the user the three clicks.
+
 ## [2.35.10] - 2026-11-04
 
 ### Fixed
