@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.6] - 2026-11-04
+
+### Fixed
+- `browser_screenshot` and `browser_vision_inspect` no longer return a silent all-white image when a click has just
+  reloaded the page: a tab still navigating or loading is awaited until the load ends (5 s at most), then the capture
+  waits for the next drawn frame. A single-color image taken before the page's first contentful paint is taken again
+  as soon as that paint happens, within the same 5 s.
+- When the page is still not ready, the image is returned with `page_loading: true` or `blank: true` (single-color
+  image) and a note on what to do next, instead of a blank image that looks normal.
 ## [2.35.5] - 2026-11-04
 
 ### Changed

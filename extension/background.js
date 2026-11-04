@@ -5245,12 +5245,132 @@ async function withSensitiveFieldsMasked(tabId, work) {
     }
 }
 
+// Attente bornée d'une page prête avant une capture (navigation, document, première image) : une seule échéance
+// partagée par toutes les étapes d'une même capture, jamais une pause fixe.
+const CAPTURE_SETTLE_MS = 5000;
+
+/**
+ * Avant une capture : une page en cours de navigation ou de chargement (onglet "loading", URL en attente, document
+ * "loading" ou "interactive") est attendue jusqu'à la fin du chargement ou l'échéance. Sans cela, un clic qui
+ * recharge la page suivi d'une capture donnait une image toute blanche (Partner Center, mesuré le 04/11).
+ * Renvoie { deadline, loading } : loading vrai si la page chargeait encore à l'échéance.
+ */
+async function settleBeforeCapture(tabId) {
+    const deadline = Date.now() + CAPTURE_SETTLE_MS;
+    for (;;) {
+        let loading;
+        try {
+            const tab = await chrome.tabs.get(tabId);
+            loading = !!tab?.pendingUrl || tab?.status === "loading";
+            if (!loading) {
+                const state = await evaluateIsolated({ tabId, code: "document.readyState" });
+                loading = state?.data === "loading" || state?.data === "interactive";
+            }
+        } catch (_) {
+            // Contexte détruit par la navigation en cours : la nouvelle page n'est pas encore là.
+            loading = true;
+        }
+        if (!loading) return { deadline, loading: false };
+        // Boîte de dialogue ouverte : rien à attendre, la capture la signale (champs sensibles non masquables).
+        if (pendingDialogs.has(tabId) || Date.now() >= deadline) return { deadline, loading: !pendingDialogs.has(tabId) };
+        await sleepMs(100);
+    }
+}
+
+/**
+ * Dans la page (monde isolé) : promesse résolue une fois l'image suivante dessinée (deux requestAnimationFrame : la
+ * première ouvre l'image, la seconde suit son rendu), ou à l'échéance. paint : attend d'abord la première peinture de
+ * contenu (first-contentful-paint) si elle n'a pas encore eu lieu, et résout "painted" quand elle arrive.
+ */
+function nextFrameScript(ms, paint) {
+    return `new Promise((resolve) => {
+        let done = false, observer = null;
+        const finish = (value) => {
+            if (done) return;
+            done = true;
+            if (timer !== null) clearTimeout(timer);
+            try { if (observer) observer.disconnect(); } catch (_) {}
+            resolve(value);
+        };
+        const timer = setTimeout(() => finish("timeout"), ${Math.max(0, Math.round(ms))});
+        const frame = (value) => {
+            if (typeof requestAnimationFrame !== "function") return finish(value);
+            requestAnimationFrame(() => requestAnimationFrame(() => finish(value)));
+        };
+        if (!${paint ? "true" : "false"}) return frame("frame");
+        const painted = (entries) => entries.some(e => e.name === "first-contentful-paint");
+        try {
+            if (painted(performance.getEntriesByType("paint"))) return finish("already");
+            observer = new PerformanceObserver((list) => { if (painted(list.getEntries())) frame("painted"); });
+            observer.observe({ type: "paint", buffered: true });
+        } catch (_) {
+            finish("unsupported");
+        }
+    })`;
+}
+
+// Une image se dessine en quelques dizaines de ms quand le rendu tourne : au-delà d'une seconde sans image (rendu
+// arrêté par Chrome), la capture part quand même, sans consommer toute l'échéance.
+const CAPTURE_FRAME_MAX_MS = 1000;
+
+async function waitInPage(tabId, settle, paint) {
+    const left = settle.deadline - Date.now();
+    const remaining = paint ? left : Math.min(left, CAPTURE_FRAME_MAX_MS);
+    if (remaining <= 0) return "timeout";
+    try {
+        const res = await evaluateIsolated({ tabId, code: nextFrameScript(remaining, paint) });
+        return typeof res?.data === "string" ? res.data : "unknown";
+    } catch (_) {
+        return "unknown";
+    }
+}
+
+/**
+ * Image d'une seule couleur (tous les pixels identiques) : vrai ou faux ; null quand l'image ne peut pas être lue
+ * (pas d'OffscreenCanvas, image illisible).
+ */
+async function isUniformImage(base64, mimeType) {
+    if (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined" || !base64) return null;
+    try {
+        const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: mimeType || "image/png" }));
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(bitmap, 0, 0);
+        const pixels = ctx.getImageData(0, 0, bitmap.width, bitmap.height).data;
+        const words = new Uint32Array(pixels.buffer, pixels.byteOffset, Math.floor(pixels.byteLength / 4));
+        for (let i = 1; i < words.length; i++) if (words[i] !== words[0]) return false;
+        return true;
+    } catch (_) {
+        return null;
+    }
+}
+
+/** Indicateurs d'une capture prise sur une page pas prête, avec la marche à suivre : jamais un blanc silencieux. */
+function captureReadiness(settle, shot) {
+    const out = {};
+    const notes = [];
+    if (settle?.loading) {
+        out.page_loading = true;
+        notes.push(`The page was still loading after ${CAPTURE_SETTLE_MS / 1000} s: the image may be incomplete (browser_wait_load, then capture again).`);
+    }
+    if (shot?.blank) {
+        out.blank = true;
+        notes.push("The image is a single solid color: the page shows nothing yet or is blank (browser_wait_for the expected content, then capture again).");
+    }
+    if (notes.length) out.note = notes.join(" ");
+    return out;
+}
+
 /**
  * Page.captureScreenshot d'un onglet de fond, sans le mettre au premier plan. Onglet caché : après un défilement ou
  * un changement, Chrome ne dessine plus d'image et la capture attendait 12 à 20 s (mesuré le 18/10 : 11 gels sur 20).
  * Un flux d'images (Page.startScreencast, minuscule, jamais lu) tenu le temps de la capture garde le rendu actif.
+ * settle (settleBeforeCapture) : capture prise après une image dessinée (le flux garde le rendu actif pendant
+ * l'attente) ; une image d'une seule couleur prise avant la première peinture de contenu est reprise dès celle-ci,
+ * dans l'échéance ; shot.blank dit une image restée d'une seule couleur.
  */
-async function captureScreenshot(target, params) {
+async function captureScreenshot(target, params, settle = null) {
     let screencast = false;
     const key = captureTargetKey(target);
     captureScreencasts.add(key);
@@ -5263,7 +5383,16 @@ async function captureScreenshot(target, params) {
         // Flux indisponible : capture directe (onglet visible, ou Chrome qui refuse le flux).
     }
     try {
-        return await chrome.debugger.sendCommand(target, "Page.captureScreenshot", params);
+        if (!settle) return await chrome.debugger.sendCommand(target, "Page.captureScreenshot", params);
+        await waitInPage(target.tabId, settle, false);
+        let shot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", params);
+        const mimeType = SCREENSHOT_FORMATS[String(params?.format || "png")];
+        let uniform = await isUniformImage(shot?.data, mimeType);
+        if (uniform && await waitInPage(target.tabId, settle, true) === "painted") {
+            shot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", params);
+            uniform = await isUniformImage(shot?.data, mimeType);
+        }
+        return uniform ? { ...shot, blank: true } : shot;
     } finally {
         if (screencast) await chrome.debugger.sendCommand(target, "Page.stopScreencast").catch(() => {});
         captureScreencasts.delete(key);
@@ -5278,7 +5407,8 @@ async function takeScreenshot(params = {}) {
     const cdpFormat = format === "jpg" ? "jpeg" : format;
 
     const target = await ensureDebugger(tabId);
-    
+    const settle = await settleBeforeCapture(tabId);
+
     if (params.region) {
         // Zone de la vue (pixels CSS de la vue) agrandie : clip.scale (1/4 à 4) choisi par le serveur pour que l'image
         // tienne dans les plafonds de la règle commune ; lire un petit texte sans envoyer tout l'écran en grand.
@@ -5289,7 +5419,7 @@ async function takeScreenshot(params = {}) {
         }
         const scale = Math.min(4, Math.max(0.25, Number(params.scale) || 1));
         const clip = { ...(await pageClip(target, { x: values[0], y: values[1], width: values[2], height: values[3] })), scale };
-        const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, { format: cdpFormat, clip }));
+        const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, { format: cdpFormat, clip }, settle));
         let zoom = 1;
         try {
             const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
@@ -5297,7 +5427,7 @@ async function takeScreenshot(params = {}) {
         } catch (_) {}
         const ratio = await evaluateIsolated({ tabId, code: "window.devicePixelRatio" });
         const devicePixelRatio = Number(ratio?.data) > 0 ? Number(ratio.data) : null;
-        return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip, zoom, devicePixelRatio } };
+        return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip, zoom, devicePixelRatio, ...captureReadiness(settle, shot) } };
     }
 
     if (params.selector) {
@@ -5414,7 +5544,7 @@ async function takeScreenshot(params = {}) {
                     format: cdpFormat,
                     clip,
                     captureBeyondViewport: !inView
-                }));
+                }, settle));
             } finally {
                 if (restoreScrollbar) await restoreScrollbar();
             }
@@ -5425,7 +5555,7 @@ async function takeScreenshot(params = {}) {
                 if (Number(metrics?.cssVisualViewport?.zoom) > 0) zoom = Number(metrics.cssVisualViewport.zoom);
             } catch (_) {}
             const devicePixelRatio = Number(rect.devicePixelRatio) > 0 ? Number(rect.devicePixelRatio) : null;
-            return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip, zoom, devicePixelRatio } };
+            return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip, zoom, devicePixelRatio, ...captureReadiness(settle, shot) } };
         } else {
             return { error: "Element not found for screenshot selector: " + params.selector };
         }
@@ -5443,19 +5573,20 @@ async function takeScreenshot(params = {}) {
         const clip = { x: 0, y: 0, width: Math.round(width * zoom), height: Math.round(height * zoom), scale: 1 };
         const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, {
             format: cdpFormat, clip, captureBeyondViewport: true
-        }));
+        }, settle));
         const ratio = await evaluateIsolated({ tabId, code: "window.devicePixelRatio" });
         const devicePixelRatio = Number(ratio?.data) > 0 ? Number(ratio.data) : null;
         return { data: {
             dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip, zoom, devicePixelRatio,
-            fullPage: { width, height, truncated: height < fullHeight || width < Math.ceil(Number(size.width) || 0) }
+            fullPage: { width, height, truncated: height < fullHeight || width < Math.ceil(Number(size.width) || 0) },
+            ...captureReadiness(settle, shot)
         } };
     }
 
-    const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, { format: cdpFormat }));
+    const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, { format: cdpFormat }, settle));
     const ratio = await evaluateIsolated({ tabId, code: "window.devicePixelRatio" });
     const devicePixelRatio = Number(ratio?.data) > 0 ? Number(ratio.data) : null;
-    return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, devicePixelRatio } };
+    return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, devicePixelRatio, ...captureReadiness(settle, shot) } };
 }
 
 /**
@@ -5701,6 +5832,8 @@ async function visionInspect(params = {}) {
     let tabId = await resolveTargetTab(params);
 
     const target = await ensureDebugger(tabId);
+    // Page en cours de chargement : attendue avant de numéroter ses éléments et de la capturer (settleBeforeCapture).
+    const settle = await settleBeforeCapture(tabId);
 
     // 1. Inject SoM markers and register elements in page context
     markRoots.delete(tabId);  // marqueurs de vision : cadre principal seulement
@@ -5784,7 +5917,7 @@ async function visionInspect(params = {}) {
     // 2. Capture telle que la page s'affiche : aucun badge n'est ajouté au document (une page le verrait).
     const shot = await withSensitiveFieldsMasked(tabId, () => captureScreenshot(target, {
         format: "png"
-    }));
+    }, settle));
     const markers = markerData?.data?.markers || [];
     const ratio = Number(markerData?.data?.devicePixelRatio) > 0 ? Number(markerData.data.devicePixelRatio) : 1;
     const image = await drawSomBadges(shot.data, markers, ratio);
@@ -5796,7 +5929,8 @@ async function visionInspect(params = {}) {
             markerCount: markers.length,
             markers,
             devicePixelRatio: Number(markerData?.data?.devicePixelRatio) > 0 ? Number(markerData.data.devicePixelRatio) : null,
-            screenshotDataUrl: `data:image/png;base64,${image}`
+            screenshotDataUrl: `data:image/png;base64,${image}`,
+            ...captureReadiness(settle, shot)
         }
     };
 }

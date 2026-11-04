@@ -117,7 +117,9 @@ public sealed partial class McpServer
             previous.Fingerprint.Length == fingerprint.Length && !previous.Fingerprint.Where((b, i) => Math.Abs(b - fingerprint[i]) > 2).Any())
         {
             meta["unchanged"] = true;
-            data["note"] = "Image unchanged since the last one sent for this tab and target: not attached again (force=True to resend it).";
+            // Une consigne de l'extension (page en chargement, image d'une seule couleur) est gardée devant.
+            const string unchanged = "Image unchanged since the last one sent for this tab and target: not attached again (force=True to resend it).";
+            data["note"] = GetString(data, "note") is { Length: > 0 } earlier ? $"{earlier} {unchanged}" : unchanged;
         }
         else
         {

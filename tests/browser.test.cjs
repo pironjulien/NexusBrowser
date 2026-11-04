@@ -396,7 +396,9 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
     const ctx = vm.createContext({
         chrome, console, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout, setInterval, clearInterval,
         WebSocket: MockWebSocket, URL, atob, btoa, TextDecoder, TextEncoder, Uint8Array, crypto: globalThis.crypto,
-        ...(clock ? {Date: clock.Date} : {})
+        ...(clock ? {Date: clock.Date} : {}),
+        // API du service worker absentes de Node (OffscreenCanvas, createImageBitmap, Blob) fournies par un test.
+        ...(chromeOverrides.globals || {})
     });
     // importScripts du service worker : fichiers de l'extension chargés dans le même contexte.
     ctx.importScripts = (...files) => {
@@ -902,6 +904,119 @@ test('capture : flux refusé par Chrome -> capture directe ; capture en échec -
     }});
     await failing.run('screenshot', {tabId: 1}).catch(() => {});
     assert.equal(failing.calls.filter(c => /Screencast|captureScreenshot/.test(c.method)).at(-1).method, 'Page.stopScreencast');
+});
+
+// Décodage d'image du service worker simulé : une capture "white" est d'une seule couleur, toute autre est variée.
+function imageDecoder() {
+    return {
+        Blob,
+        createImageBitmap: async (blob) => ({width: 4, height: 2, kind: await blob.text()}),
+        OffscreenCanvas: class {
+            getContext() {
+                let bitmap = null;
+                return {
+                    drawImage(b) { bitmap = b; },
+                    getImageData: (x, y, w, h) => {
+                        const data = new Uint8ClampedArray(w * h * 4).fill(255);
+                        if (bitmap.kind !== 'white') data[5] = 0;
+                        return {data};
+                    }
+                };
+            }
+        }
+    };
+}
+
+test('capture pendant une navigation : page attendue jusqu\'à la fin du chargement, jamais prise en cours (Partner Center, 04/11)', async () => {
+    // Clic qui recharge la page : l'onglet navigue 250 ms, puis le nouveau document est "interactive" jusqu'à 400 ms.
+    const started = Date.now();
+    const elapsed = () => Date.now() - started;
+    const order = [];
+    const page = {
+        document: {get readyState() { return elapsed() < 400 ? 'interactive' : 'complete'; }, querySelectorAll: () => []},
+        window: {devicePixelRatio: 1}
+    };
+    const h = harness(page, {
+        tabs: {get: async (id) => elapsed() < 250
+            ? {id, url: 'https://x.invalid/', pendingUrl: 'https://x.invalid/next', status: 'loading', windowId: 10}
+            : {id, url: 'https://x.invalid/next', status: 'complete', windowId: 10}},
+        debuggerSendCommand: async (target, method) => {
+            if (method === 'Page.captureScreenshot') order.push({at: elapsed(), state: page.document.readyState});
+        }
+    });
+    const res = await h.run('screenshot', {tabId: 1});
+    assert.equal(res.error, undefined);
+    assert.equal(order.length, 1);
+    assert.equal(order[0].state, 'complete');
+    assert.ok(order[0].at >= 400 && order[0].at < 2000, `capture at ${order[0].at} ms`);
+    assert.equal(res.data.page_loading, undefined);
+    assert.equal(res.data.blank, undefined);
+    assert.equal(res.data.note, undefined);
+});
+
+test('capture : page encore en chargement à l\'échéance -> image rendue avec page_loading et une consigne, pas de blanc silencieux', async () => {
+    const h = harness({document: {readyState: 'loading', querySelectorAll: () => []}, window: {}}, {
+        virtualTime: true,
+        tabs: {get: async (id) => ({id, url: 'https://x.invalid/', status: 'loading', windowId: 10})}
+    });
+    const res = await h.run('screenshot', {tabId: 1});
+    assert.match(res.data.dataUrl, /^data:image\/png;base64,/);
+    assert.equal(res.data.page_loading, true);
+    assert.match(res.data.note, /still loading after 5 s.*browser_wait_load/);
+    assert.equal(h.calls.filter(c => c.method === 'Page.captureScreenshot').length, 1);
+});
+
+test('capture d\'une seule couleur avant la première peinture : reprise dès la peinture, sans pause fixe', async () => {
+    let shots = 0;
+    let fcp = false;
+    const page = {
+        document: {readyState: 'complete', querySelectorAll: () => []},
+        window: {devicePixelRatio: 1},
+        setTimeout, clearTimeout,
+        requestAnimationFrame: (fn) => setImmediate(fn),
+        performance: {getEntriesByType: () => fcp ? [{name: 'first-contentful-paint'}] : []},
+        PerformanceObserver: class {
+            constructor(cb) { this.cb = cb; }
+            observe() { setImmediate(() => { fcp = true; this.cb({getEntries: () => [{name: 'first-contentful-paint'}]}); }); }
+            disconnect() {}
+        }
+    };
+    const h = harness(page, {
+        globals: imageDecoder(),
+        debuggerSendCommand: async (target, method) => {
+            if (method === 'Page.captureScreenshot') return {data: btoa(++shots === 1 ? 'white' : 'content')};
+        }
+    });
+    const started = Date.now();
+    const res = await h.run('screenshot', {tabId: 1});
+    assert.equal(shots, 2);
+    assert.equal(atob(res.data.dataUrl.split(',')[1]), 'content');
+    assert.equal(res.data.blank, undefined);
+    assert.ok(Date.now() - started < 2000);
+});
+
+test('page réellement vide (peinture déjà faite, image d\'une seule couleur) : blank=true avec consigne, une seule capture', async () => {
+    const page = {
+        document: {readyState: 'complete', querySelectorAll: () => []},
+        window: {devicePixelRatio: 1, location: {href: 'https://x.invalid/'}},
+        setTimeout, clearTimeout,
+        requestAnimationFrame: (fn) => setImmediate(fn),
+        performance: {getEntriesByType: () => [{name: 'first-contentful-paint'}]},
+        PerformanceObserver: class { observe() {} disconnect() {} }
+    };
+    const h = harness(page, {
+        globals: imageDecoder(),
+        debuggerSendCommand: async (target, method) => {
+            if (method === 'Page.captureScreenshot') return {data: btoa('white')};
+        }
+    });
+    for (const action of ['screenshot', 'vision_inspect']) {
+        h.calls.length = 0;
+        const res = await h.run(action, {tabId: 1});
+        assert.equal(res.data.blank, true, action);
+        assert.match(res.data.note, /single solid color/);
+        assert.equal(h.calls.filter(c => c.method === 'Page.captureScreenshot').length, 1);
+    }
 });
 
 test('captures répétées : les images du flux sont acquittées sur leur propre cible, sans contenu conservé', async () => {

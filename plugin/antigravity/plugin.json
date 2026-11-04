@@ -2,7 +2,7 @@
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "nexus-browser",
   "displayName": "NexusBrowser",
-  "version": "2.35.5",
+  "version": "2.35.6",
   "description": "Your real Chrome, with your sessions, in background tabs: forms, network, dialogs, cross-origin iframes, exports and downloads, for Antigravity on Windows.",
   "logo": "logo.png",
   "suggestedPrompts": [
