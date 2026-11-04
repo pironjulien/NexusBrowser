@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.14] - 2026-11-04
+
+### Changed
+- One icon, the julienpiron.fr medallion: at 32 px and less (Chrome's toolbar, the spinning logo, the site's favicon)
+  it is the same medallion, silver ring with its circuits, knot and flag, with only the unreadable "JULIENPIRON.FR"
+  lettering erased. The 2.35.8 toolbar variant (thinner plain ring, enlarged pictogram) is gone. The 48 and 128 px
+  icons and the Store icon are unchanged.
+
 ## [2.35.13] - 2026-11-04
 
 ### Fixed
