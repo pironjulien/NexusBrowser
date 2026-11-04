@@ -38,7 +38,7 @@ New-Item -ItemType Directory -Force $localRoot | Out-Null
 $journal = Join-Path $localRoot 'install.log'
 function Write-Journal([string]$Text) {
     Write-Host $Text
-    [IO.File]::AppendAllText($journal, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' ' + $Text + [Environment]::NewLine, $utf8)
+    [IO.File]::AppendAllText($script:journal, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' ' + $Text + [Environment]::NewLine, $utf8)
 }
 $version = (Get-Content (Join-Path $sourceRoot 'VERSION') -Raw).Trim()
 $previousExe = $nativeExe

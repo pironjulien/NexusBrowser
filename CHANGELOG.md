@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.13] - 2026-11-04
+
+### Fixed
+- The task rename steps of an update are written to `install.log` again: the journal callback's parameter hid the
+  journal path (PowerShell names are case-insensitive), so 2.35.12 wrote them to a file named after the callback in
+  the current folder. A test runs the callback inside `Move-ProductTasks` and checks the journal.
+
 ## [2.35.12] - 2026-11-04
 
 ### Changed

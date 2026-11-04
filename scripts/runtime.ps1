@@ -63,7 +63,7 @@ function Get-EngineProcesses([string]$Pattern) {
 
 # Applies Get-TaskMigration on this PC. Unregistering a task leaves its running instance alive (a busy bridge or
 # daemon keeps serving), so a rename never stops a process; Test-TaskStart prevents a second instance.
-function Move-ProductTasks([string]$EngineVersion, [scriptblock]$Journal) {
+function Move-ProductTasks([string]$EngineVersion, [scriptblock]$OnStep) {
     $names = @($taskNames.Values) + @($legacyTaskNames.Values)
     $existing = @(Get-ScheduledTask -TaskName $names -ErrorAction SilentlyContinue | ForEach-Object { $_.TaskName })
     foreach ($step in @(Get-TaskMigration $EngineVersion $existing)) {
@@ -72,7 +72,7 @@ function Move-ProductTasks([string]$EngineVersion, [scriptblock]$Journal) {
             Register-ScheduledTask -TaskName $step.To -Xml $xml | Out-Null
         }
         Unregister-ScheduledTask -TaskName $step.From -Confirm:$false
-        & $Journal $(if ($step.Step -eq 'Rename') { "Task '$($step.From)' renamed '$($step.To)'." } else { "Task '$($step.From)' removed ('$($step.To)' kept)." })
+        & $OnStep $(if ($step.Step -eq 'Rename') { "Task '$($step.From)' renamed '$($step.To)'." } else { "Task '$($step.From)' removed ('$($step.To)' kept)." })
     }
 }
 

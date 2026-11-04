@@ -267,6 +267,40 @@ public sealed class ScriptTests : IDisposable
         ], Shells.Lines(stdout));
     }
 
+    /// <summary>The installer's journal callback runs inside Move-ProductTasks: its step lines reach install.log, never a
+    /// file named after the callback's text (PowerShell names are case-insensitive, so a parameter called $Journal once
+    /// hid the script's $journal path).</summary>
+    [Theory]
+    [InlineData(Shells.WindowsPowerShell)]
+    [InlineData(Shells.Pwsh)]
+    public async Task TaskMigrationStepsAreWrittenToTheInstallJournal(string shell)
+    {
+        string probe = _dir["journal-probe.ps1"];
+        string work = Path.GetDirectoryName(probe)!;
+        File.WriteAllText(probe,
+            "$ErrorActionPreference = 'Stop'\n$t = $null; $e = $null\n" +
+            $"$runtime = [System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("scripts", "runtime.ps1"))}, [ref]$t, [ref]$e)\n" +
+            $"$installer = [System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("scripts", "install-native.ps1"))}, [ref]$t, [ref]$e)\n" +
+            "$parts = @($runtime.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Move-ProductTasks' }, $true) | ForEach-Object { $_.Extent.Text })\n" +
+            "$parts += @($installer.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Write-Journal' }, $true) | ForEach-Object { $_.Extent.Text })\n" +
+            "function Get-ScheduledTask { @([pscustomobject]@{ TaskName = 'Nexus Browser Bridge' }) }\n" +
+            "function Get-TaskMigration { @([pscustomobject]@{ Step = 'Rename'; Role = 'Bridge'; From = 'Nexus Browser Bridge'; To = 'NexusBrowser Bridge' }) }\n" +
+            "function Export-ScheduledTask { '<Task />' }\nfunction Register-ScheduledTask { }\nfunction Unregister-ScheduledTask { }\n" +
+            "$taskNames = @{}; $legacyTaskNames = @{}\n" +
+            "$fn = Join-Path (Split-Path $PSCommandPath) 'journal-functions.ps1'; [IO.File]::WriteAllText($fn, ($parts -join \"`n\")); . $fn\n" +
+            "$utf8 = New-Object Text.UTF8Encoding $false\n" +
+            "$journal = Join-Path (Split-Path $PSCommandPath) 'install.log'\n" +
+            "Set-Location (Split-Path $PSCommandPath)\n" +
+            "Move-ProductTasks '2.35.12' { param($Text) Write-Journal $Text } 6>$null | Out-Null\n" +
+            "(Get-Content -LiteralPath $journal -Raw).Trim().Substring(20)\n" +
+            "@(Get-ChildItem -LiteralPath (Split-Path $PSCommandPath) -File | Where-Object Name -like '*param*').Count\n",
+            Encoding.ASCII);
+        var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
+        Assert.True(code == 0, stderr);
+        Assert.Equal(["Task 'Nexus Browser Bridge' renamed 'NexusBrowser Bridge'.", "0"], Shells.Lines(stdout));
+        Assert.True(Directory.Exists(work));
+    }
+
     /// <summary>Task names before 2.35.12 ("Nexus Browser ...") are renamed to the ones the installed engine calls, or
     /// removed when that name exists; a rollback to an older engine renames them back; a task never starts beside a
     /// running instance of its role (a bridge or daemon kept from its former name). Pure functions, no real task.</summary>
