@@ -25,6 +25,8 @@ public sealed partial class McpServer : IDisposable
     public const string ServerName = "nexus-browser";
     public const string DefaultProtocolVersion = "2025-06-18";
     public const string StatelessProtocolVersion = "2026-07-28";
+    // Scheduled task that starts the bridge on demand (scripts\runtime.ps1, $taskNames).
+    internal const string BridgeTaskName = "NexusBrowser Bridge";
     public const double HeartbeatIntervalSeconds = 60.0 / 1.618;
     public const double TransportMarginSeconds = 5.0;
     public const double MaxTransportSeconds = 115.0;
@@ -2427,7 +2429,7 @@ public sealed partial class McpServer : IDisposable
             {
                 UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
             };
-            foreach (string value in new[] { "/Run", "/TN", "Nexus Browser Bridge" }) start.ArgumentList.Add(value);
+            foreach (string value in new[] { "/Run", "/TN", BridgeTaskName }) start.ArgumentList.Add(value);
             using var task = Process.Start(start);
             if (task is null) return false;
             using var startTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);

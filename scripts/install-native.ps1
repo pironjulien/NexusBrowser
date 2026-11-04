@@ -2,12 +2,12 @@
 #  - engine: the prebuilt one of a release (engine\, from get.ps1), else built here with the .NET 10 SDK
 #    (scripts\build-native.ps1, outputs in ~\.nexus\build\nexus-browser); installed once per build in
 #    %LOCALAPPDATA%\NexusBrowser\versions\<fingerprint> (never overwritten while it runs), named by current.json
-#  - native host com.nexus.browser_auth declared to Chrome (HKCU), task "Nexus Browser Bridge" without trigger (the
+#  - native host com.nexus.browser_auth declared to Chrome (HKCU), task "NexusBrowser Bridge" without trigger (the
 #    bridge starts on demand: first agent call, schtasks /Run)
 #  - shared MCP daemon (127.0.0.1:16182, bearer token): on a Nexus workstation declared to the daemon supervisor
 #    (~\.nexus\daemons\specs\nexus-browser.json, key exe, restart_request); a new build asks the running daemon to
 #    restart once every valid HTTP session and response finishes. Legacy daemons defer until natural exit.
-#    Public install (-Register) without that supervisor: task "Nexus Browser MCP" at
+#    Public install (-Register) without that supervisor: task "NexusBrowser MCP" at
 #    logon, token in the user variable NEXUS_MCP_TOKEN (created once, shared with the other Nexus products)
 #  - Antigravity (Nexus workstation): plugin nexus-browser pointing to the shared daemon
 #  - -Register (public install, get.ps1): server declared to the AI clients found (NexusBrowser.exe --register), then a
@@ -43,10 +43,6 @@ function Write-Journal([string]$Text) {
 $version = (Get-Content (Join-Path $sourceRoot 'VERSION') -Raw).Trim()
 $previousExe = $nativeExe
 $pack = $env:NEXUS_PACK -eq '1'
-$previousBridgeTask = Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue
-$keepBridgeDisabled = $previousBridgeTask -and $previousBridgeTask.State -eq 'Disabled'
-$previousUpdateTask = Get-ScheduledTask -TaskName $updateTaskName -ErrorAction SilentlyContinue
-$keepUpdateDisabled = $previousUpdateTask -and $previousUpdateTask.State -eq 'Disabled'
 
 # --- 1. Engine: one immutable folder per build.
 $prebuilt = Join-Path $sourceRoot 'engine'
@@ -76,6 +72,15 @@ if ((Get-BuildFingerprint $versionDir) -cne $fingerprint) {
 $controlExe = if ($controlEngine) { $controlEngine } else { $exe }
 $check = Invoke-Native $exe @('--version') 30
 if ($check.Code -or $check.Output -ne $version) { throw "Installed engine answers '$($check.Output)', expected $version." }
+# The task names this engine calls ("NexusBrowser ..." since 2.35.12); the other set's tasks are renamed, keeping their
+# settings and disabled state, or removed. A rollback to an older engine renames them back.
+$taskSet = (Get-TaskNameSets $version).Keep
+$bridgeTaskName = $taskSet.Bridge; $daemonTaskName = $taskSet.Daemon; $updateTaskName = $taskSet.Update
+Move-ProductTasks $version { param($Text) Write-Journal $Text }
+$previousBridgeTask = Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue
+$keepBridgeDisabled = $previousBridgeTask -and $previousBridgeTask.State -eq 'Disabled'
+$previousUpdateTask = Get-ScheduledTask -TaskName $updateTaskName -ErrorAction SilentlyContinue
+$keepUpdateDisabled = $previousUpdateTask -and $previousUpdateTask.State -eq 'Disabled'
 # Where the plugin, skill and update script are read from (public update, client registration).
 [IO.File]::WriteAllText((Join-Path $versionDir 'installation.json'), (@{ repository_root = $sourceRoot } | ConvertTo-Json), $utf8)
 
@@ -91,9 +96,6 @@ if (-not $SkipLaunch -and (Test-Path -LiteralPath $tokenFile)) {
 & (Join-Path $PSScriptRoot 'installer-hote-natif.ps1') -Exe $exe -ConfigurationRoot $sourceRoot
 
 # --- 3. Bridge task, started on demand (no trigger).
-function Get-EngineProcesses([string]$Pattern) {
-    @(Get-CimInstance Win32_Process -Filter "Name='NexusBrowser.exe'" | Where-Object { $_.CommandLine -match $Pattern })
-}
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
 $bridgeArguments = "--bridge --token-file `"$tokenFile`" --log-file `"$(Join-Path $localRoot 'bridge.log')`""
@@ -228,7 +230,9 @@ if ($token) {
         Register-ScheduledTask -TaskName $daemonTaskName -Action $daemonAction -Trigger $trigger -Principal $principal -Settings $daemonSettings `
             -Description "NexusBrowser MCP daemon (127.0.0.1:$port) shared by the AI apps, bearer token NEXUS_MCP_TOKEN." | Out-Null
     }
-    if (-not $SkipLaunch -and (Get-ScheduledTask -TaskName $daemonTaskName).State -notin @('Running', 'Disabled')) { Start-ScheduledTask -TaskName $daemonTaskName }
+    if (-not $SkipLaunch -and (Test-TaskStart (Get-ScheduledTask -TaskName $daemonTaskName).State (Get-EngineProcesses "--http\s+$port").Count)) {
+        Start-ScheduledTask -TaskName $daemonTaskName
+    }
     Write-Host "Task '$daemonTaskName' -> $exe --http $port"
 } elseif (-not $supervised) {
     Write-Warning 'No Nexus daemon supervisor and no -Register: shared daemon not installed (stdio servers still work).'
@@ -294,7 +298,10 @@ if (-not $SkipTests -and -not $UpdateOnly) {
 
 # --- 9. Bridge, extension and daemon checked.
 if (-not $SkipLaunch) {
-    if ((Get-ScheduledTask -TaskName $bridgeTaskName).State -notin @('Running', 'Disabled')) { Start-ScheduledTask -TaskName $bridgeTaskName }
+    # One bridge: a kept instance (deferred, or started by the task's former name) is not doubled.
+    if (Test-TaskStart (Get-ScheduledTask -TaskName $bridgeTaskName).State (Get-EngineProcesses '--bridge(\s|$)').Count) {
+        Start-ScheduledTask -TaskName $bridgeTaskName
+    }
     $wait = if ($pack) { 0 } else { 30 }
     if ($bridgeDeferred) { Write-Warning 'Bridge upgrade deferred: running instance kept until its next natural exit; the extension refresh has its own ownership check.' }
     $refresh = Invoke-Native $controlExe @('--refresh-extension', '--wait-ready', "$wait", '--source-root', $sourceRoot) 90

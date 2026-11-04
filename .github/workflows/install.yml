@@ -91,18 +91,35 @@ jobs:
       - name: Self-update contract (task and state of the bridge)
         shell: pwsh
         run: |
-          $task = Get-ScheduledTask -TaskName 'Nexus Browser Update' -ErrorAction SilentlyContinue
+          $task = Get-ScheduledTask -TaskName 'NexusBrowser Update' -ErrorAction SilentlyContinue
           if (-not $task -or $task.Actions.Execute -ne 'conhost.exe' -or $task.Actions.Arguments -notmatch 'self-update\.ps1') { throw 'update task missing or not native' }
           $token = (Get-Content (Join-Path $HOME '.nexus\nexus-browser\bridge-token') -Raw).Trim()
           $state = Invoke-RestMethod -Uri 'http://127.0.0.1:9225/api/update' -Headers @{ 'X-Nexus-Browser-Token' = $token }
           Write-Host ($state | ConvertTo-Json -Compress)
           if ($state.product -ne 'browser' -or -not $state.version) { throw 'no update state' }
-      - name: Running the installer again changes nothing (update path)
+      - name: Running the installer again changes nothing (update path, tasks named as before 2.35.12)
         shell: powershell
         run: |
+          # An install before 2.35.12: the same tasks under 'Nexus Browser ...', the bridge and daemon still running
+          # (started by those tasks), the update task disabled by the user.
+          $renamed = [ordered]@{ 'NexusBrowser Bridge' = 'Nexus Browser Bridge'; 'NexusBrowser MCP' = 'Nexus Browser MCP'; 'NexusBrowser Update' = 'Nexus Browser Update' }
+          foreach ($name in @($renamed.Keys)) {
+            Register-ScheduledTask -TaskName $renamed[$name] -Xml (Export-ScheduledTask -TaskName $name) | Out-Null
+            Unregister-ScheduledTask -TaskName $name -Confirm:$false
+          }
+          Disable-ScheduledTask -TaskName 'Nexus Browser Update' | Out-Null
           $env:NEXUS_BROWSER_SOURCE = (Resolve-Path dist\NexusBrowser-win-x64.zip).Path
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (Get-ScheduledTask -TaskName @($renamed.Values) -ErrorAction SilentlyContinue) { throw 'a task kept its former name' }
+          foreach ($name in @($renamed.Keys)) { if (-not (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)) { throw "task '$name' missing" } }
+          if ((Get-ScheduledTask -TaskName 'NexusBrowser Update').State -ne 'Disabled') { throw 'the disabled choice was lost by the rename' }
+          Enable-ScheduledTask -TaskName 'NexusBrowser Update' | Out-Null
+          $engines = @(Get-CimInstance Win32_Process -Filter "Name='NexusBrowser.exe'" | ForEach-Object CommandLine)
+          $bridges = @($engines | Where-Object { $_ -match '--bridge(\s|$)' }).Count
+          $daemons = @($engines | Where-Object { $_ -match '--http\s+16182' }).Count
+          Write-Host "bridges $bridges, daemons $daemons"
+          if ($bridges -ne 1 -or $daemons -ne 1) { throw "one bridge and one daemon expected: $bridges bridge(s), $daemons daemon(s)" }
           & pwsh -NoProfile -File .\tests\install-smoke.ps1 -EntriesOnly
           if ($LASTEXITCODE) { exit 1 }
       - name: A tampered package or a failed update keeps the working version
@@ -146,7 +163,7 @@ jobs:
           if (Test-Path $legacyTrap) { throw 'rollback executed the previous installer' }
           $restored = Get-Content (Join-Path $root 'current.json') -Raw | ConvertFrom-Json
           if ($restored.version -eq 'broken-update-fixture') { throw 'rollback did not restore the configuration' }
-          $updater = Get-ScheduledTask -TaskName 'Nexus Browser Update'
+          $updater = Get-ScheduledTask -TaskName 'NexusBrowser Update'
           if ($updater.Actions.Arguments -notmatch '\\NexusBrowser\\updaters\\[0-9a-f]{16}\\scripts\\self-update\.ps1') { throw 'rollback restored a previous unsafe updater' }
           & pwsh -NoProfile -File .\tests\install-smoke.ps1 -EntriesOnly
           if ($LASTEXITCODE) { throw 'restored client entries or daemon do not match the previous payload' }

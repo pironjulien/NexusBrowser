@@ -267,6 +267,69 @@ public sealed class ScriptTests : IDisposable
         ], Shells.Lines(stdout));
     }
 
+    /// <summary>Task names before 2.35.12 ("Nexus Browser ...") are renamed to the ones the installed engine calls, or
+    /// removed when that name exists; a rollback to an older engine renames them back; a task never starts beside a
+    /// running instance of its role (a bridge or daemon kept from its former name). Pure functions, no real task.</summary>
+    [Theory]
+    [InlineData(Shells.WindowsPowerShell)]
+    [InlineData(Shells.Pwsh)]
+    public async Task TaskMigrationRenamesTheOtherNameSetAndNeverDoublesAnInstance(string shell)
+    {
+        string probe = _dir["task-migration.ps1"];
+        File.WriteAllText(probe,
+            "$ErrorActionPreference = 'Stop'\n$t = $null; $e = $null\n" +
+            $"$ast = [System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("scripts", "runtime.ps1"))}, [ref]$t, [ref]$e)\n" +
+            "$wanted = 'taskNamesSince', 'taskNames', 'legacyTaskNames'\n" +
+            "$parts = @($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.AssignmentStatementAst] -and $wanted -contains $_.Left.VariablePath.UserPath } | ForEach-Object { $_.Extent.Text })\n" +
+            "$parts += @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in 'Get-TaskNameSets', 'Get-TaskMigration', 'Test-TaskStart' }, $true) | ForEach-Object { $_.Extent.Text })\n" +
+            "$fn = Join-Path (Split-Path $PSCommandPath) 'task-functions.ps1'; [IO.File]::WriteAllText($fn, ($parts -join \"`n\")); . $fn\n" +
+            "function Plan([string]$Version, [string[]]$Existing) { $s = @(Get-TaskMigration $Version $Existing | ForEach-Object { \"$($_.Role):$($_.Step):$($_.From)>$($_.To)\" }); if ($s) { $s -join ',' } else { 'none' } }\n" +
+            "$legacy = 'Nexus Browser Bridge', 'Nexus Browser MCP', 'Nexus Browser Update'\n" +
+            "$current = 'NexusBrowser Bridge', 'NexusBrowser MCP', 'NexusBrowser Update'\n" +
+            "Plan '2.35.12' $legacy\n" +
+            "Plan '2.35.12' @('Nexus Browser Bridge', 'NexusBrowser Bridge', 'Nexus Browser Update', 'NexusAGY Browser Bridge')\n" +
+            "Plan '2.36.0' $current\n" +
+            "Plan '2.35.11' $current\n" +
+            "Plan '2.35.12' @()\n" +
+            "(Get-TaskNameSets '2.35.11').Keep.Bridge\n" +
+            "\"$(Test-TaskStart 'Ready' 0) $(Test-TaskStart 'Ready' 1) $(Test-TaskStart 'Running' 0) $(Test-TaskStart 'Disabled' 0)\"\n",
+            Encoding.ASCII);
+        var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
+        Assert.True(code == 0, stderr);
+        Assert.Equal(
+        [
+            "Bridge:Rename:Nexus Browser Bridge>NexusBrowser Bridge,Daemon:Rename:Nexus Browser MCP>NexusBrowser MCP,Update:Rename:Nexus Browser Update>NexusBrowser Update",
+            "Bridge:Remove:Nexus Browser Bridge>NexusBrowser Bridge,Update:Rename:Nexus Browser Update>NexusBrowser Update",
+            "none",
+            "Bridge:Rename:NexusBrowser Bridge>Nexus Browser Bridge,Daemon:Rename:NexusBrowser MCP>Nexus Browser MCP,Update:Rename:NexusBrowser Update>Nexus Browser Update",
+            "none",
+            "Nexus Browser Bridge",
+            "True False False False",
+        ], Shells.Lines(stdout));
+    }
+
+    /// <summary>The engine starts its tasks by the names the installer registers; the former names (with a space)
+    /// survive only in the migration table, the history and the CI fixture that recreates an older install.</summary>
+    [Fact]
+    public void TaskNamesAreTheInstallersAndTheFormerNamesOnlyMigrate()
+    {
+        string runtime = File.ReadAllText(Repo.File("scripts", "runtime.ps1"));
+        Assert.Contains($"Bridge = '{McpServer.BridgeTaskName}'; Daemon = 'NexusBrowser MCP'; Update = '{BridgeServer.UpdateTaskName}'", runtime);
+        string[] allowed = ["CHANGELOG.md", "README.md", "scripts/runtime.ps1", ".github/workflows/install.yml", "tests/NexusBrowser.Tests/ScriptTests.cs"];
+        var offending = new List<string>();
+        foreach (string file in Directory.EnumerateFiles(Repo.Root, "*", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(Repo.Root, file).Replace('\\', '/');
+            if (relative.StartsWith(".git/", StringComparison.Ordinal) || relative.Contains("/bin/") || relative.Contains("/obj/") ||
+                relative.StartsWith("extension/", StringComparison.Ordinal) || allowed.Contains(relative) ||
+                Path.GetExtension(file) is not (".ps1" or ".cs" or ".md" or ".json" or ".yml" or ".js" or ".cjs")) continue;
+            if (File.ReadAllText(file).Contains("Nexus Browser ", StringComparison.Ordinal)) offending.Add(relative);
+        }
+        Assert.Empty(offending);
+        // runtime.ps1: the former names appear once, in the migration table.
+        Assert.Single(Regex.Matches(runtime, "Nexus Browser Bridge"));
+    }
+
     /// <summary>A release zip as package-release.ps1 lays it out, with the engine built for these tests.</summary>
     private string FakeRelease(string folder)
     {

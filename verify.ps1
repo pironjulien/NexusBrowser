@@ -19,7 +19,13 @@ try {
     $fingerprintCheck = Invoke-Native $nativeExe @('--fingerprint') 5
     if ($fingerprintCheck.Code -ne 0 -or $fingerprintCheck.Output -notmatch '^[0-9a-fA-F]{64}$') { throw 'Empreinte du moteur installe illisible.' }
     $expectedFingerprint = $fingerprintCheck.Output
-    $bridge = Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue
+    # Noms des tâches que ce moteur appelle ; ceux de l'autre jeu (avant ou après 2.35.12) ne doivent plus exister.
+    $taskSets = Get-TaskNameSets $expectedVersion
+    $bridgeTaskName = $taskSets.Keep.Bridge
+    foreach ($retired in @($taskSets.Retire.Values)) {
+        if (Get-ScheduledTask -TaskName $retired -ErrorAction SilentlyContinue) { throw "Tâche « $retired » sous son ancien nom : relancer install.ps1" }
+    }
+    $bridge =Get-ScheduledTask -TaskName $bridgeTaskName -ErrorAction SilentlyContinue
     if (-not $bridge -or $bridge.State -eq 'Disabled' -or $bridge.Actions.Execute -ne $nativeExe -or
         $bridge.Actions.Arguments -notmatch '(?:^|\s)--bridge(?:\s|$)') {
         throw "Tâche « $bridgeTaskName » absente, inactive ou sur un autre moteur : relancer install.ps1"
@@ -41,7 +47,7 @@ try {
         Write-Warning "Ancienne extension encore chargée ($line) : la retirer dans chrome://extensions (mêmes ports que le pont)."
     }
     if ($Browser) {
-        if ($bridge.State -ne 'Running') { Start-ScheduledTask -TaskName $bridgeTaskName; Start-Sleep -Seconds 2 }
+        if (Test-TaskStart $bridge.State (Get-EngineProcesses '--bridge(\s|$)').Count) { Start-ScheduledTask -TaskName $bridgeTaskName; Start-Sleep -Seconds 2 }
         $bridgeStatus = Invoke-RestMethod -Uri 'http://127.0.0.1:9225/api/status' -Headers @{
             'X-Nexus-Browser-Token' = (Get-Content -LiteralPath $tokenFile -Raw).Trim()
         } -TimeoutSec 5

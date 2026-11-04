@@ -86,6 +86,8 @@ public sealed class BridgeServer : IAsyncDisposable
     private bool _draining;
     private int _httpCommands;
     // Answer to a command that meets an extension reloading for an update: it never ran (retry_safe, "not_done").
+    // Scheduled task the installer registers for a public install (scripts\runtime.ps1, $taskNames).
+    internal const string UpdateTaskName = "NexusBrowser Update";
     internal const string ReloadingMessage = "The NexusBrowser extension is reloading for an update: nothing was done. " +
         "Retry in a few seconds; your tabs are kept.";
 
@@ -255,7 +257,7 @@ public sealed class BridgeServer : IAsyncDisposable
     {
         Start();
         Console.WriteLine("==================================================");
-        Console.WriteLine($"  Nexus Browser Bridge Server (v{BridgeSecurity.Version})");
+        Console.WriteLine($"  NexusBrowser Bridge Server (v{BridgeSecurity.Version})");
         Console.WriteLine($"  WebSocket: ws://127.0.0.1:{WsPort}");
         Console.WriteLine($"  HTTP REST: http://127.0.0.1:{HttpPort}/api/command");
         Console.WriteLine("==================================================");
@@ -1613,7 +1615,7 @@ public sealed class BridgeServer : IAsyncDisposable
             try
             {
                 var start = new ProcessStartInfo("schtasks.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-                foreach (var part in new[] { "/Run", "/TN", "Nexus Browser Update" }) start.ArgumentList.Add(part);
+                foreach (var part in new[] { "/Run", "/TN", UpdateTaskName }) start.ArgumentList.Add(part);
                 using var process = Process.Start(start) ?? throw new IOException("Update task not started");
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(5));
                 await process.WaitForExitAsync(timeout.Token);

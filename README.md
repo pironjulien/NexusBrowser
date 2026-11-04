@@ -124,7 +124,7 @@ The daemon has a separate session-preserving restart protocol from 2.33.3: older
 serving until natural exit, and the installer writes no restart request for them.
 The bridge can also update a public install itself (the contract shared by the Nexus products): it writes
 `~\.nexus\status\browser.json` (`version`, `latest` read from the `releases/latest` redirect at most once a day,
-`state`, `message`), `GET /api/update` returns it and `POST /api/update` (bridge token) starts the "Nexus Browser
+`state`, `message`), `GET /api/update` returns it and `POST /api/update` (bridge token) starts the "NexusBrowser
 Update" task, which runs `get.ps1` outside the bridge and records `done` or `failed` (the current version is kept;
 deferred while an agent works in Chrome). A clone updates with git instead.
 
@@ -151,8 +151,9 @@ pwsh -NoProfile -File install.ps1
 - The engine is built outside the clone (`~\.nexus\build\nexus-browser`) and installed in
   `%LOCALAPPDATA%\NexusBrowser\versions\`; token, logs, screenshots and exports live in `~\.nexus\nexus-browser`;
   the per-call journal lives in `~\.nexus\journal\browser\` (see [Privacy](#privacy)).
-- Scheduled task `Nexus Browser Bridge` with **no trigger**: the bridge starts on demand (first agent call,
-  `schtasks /Run`).
+- Scheduled task `NexusBrowser Bridge` with **no trigger**: the bridge starts on demand (first agent call,
+  `schtasks /Run`). Installs before 2.35.12 named the tasks `Nexus Browser ...`: the installer renames them, keeping
+  their settings and disabled state, and never starts a second bridge or daemon beside one still running.
 - Native host `com.nexus.browser_auth` declared to Chrome (HKCU): it computes the extension's proofs, the token never
   reaches Chrome.
 - Antigravity only, through its plugin (server and skill), and only when the shared MCP daemon token is present:
@@ -326,8 +327,9 @@ to the author or to any third party.
   technique, the registrable domain of the tab (`google.com`, never the address) and an error category from a fixed
   list. Never page text, typed value, title or image. Nothing is sent anywhere; months are kept until you delete
   them: delete the `browser` folder (or single month files) at any time.
-- **Removing it**: remove the extension from Chrome, delete the scheduled tasks `Nexus Browser Bridge`,
-  `Nexus Browser MCP` and `Nexus Browser Update` and the
+- **Removing it**: remove the extension from Chrome, delete the scheduled tasks `NexusBrowser Bridge`,
+  `NexusBrowser MCP` and `NexusBrowser Update` (`Nexus Browser ...` before 2.35.12; both at once:
+  `Get-ScheduledTask -TaskName 'Nexus*Browser *' | Unregister-ScheduledTask`) and the
   registry key `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth`, then delete
   `~/.nexus/nexus-browser/` and `~/.nexus/journal/browser/` (and `%LOCALAPPDATA%\NexusBrowser\` after
   the one-line install). The `nexus-browser` entries the installer declared: `claude mcp remove nexus-browser -s user`,

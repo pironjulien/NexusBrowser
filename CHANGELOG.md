@@ -5,6 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.12] - 2026-11-04
+
+### Changed
+- The scheduled tasks are named after the product, without a space: `NexusBrowser Bridge`, `NexusBrowser MCP` and
+  `NexusBrowser Update` (the engine starts its bridge and update tasks by these names). The bridge console title
+  reads "NexusBrowser Bridge Server".
+
+### Fixed
+- Installs before 2.35.12 are migrated by the installer and updater: each `Nexus Browser ...` task is renamed with
+  its trigger, account, settings and disabled state, or removed when the new name already exists. A bridge or daemon
+  still running from its former task keeps serving, and no task starts a second one beside it. A rollback to an
+  older engine renames the tasks back to the names it calls. `verify.ps1` reports a task left under its former name.
+- The removal instructions cover both names.
+
 ## [2.35.11] - 2026-11-04
 
 ### Fixed

@@ -4,9 +4,15 @@
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $localRoot = Join-Path $env:USERPROFILE '.nexus\nexus-browser'
 $tokenFile = Join-Path $localRoot 'bridge-token'
-$bridgeTaskName = 'Nexus Browser Bridge'
-$daemonTaskName = 'Nexus Browser MCP'
-$updateTaskName = 'Nexus Browser Update'
+# Scheduled tasks. Engines before 2.35.12 start their bridge and update task by the names written with a space: the
+# installer keeps the set the installed engine calls (a rollback to such an engine included), and renames or removes
+# the other set (Move-ProductTasks), so one task per role, never two bridges or daemons.
+$taskNamesSince = [version]'2.35.12'
+$taskNames = [ordered]@{ Bridge = 'NexusBrowser Bridge'; Daemon = 'NexusBrowser MCP'; Update = 'NexusBrowser Update' }
+$legacyTaskNames = [ordered]@{ Bridge = 'Nexus Browser Bridge'; Daemon = 'Nexus Browser MCP'; Update = 'Nexus Browser Update' }
+$bridgeTaskName = $taskNames.Bridge
+$daemonTaskName = $taskNames.Daemon
+$updateTaskName = $taskNames.Update
 $nativeRoot = Join-Path $env:LOCALAPPDATA 'NexusBrowser'
 $versionsRoot = Join-Path $nativeRoot 'versions'
 $currentFile = Join-Path $nativeRoot 'current.json'
@@ -25,6 +31,50 @@ function Get-CurrentExe {
     return $null
 }
 $nativeExe = Get-CurrentExe
+
+# Task names the engine of this version calls (its bridge and update tasks are started by name), and the other set.
+function Get-TaskNameSets([string]$EngineVersion) {
+    if ([version]$EngineVersion -lt $taskNamesSince) { @{ Keep = $legacyTaskNames; Retire = $taskNames } }
+    else { @{ Keep = $taskNames; Retire = $legacyTaskNames } }
+}
+
+# Migration of the product's tasks found (names): per role, a task under the other set's name only is renamed (same
+# action, trigger, principal, settings and disabled state), and removed when the kept name already exists.
+function Get-TaskMigration([string]$EngineVersion, [string[]]$Existing) {
+    $sets = Get-TaskNameSets $EngineVersion
+    foreach ($role in @($sets.Keep.Keys)) {
+        $keep = $sets.Keep[$role]; $retire = $sets.Retire[$role]
+        if ($Existing -notcontains $retire) { continue }
+        $step = if ($Existing -contains $keep) { 'Remove' } else { 'Rename' }
+        [pscustomobject]@{ Role = $role; Step = $step; From = $retire; To = $keep }
+    }
+}
+
+# A bridge or daemon kept by a deferred update may run outside its task (renamed meanwhile): a task is started only
+# when it is neither running nor disabled and no instance of its role runs.
+function Test-TaskStart([string]$State, [int]$RunningInstances) {
+    $State -notin @('Running', 'Disabled') -and $RunningInstances -eq 0
+}
+
+# Engine processes whose command line matches (bridge, daemon).
+function Get-EngineProcesses([string]$Pattern) {
+    @(Get-CimInstance Win32_Process -Filter "Name='NexusBrowser.exe'" | Where-Object { $_.CommandLine -match $Pattern })
+}
+
+# Applies Get-TaskMigration on this PC. Unregistering a task leaves its running instance alive (a busy bridge or
+# daemon keeps serving), so a rename never stops a process; Test-TaskStart prevents a second instance.
+function Move-ProductTasks([string]$EngineVersion, [scriptblock]$Journal) {
+    $names = @($taskNames.Values) + @($legacyTaskNames.Values)
+    $existing = @(Get-ScheduledTask -TaskName $names -ErrorAction SilentlyContinue | ForEach-Object { $_.TaskName })
+    foreach ($step in @(Get-TaskMigration $EngineVersion $existing)) {
+        if ($step.Step -eq 'Rename') {
+            $xml = Export-ScheduledTask -TaskName $step.From
+            Register-ScheduledTask -TaskName $step.To -Xml $xml | Out-Null
+        }
+        Unregister-ScheduledTask -TaskName $step.From -Confirm:$false
+        & $Journal $(if ($step.Step -eq 'Rename') { "Task '$($step.From)' renamed '$($step.To)'." } else { "Task '$($step.From)' removed ('$($step.To)' kept)." })
+    }
+}
 
 # Runs the engine (a WinExe: PowerShell would not wait for it) hidden, waits, returns its exit code and output.
 function Invoke-Native([string]$Exe, [string[]]$Arguments, [int]$TimeoutSeconds = 120) {
