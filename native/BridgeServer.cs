@@ -107,6 +107,9 @@ public sealed class BridgeServer : IAsyncDisposable
         // Set once the extension accepted the installer's reload: no further command is sent on this connection.
         private volatile bool _reloading;
         public bool Reloading { get => _reloading; set => _reloading = value; }
+        // Version the extension answered to the ping sent after authentication (null until it answers): with two copies
+        // connected at once (store and unpacked), commands go to the newest one, not to the last one connected.
+        public Version? ExtensionVersion { get; set; }
         private readonly SemaphoreSlim _sendLock = new(1, 1);
 
         public BridgeClientConnection(WebSocket webSocket, string role, string extensionId, byte[] sessionKey, int order)
@@ -353,6 +356,7 @@ public sealed class BridgeServer : IAsyncDisposable
             return _activeConnections
                 .Where(c => !c.Reloading)
                 .OrderBy(c => c.Role == "service_worker" ? 0 : c.Role == "offscreen" ? 1 : 99)
+                .ThenByDescending(c => c.ExtensionVersion ?? new Version(0, 0))
                 .ThenByDescending(c => c.Order)
                 .FirstOrDefault();
         }
@@ -437,6 +441,19 @@ public sealed class BridgeServer : IAsyncDisposable
             return;
         }
         Log("INFO", $"Chrome Extension authenticated: role={client.Role} extension={client.ExtensionId}");
+        // Two different extensions at once (Web Store and unpacked copies): ask each its version once.
+        if (client.Role == "service_worker")
+        {
+            List<BridgeClientConnection> unprobed;
+            lock (_stateLock)
+            {
+                var workers = _activeConnections.Where(c => c.Role == "service_worker").ToList();
+                unprobed = workers.Select(c => c.ExtensionId).Distinct().Count() > 1
+                    ? workers.Where(c => c.ExtensionVersion is null).ToList() : [];
+            }
+            foreach (var worker in unprobed)
+                _ = ProbeExtensionVersionAsync(worker);
+        }
 
         double left = _emergencyStop.RemainingSeconds();
         if (left > 0)
@@ -733,6 +750,35 @@ public sealed class BridgeServer : IAsyncDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Ignore counter error
+        }
+    }
+
+    /// <summary>Asks a newly connected service worker its version, so SelectTarget prefers the newest copy when Chrome
+    /// runs two (the Chrome Web Store one, often behind during Google's review, and the unpacked one of this install).</summary>
+    private async Task ProbeExtensionVersionAsync(BridgeClientConnection client)
+    {
+        try
+        {
+            JsonNode? ping = await SendCommandToChromeAsync("ping", new JsonObject(), 5.0, client: null, target: client, gone: null);
+            if (ping?["version"] is not JsonValue v || !v.TryGetValue(out string? text) || !Version.TryParse(text, out var version))
+                return;
+            List<string> others;
+            lock (_stateLock)
+            {
+                client.ExtensionVersion = version;
+                others = _activeConnections
+                    .Where(c => c != client && c.Role == "service_worker" && c.ExtensionId != client.ExtensionId)
+                    .Select(c => $"{c.ExtensionId} {c.ExtensionVersion?.ToString() ?? "?"}")
+                    .ToList();
+            }
+            Log("INFO", $"Chrome Extension version: extension={client.ExtensionId} version={version}");
+            if (others.Count > 0)
+                Log("WARNING", $"Several NexusBrowser extensions are connected ({client.ExtensionId} {version}, {string.Join(", ", others)}): " +
+                    "commands go to the newest one; remove the older copy in chrome://extensions.");
+        }
+        catch (Exception caught) when (Boundary.Recoverable(caught))
+        {
+            // Deliberate best-effort probe: without a version the connection keeps the order of arrival
         }
     }
 

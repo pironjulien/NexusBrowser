@@ -19,9 +19,28 @@ if (-not $chrome) {
     return
 }
 
+# Extension deja reliee au pont (mise a jour, ou reinstallation par une IA) : rien a ajouter, sinon Chrome se
+# retrouve avec deux copies (Web Store et non empaquetee). Codes : 0 a jour, 1 en retard, 3 occupee, 2 absente.
+$exe = Get-CurrentExe
+if ($exe -and (Invoke-Native $exe @('--refresh-extension', '--wait-ready', '3') 30).Code -in 0, 1, 3) {
+    Write-Host ''
+    Write-Host 'The NexusBrowser extension is already in Chrome and connected: nothing to add.' -ForegroundColor Green
+    return
+}
+
 # Publiee sur le Chrome Web Store (store_public de bridge_config.json) : "Ajouter a Chrome", sans mode developpeur.
 $config = Get-Content (Join-Path $repositoryRoot 'native\resources\bridge_config.json') -Raw | ConvertFrom-Json
 $storeId = if ($config.store_public) { $config.store_id } else { $null }
+# Le Store sert la version que Google a validee, souvent en retard de plusieurs versions pendant la relecture : s'il
+# a moins que cette installation, on garde l'extension non empaquetee (sinon deux copies d'ages differents).
+if ($storeId) {
+    $local = [version](Get-Content (Join-Path $extension 'manifest.json') -Raw | ConvertFrom-Json).version
+    try {
+        $check = "https://clients2.google.com/service/update2/crx?response=updatecheck&acceptformat=crx3&prodversion=$((Get-Item $chrome).VersionInfo.ProductVersion)&x=id%3D$storeId%26uc"
+        $served = [regex]::Match((Invoke-WebRequest $check -UseBasicParsing -TimeoutSec 15).Content, 'version="(\d+(?:\.\d+){1,3})"').Groups[1].Value
+        if (-not $served -or [version]$served -lt $local) { $storeId = $null }
+    } catch { $storeId = $null }
+}
 Write-Host ''
 Write-Host 'Last step, once: add the NexusBrowser extension to Chrome.' -ForegroundColor Cyan
 if ($storeId) {

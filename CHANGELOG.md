@@ -5,10 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.20] - 2026-11-05
+
+### Fixed
+- Two NexusBrowser extensions connected at once (the Chrome Web Store copy, behind during Google's review, and the unpacked copy of this installation): the bridge asks each its version and sends commands to the newest one, and logs a warning naming both.
+- The extension guide does nothing when an extension is already connected, and points to the Chrome Web Store only when the store serves this version or newer; otherwise it keeps the unpacked extension.
+
 ## [2.35.19] - 2026-11-05
 
 ### Fixed
-- rowser_upload: watchUploadInput uses ackendNodeId across execution contexts and catches resolution errors so dynamic file inputs (MDPH form) never abort before files are placed.
+- `browser_upload`: `watchUploadInput` uses `backendNodeId` across execution contexts and catches resolution errors so dynamic file inputs (MDPH form) never abort before files are placed.
 
 ## [2.35.18] - 2026-11-05
 
