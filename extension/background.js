@@ -786,7 +786,8 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
                     files: pending.files,
                     backendNodeId: params.backendNodeId
                 });
-                pending.resolve({ success: true, files: pending.files });
+                const placed = await checkUploadedSizes(source, { backendNodeId: params.backendNodeId }, pending.files, pending.sizes);
+                pending.resolve({ success: true, files: pending.files, ...placed });
             } catch (err) {
                 pending.reject(err);
             }
@@ -5764,6 +5765,10 @@ function cdpRefusal(method, commandParams) {
             `Reload without this parameter, then run the script with browser_eval.`;
     }
     if (CDP_ALLOWED.has(name)) return null;
+    if (name === "DOM.setFileInputFiles") {
+        return "CDP command refused: DOM.setFileInputFiles is not in the list of allowed commands: use browser_upload " +
+            "(secrets folders refused, real path and size checked, large files read by Chrome from the disk).";
+    }
     return `CDP command refused: ${name} is not in the list of allowed commands (page reading, ` +
         "screenshots, input and display of the agent's tab). Cookies, storage, request bodies, Fetch, IO, " +
         "injected scripts, navigation and downloads go through the dedicated tools (browser_get_cookies, " +
@@ -5822,6 +5827,40 @@ async function sendCdpCommand(params) {
 // -----------------------------------------------------------------------------
 
 /**
+ * Tailles des fichiers que la page tient vraiment dans l'input, comparées à celles du disque (sizes, données par le
+ * moteur). Chrome lit le fichier sur le disque au moment de l'envoi : un chemin qu'il ne voit pas (dossier virtualisé
+ * d'une appli MSIX, fichier absent) donnait un File de 0 octet sans aucune erreur (Partner Center, 05/11, 208 Mo).
+ * Lu dans le monde isolé : la page ne peut pas maquiller input.files. Écart : l'input est vidé et l'appel échoue.
+ */
+async function checkUploadedSizes(target, node, files, sizes) {
+    if (!Array.isArray(sizes) || sizes.length === 0) return {};
+    const contextId = await worldFor(target, await mainFrameId(target));
+    const resolved = await chrome.debugger.sendCommand(target, "DOM.resolveNode", { ...node, executionContextId: contextId });
+    const objectId = resolved?.object?.objectId;
+    if (!objectId) throw new Error("Upload not verified: the file input is gone from the page.");
+    let placed;
+    try {
+        const res = await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
+            objectId,
+            functionDeclaration: "function () { return Array.from(this.files || [], f => ({ name: f.name, size: f.size })); }",
+            returnByValue: true
+        });
+        placed = res?.result?.value;
+    } finally {
+        chrome.debugger.sendCommand(target, "Runtime.releaseObject", { objectId }).catch(() => {});
+    }
+    const count = Array.isArray(placed) ? placed.length : 0;
+    const wrong = count === sizes.length ? placed.findIndex((f, i) => Number(f?.size) !== Number(sizes[i])) : -2;
+    if (wrong === -1) return { sizes: placed.map(f => f.size) };
+    await chrome.debugger.sendCommand(target, "DOM.setFileInputFiles", { ...node, files: [] }).catch(() => {});
+    const detail = wrong >= 0
+        ? `${files[wrong]}: ${placed[wrong].size} bytes in the page, ${sizes[wrong]} on the disk`
+        : `${count} file(s) in the page, ${sizes.length} expected`;
+    throw new Error(`Upload not done: Chrome could not read the file (${detail}). The input was emptied, nothing was ` +
+        "sent; move the file to a folder Chrome can read (Downloads, a project folder) and resend.");
+}
+
+/**
  * Intercept and upload files directly to inputs or upload dropzones via CDP
  */
 async function uploadFiles(params = {}) {
@@ -5849,7 +5888,8 @@ async function uploadFiles(params = {}) {
         const typeIndex = attributes.indexOf("type");
         if (description.node.nodeName === "INPUT" && typeIndex >= 0 && attributes[typeIndex + 1].toLowerCase() === "file") {
             await chrome.debugger.sendCommand(target, "DOM.setFileInputFiles", { files: params.files, nodeId: query.nodeId });
-            return { data: { success: true, method: "direct_dom", files: params.files, selector } };
+            const placed = await checkUploadedSizes(target, { nodeId: query.nodeId }, params.files, params.sizes);
+            return { data: { success: true, method: "direct_dom", files: params.files, selector, ...placed } };
         }
         await chrome.debugger.sendCommand(target, "Page.setInterceptFileChooserDialog", { enabled: true });
         fileChooserIntercepted = true;
@@ -5857,6 +5897,7 @@ async function uploadFiles(params = {}) {
             timeoutId = setTimeout(() => reject(new Error("File chooser upload timed out after 10s")), 10000);
             pendingFileChoosers.set(tabId, {
                 files: params.files,
+                sizes: params.sizes,
                 resolve: data => resolve({ data }),
                 reject
             });

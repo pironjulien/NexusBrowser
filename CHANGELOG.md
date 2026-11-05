@@ -5,6 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.16] - 2026-11-05
+
+### Fixed
+- `browser_upload` no longer puts an empty file in the page. A file the AI app wrote to `%LOCALAPPDATA%` lives, for
+  an MSIX app such as Claude, in `Packages\<app>\LocalCache`, which Chrome never sees under the logical path: a
+  208 MB `.msixupload` reached Partner Center as "Uploading 0 Bytes", with no error. The engine now hands Chrome the
+  path Windows really opens and the size on the disk (secrets folders still refused, on both paths), refuses a
+  missing file or a folder before anything reaches the page, and the extension checks the size of each file in the
+  input: a mismatch empties the input and fails with outcome `not_done`. Chrome still reads the file from the disk
+  (`DOM.setFileInputFiles` in the extension, no copy in the message), so large files pass; a test covers 150 MB.
+- A `browser_eval` cut by its 20 s timeout now says that the script may still be running in the page and to check
+  before resending (outcome `unknown`): a resend had sent a package twice.
+- `browser_cdp_send` refusing `DOM.setFileInputFiles` points to `browser_upload`.
+
 ## [2.35.15] - 2026-11-05
 
 ### Changed

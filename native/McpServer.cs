@@ -1413,7 +1413,13 @@ public sealed partial class McpServer : IDisposable
             case "browser_upload":
             {
                 var p = RequireTabParams(args);
-                p["files"] = args["files"]?.DeepClone() ?? new JsonArray();
+                try
+                {
+                    var (files, sizes) = BridgeSecurity.PrepareUploadFiles(args["files"] ?? new JsonArray());
+                    p["files"] = files;
+                    p["sizes"] = sizes;
+                }
+                catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or IOException) { return ErrorJson(ex.Message); }
                 p["selector"] = GetString(args, "selector");
                 return await CallBridgeFormattedAsync("upload", p, 20.0, identity, pid, ct: ct);
             }
@@ -1462,7 +1468,7 @@ public sealed partial class McpServer : IDisposable
             {
                 var p = RequireTabParams(args);
                 p["script"] = GetString(args, "script") ?? "";
-                return await CallBridgeFormattedAsync("eval", p, 20.0, identity, pid, ct: ct);
+                return EvalTimeoutNote(await CallBridgeFormattedAsync("eval", p, 20.0, identity, pid, ct: ct));
             }
 
             case "browser_scroll":
@@ -2402,6 +2408,22 @@ public sealed partial class McpServer : IDisposable
             // Deliberate boundary: any failure is returned as a tool error
             return ErrorJson(ex.Message);
         }
+    }
+
+    internal const string EvalStillRunning = "The script may still be running in the page; check before resending.";
+
+    /// <summary>
+    /// A browser_eval cut by its timeout is only abandoned by the engine: the page keeps running the script (a file
+    /// sent twice to Partner Center on 05/11 after a resend). Its error says so plainly.
+    /// </summary>
+    internal static string EvalTimeoutNote(string answer)
+    {
+        if (JsonNode.Parse(answer) is not JsonObject failure || GetString(failure, "status") != "error") return answer;
+        string error = GetString(failure, "error") ?? "";
+        if (!error.Contains("timed out after", StringComparison.OrdinalIgnoreCase) || error.Contains(EvalStillRunning, StringComparison.Ordinal))
+            return answer;
+        failure["error"] = $"{error.TrimEnd()} {EvalStillRunning}";
+        return failure.ToJsonString(CompactJson);
     }
 
     private async Task<bool> BridgeStatusAsync(bool requireExtension, CancellationToken ct)

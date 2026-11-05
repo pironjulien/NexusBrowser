@@ -817,6 +817,49 @@ test('upload directly sets files on input[type=file] without file chooser dialog
     assert.equal(h.calls.some(c => c.method === 'Page.setInterceptFileChooserDialog'), false);
 });
 
+function uploadHarness(pageSizes) {
+    const set = [];
+    const h = harness({}, {
+        debuggerSendCommand: async (target, method, params) => {
+            if (method === 'DOM.describeNode') return { node: { nodeName: 'INPUT', attributes: ['type', 'file'] } };
+            if (method === 'DOM.setFileInputFiles') { set.push(params.files); return {}; }
+            if (method === 'DOM.resolveNode') return { object: { objectId: 'input-1' } };
+            if (method === 'Runtime.callFunctionOn') {
+                return { result: { value: pageSizes.map((size, i) => ({ name: `f${i}`, size })) } };
+            }
+            if (method === 'Runtime.releaseObject') return {};
+        }
+    });
+    return { h, set };
+}
+
+test('upload of a 208 MB file checks that the page holds the size on the disk', async () => {
+    const size = 217990062;
+    const { h, set } = uploadHarness([size]);
+    const res = await h.run('upload', { tabId: 1, files: ['C:/dist/bundle.msixupload'], sizes: [size] });
+    assert.equal(res.data.success, true);
+    assert.deepEqual(res.data.sizes, [size]);
+    assert.deepEqual(set, [['C:/dist/bundle.msixupload']]);
+    // Taille lue dans le monde isolé, jamais dans celui de la page.
+    const resolve = h.calls.find(c => c.method === 'DOM.resolveNode');
+    assert.ok(resolve.params.executionContextId >= 1000);
+});
+
+test('upload that leaves a 0-byte file in the page empties the input and fails as not done', async () => {
+    const { h, set } = uploadHarness([0]);
+    const res = await h.run('upload', { tabId: 1, files: ['C:/dist/bundle.msixupload'], sizes: [217990062] });
+    assert.match(res.error, /Upload not done: Chrome could not read the file \(C:\/dist\/bundle\.msixupload: 0 bytes in the page, 217990062 on the disk\)/);
+    assert.match(res.error, /nothing was sent/);
+    assert.equal(JSON.stringify(set), JSON.stringify([['C:/dist/bundle.msixupload'], []]));
+});
+
+test('cdp_send points DOM.setFileInputFiles to browser_upload', async () => {
+    const h = harness();
+    const res = await h.run('cdp_send', { tabId: 1, method: 'DOM.setFileInputFiles', commandParams: { files: ['C:/x'] } });
+    assert.match(res.error, /use browser_upload/);
+    assert.equal(h.calls.some(c => c.method === 'DOM.setFileInputFiles'), false);
+});
+
 test('select_tab activates the requested tab without focusing its window by default', async () => {
     const selected = [];
     const focused = [];

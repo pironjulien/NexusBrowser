@@ -15,7 +15,7 @@ namespace NexusBrowser.Native;
 
 public static partial class BridgeSecurity
 {
-    public const string Version = "2.35.15";
+    public const string Version = "2.35.16";
     public const string TokenFileName = "bridge-token";
     public const string TokenHeader = "X-Nexus-Browser-Token";
     public const string AgentHeader = "X-Nexus-Browser-Agent";
@@ -626,6 +626,44 @@ public static partial class BridgeSecurity
                 return $"output_path refused: {fullPath} is in a protected folder ({root}). Write to a project, Documents, Downloads or temporary folder.";
         }
         return null;
+    }
+
+    /// <summary>
+    /// The files Chrome will really read, with their size, for browser_upload. Each path is checked (secrets folders
+    /// refused), must be an existing file (a folder or a missing path gave the page an empty File of 0 bytes, with no
+    /// error), and is replaced by the path Windows really opens: an app packaged as MSIX (Claude) sees its writes to
+    /// %LOCALAPPDATA% redirected to Packages\&lt;app&gt;\LocalCache, a folder Chrome never sees under the logical path
+    /// (a 208 MB package reached Partner Center as 0 bytes on 05/11). The sizes let the extension check, once the files
+    /// are in the input, that the page holds what is on the disk.
+    /// </summary>
+    public static (JsonArray Files, JsonArray Sizes) PrepareUploadFiles(JsonNode? filesNode)
+    {
+        CheckUploadFiles(filesNode);
+        var files = new JsonArray();
+        var sizes = new JsonArray();
+        foreach (var item in (JsonArray)filesNode!)
+        {
+            string raw = item!.GetValue<string>();
+            string full = Path.GetFullPath(ExpandUserPath(raw));
+            if (Directory.Exists(full))
+                throw new ArgumentException($"Upload not done: {raw} is a folder, not a file; nothing was sent to the page.");
+            if (!File.Exists(full))
+                throw new ArgumentException($"Upload not done: {raw} does not exist; nothing was sent to the page.");
+            string real = FinalPath(full) ?? full;
+            if (UploadRefusal([real]) is { } refusal)
+                throw new UnauthorizedAccessException(refusal);
+            files.Add(real);
+            sizes.Add(new FileInfo(real).Length);
+        }
+        return (files, sizes);
+    }
+
+    private static string ExpandUserPath(string raw)
+    {
+        var text = Environment.ExpandEnvironmentVariables(raw.Trim().Trim('"'));
+        if (text == "~" || text.StartsWith("~/", StringComparison.Ordinal) || text.StartsWith(@"~\", StringComparison.Ordinal))
+            text = text.Length == 1 ? HomeDir() : Path.Join(HomeDir(), text[2..]);
+        return text;
     }
 
     public static void CheckUploadFiles(JsonNode? filesNode)
