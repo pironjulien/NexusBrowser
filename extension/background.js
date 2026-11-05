@@ -852,6 +852,7 @@ if (chrome.tabs?.onRemoved?.addListener) {
         pendingDialogs.delete(tabId);
         attachedDebuggers.delete(tabId);
         tabConsoleLogs.delete(tabId);
+        recentUploads.delete(tabId);
         snapshotStates.delete(tabId);
         tabInFlightRequests.delete(tabId);
         tabNetwork.delete(tabId);
@@ -4242,26 +4243,78 @@ async function reloadTab(params) {
  * browser_eval : expression de l'AGENT dans le MONDE DE LA PAGE (ses variables, comme la console DevTools). Seul
  * chemin de l'extension vers ce monde, avec la transcription YouTube (qui lit le lecteur de la page).
  */
+// Scripts browser_eval en cours, par onglet et texte du script, et résultats arrivés après le délai de réponse du
+// moteur : le délai ne coupe pas le script dans la page. Un script identique renvoyé pendant qu'il tourne est refusé
+// (un paquet Partner Center est parti deux fois le 05/11 après une relance) ; renvoyé après sa fin tardive, il rend ce
+// résultat sans tourner une deuxième fois.
+const runningEvals = new Map();
+const lateEvalResults = new Map();
+const LATE_EVAL_KEEP_MS = 10 * 60 * 1000;
+
+function evalKey(tabId, code) { return `${tabId}|${code}`; }
+
 async function evaluateScript(params) {
     let tabId = await resolveTargetTab(params);
     const code = params.code || params.script || params.expression;
     if (!code) throw new Error("Missing code/expression to evaluate");
 
-    const target = await ensureDebugger(tabId);
-    const result = await sendCommandWatchingDialogs(target, "Runtime.evaluate", {
-        expression: code,
-        returnByValue: true,
-        awaitPromise: true,
-        userGesture: true
-    });
-    if (result?.__dialog) {
-        return { data: dialogInterruption(result.__dialog) };
+    const key = evalKey(tabId, code);
+    const now = Date.now();
+    for (const [k, old] of [...lateEvalResults]) if (now - old.finishedAt > LATE_EVAL_KEEP_MS) lateEvalResults.delete(k);
+    const late = lateEvalResults.get(key);
+    if (late) {
+        lateEvalResults.delete(key);
+        const took = Math.round((late.finishedAt - late.startedAt) / 1000);
+        if (late.error) {
+            throw new Error(`${late.error} (identical script whose call timed out, finished ${took}s after its start; ` +
+                "it was not run again)");
+        }
+        return { data: {
+            result: late.value,
+            earlier_run: true,
+            note: `Result of the identical script still running when its call timed out (finished ${took}s after its ` +
+                "start): it was not run again."
+        } };
     }
-    if (result?.exceptionDetails) {
-        const desc = result.exceptionDetails.exception?.description || result.exceptionDetails.text;
-        throw new Error(desc || "Evaluation error in page context");
+    if (runningEvals.has(key)) {
+        const started = runningEvals.get(key);
+        throw new Error(`Script still running in this tab (identical script started ${Math.round((now - started) / 1000)}s ` +
+            "ago): do not resend. Nothing was sent. Read the page state, or send the same script again once it " +
+            "has finished to get its result.");
     }
-    return { data: result?.result?.value !== undefined ? result.result.value : result?.result };
+    const replyWithinMs = Number.isFinite(params.replyWithinMs) ? params.replyWithinMs : 0;
+    runningEvals.set(key, now);
+    let outcome;
+    try {
+        const target = await ensureDebugger(tabId);
+        const result = await sendCommandWatchingDialogs(target, "Runtime.evaluate", {
+            expression: code,
+            returnByValue: true,
+            awaitPromise: true,
+            userGesture: true
+        });
+        if (result?.__dialog) {
+            outcome = { data: dialogInterruption(result.__dialog), dialog: true };
+            return { data: outcome.data };
+        }
+        if (result?.exceptionDetails) {
+            const desc = result.exceptionDetails.exception?.description || result.exceptionDetails.text;
+            outcome = { error: desc || "Evaluation error in page context" };
+            throw new Error(outcome.error);
+        }
+        outcome = { data: result?.result?.value !== undefined ? result.result.value : result?.result };
+        return { data: outcome.data };
+    } catch (error) {
+        if (!outcome) outcome = { error: String(error?.message || error) };
+        throw error;
+    } finally {
+        runningEvals.delete(key);
+        const finishedAt = Date.now();
+        // Réponse arrivée après le délai du moteur : l'agent a reçu « timed out » et ne l'a jamais vue.
+        if (replyWithinMs > 0 && finishedAt - now >= replyWithinMs && outcome && !outcome.dialog) {
+            lateEvalResults.set(key, { value: outcome.data, error: outcome.error, startedAt: now, finishedAt });
+        }
+    }
 }
 
 /**
@@ -5826,6 +5879,18 @@ async function sendCdpCommand(params) {
 // SOTA Enhancements: FileChooser, Vision Grounding (SoM), Semantics & Handoff
 // -----------------------------------------------------------------------------
 
+// Dernier dépôt par onglet : le même fichier redéposé dans le même champ pendant que la page envoie encore est refusé,
+// et signalé sinon (la page peut le lister deux fois).
+const recentUploads = new Map();
+const SAME_UPLOAD_MS = 15 * 60 * 1000;
+
+function noteUpload(tabId, selector, files, previous) {
+    recentUploads.set(tabId, { selector, files: JSON.stringify(files), at: Date.now() });
+    if (!previous) return {};
+    return { warning: `The same file was already put in this field ${Math.round((Date.now() - previous.at) / 1000)}s ago: ` +
+        "check that the page does not list it twice." };
+}
+
 /**
  * Tailles des fichiers que la page tient vraiment dans l'input, comparées à celles du disque (sizes, données par le
  * moteur). Chrome lit le fichier sur le disque au moment de l'envoi : un chemin qu'il ne voit pas (dossier virtualisé
@@ -5870,6 +5935,16 @@ async function uploadFiles(params = {}) {
     }
 
     if (activeUploads.has(tabId)) throw new Error("An upload is already pending for this tab");
+    const selector = params.selector || 'input[type="file"]';
+    const previous = recentUploads.get(tabId);
+    const same = Boolean(previous && previous.selector === selector && previous.files === JSON.stringify(params.files) &&
+        Date.now() - previous.at < SAME_UPLOAD_MS);
+    const sending = same ? inFlightSet(tabId).size : 0;
+    if (same && sending > 0) {
+        throw new Error(`Upload refused: the same file was put in this field ${Math.round((Date.now() - previous.at) / 1000)}s ` +
+            `ago and the page is still sending (${sending} request(s) in flight). Nothing was sent; check the page ` +
+            "before resending.");
+    }
     activeUploads.add(tabId);
     let target;
     let timeoutId;
@@ -5877,7 +5952,6 @@ async function uploadFiles(params = {}) {
     try {
         target = await ensureDebugger(tabId);
         await chrome.debugger.sendCommand(target, "DOM.enable");
-        const selector = params.selector || 'input[type="file"]';
         const doc = await chrome.debugger.sendCommand(target, "DOM.getDocument", { depth: -1 });
         const query = await chrome.debugger.sendCommand(target, "DOM.querySelector", {
             nodeId: doc.root.nodeId, selector
@@ -5889,7 +5963,8 @@ async function uploadFiles(params = {}) {
         if (description.node.nodeName === "INPUT" && typeIndex >= 0 && attributes[typeIndex + 1].toLowerCase() === "file") {
             await chrome.debugger.sendCommand(target, "DOM.setFileInputFiles", { files: params.files, nodeId: query.nodeId });
             const placed = await checkUploadedSizes(target, { nodeId: query.nodeId }, params.files, params.sizes);
-            return { data: { success: true, method: "direct_dom", files: params.files, selector, ...placed } };
+            return { data: { success: true, method: "direct_dom", files: params.files, selector, ...placed,
+                ...noteUpload(tabId, selector, params.files, same ? previous : null) } };
         }
         await chrome.debugger.sendCommand(target, "Page.setInterceptFileChooserDialog", { enabled: true });
         fileChooserIntercepted = true;
@@ -5898,7 +5973,7 @@ async function uploadFiles(params = {}) {
             pendingFileChoosers.set(tabId, {
                 files: params.files,
                 sizes: params.sizes,
-                resolve: data => resolve({ data }),
+                resolve: data => resolve({ data: { ...data, ...noteUpload(tabId, selector, params.files, same ? previous : null) } }),
                 reject
             });
             clickElement({ tabId, selector }).then(result => {

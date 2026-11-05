@@ -43,8 +43,15 @@ Do not create a question card just to report progress.
 - A mark whose element the page re-rendered is retargeted to the only element with the same role and name
   (`recovered_mark` in the answer); otherwise the gesture fails with nothing sent.
 - A failed call carries `retry_safe`: `outcome="not_done"` means nothing reached the page (fix and resend);
-  `outcome="unknown"` means it may have acted (check the page before resending); `"partial"`: a batch stopped after
-  earlier steps ran.
+  `"partial"`: a batch stopped after earlier steps ran (resend only the remaining steps).
+- `outcome="unknown"` (a timeout, a lost connection) means it may have acted, or may still be acting: **never
+  resend blindly**. Read the page first (state, list, status text, network) and resend only what did not happen.
+  A `browser_eval` cut by its 20 s timeout keeps running in the page: the identical script is refused while it runs
+  and, once it has finished, returns its result (`earlier_run: true`) without running twice. Long work (a large
+  upload by `fetch`) goes in an unawaited promise whose state the page keeps (`window.__job`), read by a later eval.
+- `browser_upload` hands Chrome the file's real path and checks its size in the page (0 bytes or a mismatch: the
+  input is emptied, `not_done`); the same file put again in the same field is refused while the page is still
+  sending. Before submitting, check that the page lists each file once.
 - `browser_export(tab_id)`: main content as Markdown. Avoid `browser_content(mode="html")` and the raw
   `browser_axtree` (default `mode="full"`) on heavy pages.
 - Chrome Web Store and `chrome://` pages are protected by Chrome: no extension can read them (`protected_page`).

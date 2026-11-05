@@ -78,7 +78,7 @@ public sealed class UploadPreparationTests : IDisposable
     public void AnEvalCutByItsTimeoutSaysTheScriptMayStillRun()
     {
         string answer = McpServer.EvalTimeoutNote(new JsonObject { ["status"] = "error", ["error"] = "Command 'eval' timed out after 20s." }.ToJsonString());
-        Assert.Contains("may still be running in the page; check before resending", answer, StringComparison.Ordinal);
+        Assert.Contains("Still running, do not resend", answer, StringComparison.Ordinal);
         var outcome = (JsonObject)JsonNode.Parse(McpServer.WithOutcome(answer, idempotent: false))!;
         Assert.Equal("unknown", (string?)outcome["outcome"]);
         Assert.Equal(answer, McpServer.EvalTimeoutNote(answer));

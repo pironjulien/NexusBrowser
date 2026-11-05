@@ -853,6 +853,76 @@ test('upload that leaves a 0-byte file in the page empties the input and fails a
     assert.equal(JSON.stringify(set), JSON.stringify([['C:/dist/bundle.msixupload'], []]));
 });
 
+function slowEvalHarness() {
+    const runs = [];
+    const h = harness({}, {
+        virtualTime: true,
+        debuggerSendCommand: async (target, method, params) => {
+            if (method === 'Runtime.evaluate' && params.contextId === undefined) {
+                return new Promise(resolve => runs.push(resolve));
+            }
+        }
+    });
+    return { h, runs };
+}
+
+test('eval: an identical script still running is refused, never run twice', async () => {
+    const { h, runs } = slowEvalHarness();
+    const first = h.run('eval', { tabId: 1, code: 'sendPackage()', replyWithinMs: 20000 });
+    await new Promise(setImmediate);
+    const again = await h.run('eval', { tabId: 1, code: 'sendPackage()', replyWithinMs: 20000 });
+    assert.match(again.error, /Script still running in this tab .*do not resend\. Nothing was sent/);
+    assert.equal(runs.length, 1);
+    // Un autre script, ou le même dans un autre onglet, n'est pas bloqué.
+    const other = h.run('eval', { tabId: 1, code: 'document.title' });
+    await new Promise(setImmediate);
+    assert.equal(runs.length, 2);
+    runs[1]({ result: { value: 'T' } });
+    assert.equal((await other).data, 'T');
+    runs[0]({ result: { value: 'sent' } });
+    assert.equal((await first).data, 'sent');
+});
+
+test('eval: the result of a script that outlived its call is returned once to the identical script', async () => {
+    const { h, runs } = slowEvalHarness();
+    const first = h.run('eval', { tabId: 1, code: 'sendPackage()', replyWithinMs: 20000 });
+    await new Promise(setImmediate);
+    h.advanceTime(65000);
+    runs[0]({ result: { value: 'sent once' } });
+    await first;  // le moteur, lui, a déjà répondu « timed out »
+    const late = await h.run('eval', { tabId: 1, code: 'sendPackage()', replyWithinMs: 20000 });
+    assert.equal(late.data.result, 'sent once');
+    assert.equal(late.data.earlier_run, true);
+    assert.match(late.data.note, /it was not run again/);
+    assert.equal(runs.length, 1);
+    // Rendu une seule fois : l'envoi suivant tourne normalement.
+    const next = h.run('eval', { tabId: 1, code: 'sendPackage()', replyWithinMs: 20000 });
+    await new Promise(setImmediate);
+    assert.equal(runs.length, 2);
+    runs[1]({ result: { value: 'second' } });
+    assert.equal((await next).data, 'second');
+});
+
+test('upload: the same file in the same field is refused while the page is still sending, flagged otherwise', async () => {
+    const { h, set } = uploadHarness([5]);
+    const params = { tabId: 1, files: ['C:/dist/a.msixupload'], sizes: [5], selector: '#f' };
+    const first = await h.run('upload', params);
+    assert.equal(first.data.success, true);
+    assert.equal(first.data.warning, undefined);
+    await h.emit(1, 'Network.requestWillBeSent', { requestId: 'r1', request: { url: 'https://blob.example/put', method: 'PUT' } });
+    const refused = await h.run('upload', params);
+    assert.match(refused.error, /Upload refused: the same file was put in this field .*still sending \(1 request\(s\) in flight\)\. Nothing was sent/);
+    assert.equal(set.length, 1);
+    await h.emit(1, 'Network.loadingFinished', { requestId: 'r1' });
+    const again = await h.run('upload', params);
+    assert.equal(again.data.success, true);
+    assert.match(again.data.warning, /already put in this field .*does not list it twice/);
+    assert.equal(set.length, 2);
+    // Un autre fichier dans ce champ : ni refus ni avertissement.
+    const other = await h.run('upload', { ...params, files: ['C:/dist/b.msixupload'] });
+    assert.equal(other.data.warning, undefined);
+});
+
 test('cdp_send points DOM.setFileInputFiles to browser_upload', async () => {
     const h = harness();
     const res = await h.run('cdp_send', { tabId: 1, method: 'DOM.setFileInputFiles', commandParams: { files: ['C:/x'] } });

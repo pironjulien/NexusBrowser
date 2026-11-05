@@ -5,6 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.17] - 2026-11-05
+
+### Fixed
+- A `browser_eval` still running after its 20 s timeout can no longer be run twice by a blind resend: the identical
+  script sent again to the same tab is refused while it runs ("Script still running... do not resend", outcome
+  `not_done`), and once it has finished it returns that run's result (`{result, earlier_run: true}`) without running
+  again. The timeout error itself says "Still running, do not resend".
+- `browser_upload` refuses the same file put again in the same field while the page is still sending (requests in
+  flight), and flags it with a `warning` otherwise.
+
+### Changed
+- The common guide read by Claude, Codex and Antigravity (skill, MCP server instructions, Antigravity skill) states
+  the rule: after `outcome="unknown"`, never resend blindly; read the page first and resend only what did not happen.
+
 ## [2.35.16] - 2026-11-05
 
 ### Fixed
