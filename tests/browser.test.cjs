@@ -825,7 +825,9 @@ function uploadHarness(pageSizes) {
             if (method === 'DOM.setFileInputFiles') { set.push(params.files); return {}; }
             if (method === 'DOM.resolveNode') return { object: { objectId: 'input-1' } };
             if (method === 'Runtime.callFunctionOn') {
-                return { result: { value: pageSizes.map((size, i) => ({ name: `f${i}`, size })) } };
+                if (params.objectId === 'input-1') return { result: { objectId: 'box-1' } };
+                if (params.returnByValue) return { result: { value: pageSizes.map((size, i) => ({ name: `f${i}`, size })) } };
+                return { result: { objectId: 'input-2' } };
             }
             if (method === 'Runtime.releaseObject') return {};
         }
@@ -840,9 +842,10 @@ test('upload of a 208 MB file checks that the page holds the size on the disk', 
     assert.equal(res.data.success, true);
     assert.deepEqual(res.data.sizes, [size]);
     assert.deepEqual(set, [['C:/dist/bundle.msixupload']]);
-    // Taille lue dans le monde isolé, jamais dans celui de la page.
-    const resolve = h.calls.find(c => c.method === 'DOM.resolveNode');
-    assert.ok(resolve.params.executionContextId >= 1000);
+    // Taille lue dans le monde isolé, jamais dans celui de la page, et le champ suivi AVANT le dépôt.
+    const resolve = h.calls.findIndex(c => c.method === 'DOM.resolveNode');
+    assert.ok(h.calls[resolve].params.executionContextId >= 1000);
+    assert.ok(resolve < h.calls.findIndex(c => c.method === 'DOM.setFileInputFiles'));
 });
 
 test('upload that leaves a 0-byte file in the page empties the input and fails as not done', async () => {
@@ -851,6 +854,7 @@ test('upload that leaves a 0-byte file in the page empties the input and fails a
     assert.match(res.error, /Upload not done: Chrome could not read the file \(C:\/dist\/bundle\.msixupload: 0 bytes in the page, 217990062 on the disk\)/);
     assert.match(res.error, /nothing was sent/);
     assert.equal(JSON.stringify(set), JSON.stringify([['C:/dist/bundle.msixupload'], []]));
+    assert.equal(h.calls.filter(c => c.method === 'DOM.setFileInputFiles').at(-1).params.objectId, 'input-2');
 });
 
 function slowEvalHarness() {
@@ -921,6 +925,67 @@ test('upload: the same file in the same field is refused while the page is still
     // Un autre fichier dans ce champ : ni refus ni avertissement.
     const other = await h.run('upload', { ...params, files: ['C:/dist/b.msixupload'] });
     assert.equal(other.data.warning, undefined);
+});
+
+test('adopted user tab joins the agent group and goes back to its place on release', async () => {
+    const moves = [];
+    let place = { id: 5, url: 'https://doctolib.fr/account/documents', title: 'Docs', windowId: 10, index: 3, groupId: -1 };
+    const h = harness({}, {
+        autoOwn: false,
+        tabs: {
+            get: async () => ({ ...place }),
+            group: async ({ tabIds, groupId }) => { moves.push(['group', tabIds[0], groupId ?? null]); place.groupId = groupId || 101; return place.groupId; },
+            ungroup: async (tabId) => { moves.push(['ungroup', tabId]); place.groupId = -1; },
+            move: async (tabId, { index }) => { moves.push(['move', tabId, index]); place.index = index; }
+        }
+    });
+    const adopted = await h.run('adopt_tab', { tabId: 5, userAsked: true, group: 'Claude' });
+    assert.equal(adopted.data.adopted, true);
+    assert.equal(adopted.data.groupId, 101);
+    assert.deepEqual(moves[0], ['group', 5, null]);
+    place.index = 7;  // déplacé dans le groupe de l'agent
+    const released = await h.run('release_tab', { tabId: 5 });
+    assert.equal(released.data.restored, true);
+    assert.equal(JSON.stringify(moves.slice(1)), JSON.stringify([['ungroup', 5], ['move', 5, 3]]));
+    assert.equal(place.groupId, -1);
+});
+
+test('adopted tab taken from a user group goes back into that group', async () => {
+    const moves = [];
+    let place = { id: 6, url: 'https://example.org/', title: 'X', windowId: 10, index: 2, groupId: 44 };
+    const h = harness({}, {
+        autoOwn: false,
+        tabs: {
+            get: async () => ({ ...place }),
+            group: async ({ tabIds, groupId }) => { moves.push(['group', tabIds[0], groupId ?? null]); place.groupId = groupId || 101; return place.groupId; },
+            ungroup: async (tabId) => { moves.push(['ungroup', tabId]); },
+            move: async (tabId, { index }) => { moves.push(['move', tabId, index]); }
+        }
+    });
+    await h.run('adopt_tab', { tabId: 6, userAsked: true, group: 'Claude' });
+    await h.run('release_tab', { tabId: 6 });
+    assert.equal(JSON.stringify(moves.slice(1)), JSON.stringify([['group', 6, 44], ['move', 6, 2]]));
+});
+
+test('upload: a page that replaces the input once it has the file still counts as done', async () => {
+    const set = [];
+    const h = harness({}, {
+        debuggerSendCommand: async (target, method, params) => {
+            if (method === 'DOM.describeNode') return { node: { nodeName: 'INPUT', attributes: ['type', 'file'] } };
+            if (method === 'DOM.setFileInputFiles') { set.push(params.files); return {}; }
+            if (method === 'DOM.resolveNode') return { object: { objectId: 'input-1' } };
+            if (method === 'Runtime.callFunctionOn') {
+                if (params.objectId === 'input-1') return { result: { objectId: 'box-1' } };
+                throw new Error('{"code":-32000,"message":"No node with given id found"}');
+            }
+            if (method === 'Runtime.releaseObject') return {};
+        }
+    });
+    const res = await h.run('upload', { tabId: 1, files: ['C:/docs/fiche.png'], sizes: [702632], selector: '#f' });
+    assert.equal(res.data.success, true);
+    assert.equal(res.data.verified, false);
+    assert.match(res.data.warning, /size not checked .*check the page/);
+    assert.equal(set.length, 1);
 });
 
 test('cdp_send points DOM.setFileInputFiles to browser_upload', async () => {

@@ -217,9 +217,9 @@ function saveExtensionState() {
 // Propriété relue avant la toute première commande (redémarrage du service worker et rechargement de l'extension compris).
 const extensionStateReady = (typeof chrome !== "undefined" && chrome.storage?.local) ? loadExtensionState() : Promise.resolve();
 
-async function rememberTabOwner(tabId, client, how = "created") {
+async function rememberTabOwner(tabId, client, how = "created", extra = {}) {
     if (!Number.isInteger(tabId) || !validClient(client)) return;
-    const owner = { agent: client.agent, client: client.id, adopted: how === "adopted", since: Date.now() };
+    const owner = { agent: client.agent, client: client.id, adopted: how === "adopted", since: Date.now(), ...extra };
     tabOwners.set(tabId, owner);
     await saveExtensionState();
     return owner;  // l'objet écrit par CET appel, même si la Map a changé pendant la sauvegarde
@@ -782,11 +782,12 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
         if (pending) {
             pendingFileChoosers.delete(source.tabId);
             try {
+                const watchId = await watchUploadInput(source, { backendNodeId: params.backendNodeId }, pending.sizes);
                 await chrome.debugger.sendCommand(source, "DOM.setFileInputFiles", {
                     files: pending.files,
                     backendNodeId: params.backendNodeId
                 });
-                const placed = await checkUploadedSizes(source, { backendNodeId: params.backendNodeId }, pending.files, pending.sizes);
+                const placed = await checkUploadedSizes(source, watchId, pending.files, pending.sizes);
                 pending.resolve({ success: true, files: pending.files, ...placed });
             } catch (err) {
                 pending.reject(err);
@@ -4088,8 +4089,31 @@ async function adoptTab(params = {}, client = null) {
     let tab = null;
     try { tab = await chrome.tabs.get(tabId); } catch (_) {}
     if (tab && isProtectedUrl(tab.url)) return { error: `Tab ${tabId} is protected (${tab.url}): never handed to an agent.` };
-    await rememberTabOwner(tabId, client, "adopted");
-    return { data: { tabId, adopted: true, owner: client.agent, title: tab?.title || "", url: maskUrl(tab?.url || "") } };
+    // Place d'origine gardée (fenêtre, position, groupe) : l'onglet rejoint le groupe de l'agent, comme ceux qu'il ouvre,
+    // et release_tab le remet où Julien l'avait.
+    const restore = tab && Number.isInteger(tab.index)
+        ? { windowId: tab.windowId, index: tab.index, groupId: Number.isInteger(tab.groupId) ? tab.groupId : -1 } : null;
+    await rememberTabOwner(tabId, client, "adopted", restore ? { restore } : {});
+    let groupId = null;
+    if (params.group && chrome.tabGroups && chrome.tabs?.group) {
+        try { groupId = (await groupTabs({ tabIds: [tabId], title: String(params.group), color: "purple" }))?.data?.groupId ?? null; }
+        catch (error) { console.log("[NexusBrowser] Adopted tab not grouped:", error?.message || error); }
+    }
+    return { data: { tabId, adopted: true, owner: client.agent, title: tab?.title || "", url: maskUrl(tab?.url || ""), groupId } };
+}
+
+/** Onglet adopté rendu à Julien : de retour dans son groupe d'origine (ou hors groupe) et à sa position, si possible. */
+async function restoreAdoptedPlace(tabId, restore) {
+    let tab;
+    try { tab = await chrome.tabs.get(tabId); } catch (_) { return false; }
+    if (restore.groupId >= 0) {
+        try { await chrome.tabs.group({ tabIds: [tabId], groupId: restore.groupId }); }
+        catch (_) { if (tab.groupId >= 0) await chrome.tabs.ungroup?.(tabId)?.catch?.(() => {}); }  // groupe disparu
+    } else if (Number.isInteger(tab.groupId) && tab.groupId >= 0) {
+        await chrome.tabs.ungroup?.(tabId);
+    }
+    if (tab.windowId === restore.windowId && chrome.tabs.move) await chrome.tabs.move(tabId, { index: restore.index });
+    return true;
 }
 
 /**
@@ -4097,7 +4121,7 @@ async function adoptTab(params = {}, client = null) {
  * Un onglet de Julien adopté par l'ancienne session le reste (« adopté », rendu à Julien par release_tab).
  */
 async function reclaimOrphan(tabId, owner, client) {
-    await rememberTabOwner(tabId, client, owner.adopted ? "adopted" : "created");
+    await rememberTabOwner(tabId, client, owner.adopted ? "adopted" : "created", owner.restore ? { restore: owner.restore } : {});
     return { tabId, reclaimed: true, adopted: !!owner.adopted, owner: client.agent };
 }
 
@@ -4122,10 +4146,16 @@ async function heartbeat(params = {}, client = null) {
 /** L'agent rend son onglet à Julien sans le fermer : propriété retirée, débogueur détaché. */
 async function releaseTab(params = {}) {
     const tabId = requestedTabId(params);
+    const owner = tabOwners.get(tabId);
     networkRecording.delete(tabId);
     await detachDebugger(tabId);
+    let restored = false;
+    if (owner?.adopted && owner.restore) {
+        try { restored = await restoreAdoptedPlace(tabId, owner.restore); }
+        catch (error) { console.log("[NexusBrowser] Released tab not put back:", error?.message || error); }
+    }
     await forgetTabOwner(tabId);
-    return { data: { tabId, released: true } };
+    return { data: { tabId, released: true, ...(owner?.adopted ? { restored } : {}) } };
 }
 
 async function closeTab(params = {}) {
@@ -5897,27 +5927,64 @@ function noteUpload(tabId, selector, files, previous) {
  * d'une appli MSIX, fichier absent) donnait un File de 0 octet sans aucune erreur (Partner Center, 05/11, 208 Mo).
  * Lu dans le monde isolé : la page ne peut pas maquiller input.files. Écart : l'input est vidé et l'appel échoue.
  */
-async function checkUploadedSizes(target, node, files, sizes) {
-    if (!Array.isArray(sizes) || sizes.length === 0) return {};
+async function watchUploadInput(target, node, sizes) {
+    if (!Array.isArray(sizes) || sizes.length === 0) return null;
     const contextId = await worldFor(target, await mainFrameId(target));
     const resolved = await chrome.debugger.sendCommand(target, "DOM.resolveNode", { ...node, executionContextId: contextId });
-    const objectId = resolved?.object?.objectId;
-    if (!objectId) throw new Error("Upload not verified: the file input is gone from the page.");
+    const inputId = resolved?.object?.objectId;
+    if (!inputId) throw new Error("Upload element not found: the file input is gone from the page; nothing was sent.");
+    // Fichiers relevés au moment même du dépôt (écouteur de capture, avant ceux de la page) : un site qui remplace le
+    // champ ou le vide aussitôt (MDPH Essonne, 05/11 : « No node with given id found ») est jugé sur ce qu'il a reçu.
+    const watch = await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
+        objectId: inputId,
+        functionDeclaration: `function () {
+            const box = { input: this, files: null };
+            const seen = () => { if (!box.files) box.files = Array.from(this.files || [], f => ({ name: f.name, size: f.size })); };
+            this.addEventListener("input", seen, { capture: true, once: true });
+            this.addEventListener("change", seen, { capture: true, once: true });
+            return box;
+        }`
+    });
+    chrome.debugger.sendCommand(target, "Runtime.releaseObject", { objectId: inputId }).catch(() => {});
+    return watch?.result?.objectId || null;
+}
+
+/**
+ * Tailles des fichiers que la page a vraiment reçus, comparées à celles du disque (sizes, données par le moteur).
+ * Chrome lit le fichier sur le disque au moment de l'envoi : un chemin qu'il ne voit pas (dossier virtualisé d'une
+ * appli MSIX, fichier absent) donnait un File de 0 octet sans aucune erreur (Partner Center, 05/11, 208 Mo). Lu dans
+ * le monde isolé : la page ne peut pas maquiller input.files. Écart : l'input est vidé et l'appel échoue.
+ */
+async function checkUploadedSizes(target, watchId, files, sizes) {
+    if (!watchId) return {};
     let placed;
     try {
         const res = await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
-            objectId,
-            functionDeclaration: "function () { return Array.from(this.files || [], f => ({ name: f.name, size: f.size })); }",
+            objectId: watchId,
+            functionDeclaration: "function () { return this.files || Array.from(this.input.files || [], f => ({ name: f.name, size: f.size })); }",
             returnByValue: true
         });
         placed = res?.result?.value;
-    } finally {
-        chrome.debugger.sendCommand(target, "Runtime.releaseObject", { objectId }).catch(() => {});
+    } catch (error) {
+        chrome.debugger.sendCommand(target, "Runtime.releaseObject", { objectId: watchId }).catch(() => {});
+        return { verified: false, warning: `Files put in the input, size not checked (${error?.message || error}): check the page.` };
     }
     const count = Array.isArray(placed) ? placed.length : 0;
     const wrong = count === sizes.length ? placed.findIndex((f, i) => Number(f?.size) !== Number(sizes[i])) : -2;
-    if (wrong === -1) return { sizes: placed.map(f => f.size) };
-    await chrome.debugger.sendCommand(target, "DOM.setFileInputFiles", { ...node, files: [] }).catch(() => {});
+    if (wrong === -1) {
+        chrome.debugger.sendCommand(target, "Runtime.releaseObject", { objectId: watchId }).catch(() => {});
+        return { sizes: placed.map(f => f.size) };
+    }
+    try {
+        const input = await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
+            objectId: watchId, functionDeclaration: "function () { return this.input; }"
+        });
+        if (input?.result?.objectId) {
+            await chrome.debugger.sendCommand(target, "DOM.setFileInputFiles", { objectId: input.result.objectId, files: [] }).catch(() => {});
+        }
+    } finally {
+        chrome.debugger.sendCommand(target, "Runtime.releaseObject", { objectId: watchId }).catch(() => {});
+    }
     const detail = wrong >= 0
         ? `${files[wrong]}: ${placed[wrong].size} bytes in the page, ${sizes[wrong]} on the disk`
         : `${count} file(s) in the page, ${sizes.length} expected`;
@@ -5961,8 +6028,9 @@ async function uploadFiles(params = {}) {
         const attributes = description.node.attributes || [];
         const typeIndex = attributes.indexOf("type");
         if (description.node.nodeName === "INPUT" && typeIndex >= 0 && attributes[typeIndex + 1].toLowerCase() === "file") {
+            const watchId = await watchUploadInput(target, { nodeId: query.nodeId }, params.sizes);
             await chrome.debugger.sendCommand(target, "DOM.setFileInputFiles", { files: params.files, nodeId: query.nodeId });
-            const placed = await checkUploadedSizes(target, { nodeId: query.nodeId }, params.files, params.sizes);
+            const placed = await checkUploadedSizes(target, watchId, params.files, params.sizes);
             return { data: { success: true, method: "direct_dom", files: params.files, selector, ...placed,
                 ...noteUpload(tabId, selector, params.files, same ? previous : null) } };
         }

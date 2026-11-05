@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.18] - 2026-11-05
+
+### Changed
+- A user tab adopted by an agent (`browser_adopt_tab`) joins that agent's tab group, like the tabs it opens, so the
+  user sees at a glance which AI drives it. `browser_release_tab` puts it back where the user had it: its own group
+  (or none) and its position in the window.
+
+### Fixed
+- `browser_upload` no longer fails with "No node with given id found" on a site that replaces or empties its file
+  input as soon as it receives the file (MDPH form, 05/11): the input is followed from before the files are put in,
+  and the sizes are read at that very moment. A check that cannot run leaves the upload done, with a warning to look
+  at the page, instead of a failed call that invited a resend.
+
 ## [2.35.17] - 2026-11-05
 
 ### Fixed

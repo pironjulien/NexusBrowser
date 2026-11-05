@@ -1213,6 +1213,7 @@ public sealed partial class McpServer : IDisposable
             {
                 var p = RequireTabParams(args);
                 p["userAsked"] = GetBool(args, "user_asked", false);
+                p["group"] = identity.Agent;  // same group as the tabs this agent opens; release_tab puts it back
                 return await CallBridgeFormattedAsync("adopt-tab", p, 20.0, identity, pid, ct: ct);
             }
 
