@@ -63,6 +63,9 @@ public sealed partial class McpParityTests
     {
         var answer = Payload(result);
         Assert.True(answer["accord_required"]?.GetValue<bool>() == true, answer.ToJsonString());
+        // Held for the user's accord: the expected first step, not shown by the host as a failed call.
+        Assert.False(result["isError"]?.GetValue<bool>() ?? false, result.ToJsonString());
+        Assert.False(result.ContainsKey("structuredContent"), result.ToJsonString());
         var found = AccordToken().Match((string)answer["error"]!);
         Assert.True(found.Success, answer.ToJsonString());
         return found.Groups[1].Value;

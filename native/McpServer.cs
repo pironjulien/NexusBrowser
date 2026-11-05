@@ -1005,7 +1005,10 @@ public sealed partial class McpServer : IDisposable
         {
             string rawJson = await ExecuteToolAsync(name, args, identity, pid, appel, ct);
             parsedAnswer = JsonNode.Parse(rawJson) as JsonObject;
-            bool isError = parsedAnswer?["status"]?.GetValue<string>() == "error";
+            bool failed = parsedAnswer?["status"]?.GetValue<string>() == "error";
+            // An outward gesture held for the user's accord is the expected first step, not a failure: nothing was
+            // done and the answer says so (outcome not_done), but the host does not show it as a failed call.
+            bool isError = failed && parsedAnswer?["accord_required"]?.GetValue<bool>() != true;
 
             if (name != "browser_batch")
                 WriteJournalLine(name, args, parsedAnswer, failed: false, started, appel, identity);
@@ -1023,7 +1026,7 @@ public sealed partial class McpServer : IDisposable
                 ["isError"] = isError,
             };
 
-            if (!isError && parsedAnswer != null && EmbeddedTools.Value.StructuredTools.Contains(name))
+            if (!failed && parsedAnswer != null && EmbeddedTools.Value.StructuredTools.Contains(name))
             {
                 callResult["structuredContent"] = (JsonObject)parsedAnswer.DeepClone();
             }

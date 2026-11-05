@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.15] - 2026-11-05
+
+### Changed
+- An outward gesture held for the user's accord (Submit for certification, Send, Publish...) is no longer reported to
+  the AI app as a failed call: it is the expected first step of the accord, not an error. The answer is unchanged
+  (`accord_required`, outcome `not_done`, nothing done, single-use token), batches still stop on it, and the guard
+  itself is untouched.
+
 ## [2.35.14] - 2026-11-04
 
 ### Changed
