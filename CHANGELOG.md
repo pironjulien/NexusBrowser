@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.19] - 2026-11-05
+
+### Fixed
+- rowser_upload: watchUploadInput uses ackendNodeId across execution contexts and catches resolution errors so dynamic file inputs (MDPH form) never abort before files are placed.
+
 ## [2.35.18] - 2026-11-05
 
 ### Changed

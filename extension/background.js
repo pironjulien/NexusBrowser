@@ -5929,24 +5929,28 @@ function noteUpload(tabId, selector, files, previous) {
  */
 async function watchUploadInput(target, node, sizes) {
     if (!Array.isArray(sizes) || sizes.length === 0) return null;
-    const contextId = await worldFor(target, await mainFrameId(target));
-    const resolved = await chrome.debugger.sendCommand(target, "DOM.resolveNode", { ...node, executionContextId: contextId });
-    const inputId = resolved?.object?.objectId;
-    if (!inputId) throw new Error("Upload element not found: the file input is gone from the page; nothing was sent.");
-    // Fichiers relevés au moment même du dépôt (écouteur de capture, avant ceux de la page) : un site qui remplace le
-    // champ ou le vide aussitôt (MDPH Essonne, 05/11 : « No node with given id found ») est jugé sur ce qu'il a reçu.
-    const watch = await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
-        objectId: inputId,
-        functionDeclaration: `function () {
-            const box = { input: this, files: null };
-            const seen = () => { if (!box.files) box.files = Array.from(this.files || [], f => ({ name: f.name, size: f.size })); };
-            this.addEventListener("input", seen, { capture: true, once: true });
-            this.addEventListener("change", seen, { capture: true, once: true });
-            return box;
-        }`
-    });
-    chrome.debugger.sendCommand(target, "Runtime.releaseObject", { objectId: inputId }).catch(() => {});
-    return watch?.result?.objectId || null;
+    try {
+        const contextId = await worldFor(target, await mainFrameId(target));
+        const resolved = await chrome.debugger.sendCommand(target, "DOM.resolveNode", { ...node, executionContextId: contextId });
+        const inputId = resolved?.object?.objectId;
+        if (!inputId) return null;
+        // Fichiers relevés au moment même du dépôt (écouteur de capture, avant ceux de la page) : un site qui remplace le
+        // champ ou le vide aussitôt (MDPH Essonne, 05/11 : « No node with given id found ») est jugé sur ce qu'il a reçu.
+        const watch = await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
+            objectId: inputId,
+            functionDeclaration: `function () {
+                const box = { input: this, files: null };
+                const seen = () => { if (!box.files) box.files = Array.from(this.files || [], f => ({ name: f.name, size: f.size })); };
+                this.addEventListener("input", seen, { capture: true, once: true });
+                this.addEventListener("change", seen, { capture: true, once: true });
+                return box;
+            }`
+        });
+        chrome.debugger.sendCommand(target, "Runtime.releaseObject", { objectId: inputId }).catch(() => {});
+        return watch?.result?.objectId || null;
+    } catch (_) {
+        return null;
+    }
 }
 
 /**
@@ -6028,7 +6032,8 @@ async function uploadFiles(params = {}) {
         const attributes = description.node.attributes || [];
         const typeIndex = attributes.indexOf("type");
         if (description.node.nodeName === "INPUT" && typeIndex >= 0 && attributes[typeIndex + 1].toLowerCase() === "file") {
-            const watchId = await watchUploadInput(target, { nodeId: query.nodeId }, params.sizes);
+            const nodeTarget = description.node?.backendNodeId ? { backendNodeId: description.node.backendNodeId } : { nodeId: query.nodeId };
+            const watchId = await watchUploadInput(target, nodeTarget, params.sizes);
             await chrome.debugger.sendCommand(target, "DOM.setFileInputFiles", { files: params.files, nodeId: query.nodeId });
             const placed = await checkUploadedSizes(target, watchId, params.files, params.sizes);
             return { data: { success: true, method: "direct_dom", files: params.files, selector, ...placed,
