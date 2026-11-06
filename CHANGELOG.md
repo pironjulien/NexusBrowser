@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.22] - 2026-11-06
+
+### Fixed
+- `browser_screenshot` notes no longer say a raw capture over 3 MB is rejected with HTTP 400: no AI app refuses
+  such images (tested up to 6.8 MB). They give the real reason, the shared Nexus image ceiling of 3 MB.
+
 ## [2.35.21] - 2026-11-06
 
 ### Changed
