@@ -8,7 +8,7 @@ namespace NexusBrowser.Native;
 
 public sealed partial class McpServer
 {
-    private const int MaxImageSide = 2000, MaxImagePixels = 2_560_000, MaxImageBytes = 500_000;
+    private const int MaxImageSide = 2000, MaxImagePixels = 2_560_000, MaxImageBytes = 3 * 1024 * 1024;
     private sealed record SentCapture(string Geometry, byte[] Fingerprint, long SentAt);
     private sealed record ViewCapture(double Factor, double Dpr, int Width, int Height);
     private readonly ConcurrentDictionary<(string Session, int Tab, string Target), SentCapture> _sentCaptures = new();
@@ -73,6 +73,12 @@ public sealed partial class McpServer
             heightOut = Math.Max(1, (int)Math.Floor(source.Height * scale));
             using var image = source.Resize(new SKImageInfo(widthOut, heightOut), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear)) ?? throw new InvalidDataException("Capture resize failed");
             webp = EncodeWebp(image, null); encoding = "lossless";
+            foreach (int bits in new[] { 2, 3 })
+            {
+                if (webp.Length <= MaxImageBytes) break;
+                using var reduced = DropLowBits(image, bits);
+                webp = EncodeWebp(reduced, null); encoding = $"lossless, {bits} low bits dropped";
+            }
             foreach (int quality in new[] { 90, 80, 70, 55, 40 })
             {
                 if (webp.Length <= MaxImageBytes) break;
@@ -85,7 +91,7 @@ public sealed partial class McpServer
                 for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) { var pixel = gray.GetPixel(x, y); fingerprint[y * 64 + x] = (byte)((pixel.Red * 299 + pixel.Green * 587 + pixel.Blue * 114) / 1000); }
                 break;
             }
-            if (Math.Min(widthOut, heightOut) <= 1) return ErrorJson("Capture cannot fit the 500 KB inline image limit");
+            if (Math.Min(widthOut, heightOut) <= 1) return ErrorJson("Capture cannot fit the 3 MB inline image limit");
             scale *= .8;
         }
         var clip = data["clip"] as JsonObject;
@@ -130,6 +136,17 @@ public sealed partial class McpServer
             while (_viewCaptures.Count > 512) _viewCaptures.TryRemove(_viewCaptures.First().Key, out _);
         }
         return new JsonObject { ["status"] = "success", ["data"] = data }.ToJsonString(CompactJson);
+    }
+
+    // Repli sans perte de NexusShared/images.md : retire les bits de poids faible de chaque couleur (alpha intact).
+    internal static SKBitmap DropLowBits(SKBitmap image, int bits)
+    {
+        var copy = image.Copy(SKColorType.Rgba8888) ?? throw new InvalidDataException("Capture copy failed");
+        byte mask = (byte)(0xFF << bits);
+        using var pixels = copy.PeekPixels();
+        var span = pixels.GetPixelSpan<byte>();
+        for (int i = 0; i < span.Length; i += 4) { span[i] &= mask; span[i + 1] &= mask; span[i + 2] &= mask; }
+        return copy;
     }
 
     private static byte[] EncodeWebp(SKBitmap image, int? quality)

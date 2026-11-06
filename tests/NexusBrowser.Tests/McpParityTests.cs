@@ -327,7 +327,7 @@ public sealed partial class McpParityTests
         Assert.Equal("image", (string?)block["type"]);
         Assert.Equal("image/webp", (string?)block["mimeType"]);
         byte[] encoded = Convert.FromBase64String((string)block["data"]!);
-        Assert.True(encoded.Length <= 500_000, $"{encoded.Length} bytes");
+        Assert.True(encoded.Length <= 3 * 1024 * 1024, $"{encoded.Length} bytes");
         using (var image = SKBitmap.Decode(encoded))
         {
             Assert.NotNull(image);
@@ -344,6 +344,35 @@ public sealed partial class McpParityTests
         var zoomed = await session.CallAsync("browser_screenshot", With(inline, ("region", new JsonArray(0, 0, 100, 100))));
         Assert.False((bool)zoomed["isError"]!, zoomed.ToJsonString());
         Assert.Equal(200, (int)session.Commands[^1]["params"]!["region"]!["width"]!);
+    }
+
+    [Fact]
+    public async Task InlineCaptureKeepsThe3MbCeilingAndDropsLowBitsBeforeLossy()
+    {
+        // 4 random low bits per color: lossless WebP is above 3 MB, 2 dropped bits bring it under.
+        string dataUrl;
+        var random = new Random(42);
+        using (var bitmap = new SKBitmap(2000, 1125, SKColorType.Rgba8888, SKAlphaType.Opaque))
+        {
+            using (var pixels = bitmap.PeekPixels())
+            {
+                var span = pixels.GetPixelSpan<byte>();
+                for (int i = 0; i < span.Length; i += 4)
+                { span[i] = (byte)(96 + random.Next(16)); span[i + 1] = (byte)(96 + random.Next(16)); span[i + 2] = (byte)(96 + random.Next(16)); span[i + 3] = 255; }
+            }
+            using var png = bitmap.Encode(SKEncodedImageFormat.Png, 100);
+            dataUrl = "data:image/png;base64," + Convert.ToBase64String(png.ToArray());
+        }
+        using var session = new EngineSession((_, _) => new JsonObject { ["dataUrl"] = dataUrl, ["devicePixelRatio"] = 1, ["zoom"] = 1 });
+
+        var result = await session.CallAsync("browser_screenshot", Args("""{"tab_id":7,"inline":true}"""));
+        Assert.False((bool)result["isError"]!, result.ToJsonString());
+        var image = Payload(result)["data"]!["image"]!;
+        Assert.Equal("lossless, 2 low bits dropped", (string?)image["encoding"]);
+        Assert.Equal(2000, (int)image["width"]!);
+        byte[] encoded = Convert.FromBase64String((string)result["content"]![1]!["data"]!);
+        Assert.True(encoded.Length <= 3 * 1024 * 1024, $"{encoded.Length} bytes");
+        Assert.Equal(encoded.Length, (int)image["bytes"]!);
     }
 
     [Fact]

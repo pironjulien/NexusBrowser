@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.21] - 2026-11-06
+
+### Changed
+- Inline images (`browser_screenshot` and `browser_vision_inspect` with `inline=True`) follow the shared Nexus image
+  rule of 2026-11-06: lossless WebP up to 3 MB (3 × 1024 × 1024 bytes, was 500 KB), long side ≤ 2000 px and
+  ≤ 2.56 MP unchanged. Above 3 MB, lossless WebP with 2 then 3 low bits dropped per color comes before lossy WebP
+  (quality 90, 80, 70…), and only then a smaller image; never over 3 MB. Tool descriptions say 3 MB.
+
 ## [2.35.20] - 2026-11-05
 
 ### Fixed
