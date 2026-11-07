@@ -35,6 +35,7 @@ public static class Program
 
     private static async Task<int> RunAsync(string[] args)
     {
+        EngineLock.Hold();
         // Chrome starts this WinExe through cmd.exe with native-messaging pipes.
         // Attaching its console replaces those inherited handles with CONIN$/CONOUT$,
         // so the host waits forever instead of answering Chrome. Never attach a console:

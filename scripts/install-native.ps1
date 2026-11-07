@@ -327,17 +327,16 @@ if ($UpdateOnly) {
 }
 
 # --- 10. Older builds no process runs any more, and the legacy fixed folder, are removed.
-Remove-UnusedEngineBuilds $versionsRoot $versionDir
-$running = @(Get-CimInstance Win32_Process -Filter "Name='NexusBrowser.exe'" | ForEach-Object { $_.ExecutablePath })
+# Process images read by QueryFullProcessImageNameW; nothing is removed while a candidate process cannot be read.
+$engineImages = Get-ProcessImages 'NexusBrowser'
+Remove-UnusedEngineBuilds $versionsRoot $versionDir $engineImages
 $legacyDir = Split-Path $legacyExe
-if ((Test-Path -LiteralPath $legacyDir) -and -not ($running -contains $legacyExe)) {
-    Remove-Item -LiteralPath $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
-    if (-not (Test-Path -LiteralPath $legacyDir)) { Write-Journal "Legacy engine folder removed: $legacyDir" }
+if ((Test-Path -LiteralPath $legacyDir) -and (Remove-FolderIfUnused $legacyDir $engineImages)) {
+    Write-Journal "Legacy engine folder removed: $legacyDir"
 }
 $oldVenv = Join-Path $localRoot 'venv'
-if ((Test-Path -LiteralPath $oldVenv) -and -not (Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$oldVenv\*" })) {
-    Remove-Item -LiteralPath $oldVenv -Recurse -Force -ErrorAction SilentlyContinue
-    if (-not (Test-Path -LiteralPath $oldVenv)) { Write-Journal "Former Python environment removed: $oldVenv" }
+if ((Test-Path -LiteralPath $oldVenv) -and (Remove-FolderIfUnused $oldVenv (Get-ProcessImages 'python', 'pythonw'))) {
+    Write-Journal "Former Python environment removed: $oldVenv"
 }
 if ($Register -and $pack) { Write-Host $registration.Output }  # the NEXUS_PACK_RESULT line stays the last
 elseif ($bridgeDeferred) { Write-Host "NexusBrowser $version prepared; the running bridge is kept until its next natural exit." }

@@ -112,23 +112,87 @@ function Install-EngineBuild([string]$Candidate, [string]$VersionsRoot) {
         $staging = "$directory.tmp-$PID"
         New-Item -ItemType Directory -Force $staging | Out-Null
         Get-ChildItem -LiteralPath $Candidate | Copy-Item -Destination $staging -Recurse -Force
+        [IO.File]::WriteAllText((Join-Path $staging 'engine.lock'), '')  # held by each engine run from here (EngineLock)
         if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force }  # incomplete leftover
         Rename-Item -LiteralPath $staging -NewName (Split-Path -Leaf $directory)
     }
     if ((Get-BuildFingerprint $directory) -cne $fingerprint) {
         throw "Installed build cache does not match the verified payload: $directory. It was not executed or overwritten."
     }
+    # A build installed before 2.35.26 gets its lock file (a new empty file: nothing an engine reads changes).
+    $lock = Join-Path $directory 'engine.lock'
+    if (-not (Test-Path -LiteralPath $lock)) { [IO.File]::WriteAllText($lock, '') }
     [pscustomobject]@{ Directory = $directory; Fingerprint = $fingerprint; New = $new }
 }
 
-# Removes the build folders of <VersionsRoot> other than $Keep that no NexusBrowser.exe process runs from: an engine
-# still serving an AI session keeps its whole folder until it exits, and a later update removes it.
-function Remove-UnusedEngineBuilds([string]$VersionsRoot, [string]$Keep) {
+# Image paths of the running processes called $Name (without .exe), read by QueryFullProcessImageNameW with
+# PROCESS_QUERY_LIMITED_INFORMATION: unlike WMI's ExecutablePath, Get-Process .Path or Process.MainModule, it also
+# reads an elevated process of the same user. Unknown: one of them runs but cannot be read at all; callers then keep
+# every folder.
+if (-not ('NexusBrowserProcessImage' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Text;
+public static class NexusBrowserProcessImage {
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int id);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr handle, out uint code);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder name, ref uint size);
+    // Image path of a process; "" once it has exited; null while it runs but cannot be read.
+    public static string Read(int id) {
+        IntPtr handle = OpenProcess(0x1000, false, id);  // PROCESS_QUERY_LIMITED_INFORMATION
+        if (handle == IntPtr.Zero) return Marshal.GetLastWin32Error() == 87 ? "" : null;  // 87: no such process
+        try {
+            StringBuilder name = new StringBuilder(32768); uint size = (uint)name.Capacity;
+            if (QueryFullProcessImageNameW(handle, 0, name, ref size)) return name.ToString(0, (int)size);
+            uint code; return GetExitCodeProcess(handle, out code) && code != 259 ? "" : null;  // 259: STILL_ACTIVE
+        } finally { CloseHandle(handle); }
+    }
+}
+'@
+}
+function Get-ProcessImages([string[]]$Name) {
+    $paths = New-Object Collections.Generic.List[string]; $unknown = $false
+    foreach ($process in @(Get-Process -Name $Name -ErrorAction SilentlyContinue)) {
+        $path = [NexusBrowserProcessImage]::Read($process.Id)
+        if ($null -eq $path) { $unknown = $true } elseif ($path) { $paths.Add($path) }
+    }
+    [pscustomobject]@{ Paths = $paths.ToArray(); Unknown = $unknown }
+}
+
+# True when a folder may still be used: a process image in it, an unreadable process ($Images.Unknown), or its
+# engine.lock held (every engine holds the one of its folder for its whole life, whatever path spelling started it).
+function Test-FolderInUse([string]$Folder, $Images) {
+    if ($Images.Unknown) { return $true }
+    $prefix = $Folder.TrimEnd('\') + '\'
+    if ($Images.Paths | Where-Object { $_.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) }) { return $true }
+    $lock = Join-Path $Folder 'engine.lock'
+    if (Test-Path -LiteralPath $lock -PathType Leaf) {
+        try { [IO.File]::Open($lock, 'Open', 'ReadWrite', 'None').Dispose() } catch { return $true }
+    }
+    return $false
+}
+
+# Removes a folder no process uses: renamed aside first (Windows refuses while a file in it is open: an engine starting
+# meanwhile holds its lock), then deleted. Returns $true when it is gone; a folder in use stays whole.
+function Remove-FolderIfUnused([string]$Folder, $Images) {
+    if (Test-FolderInUse $Folder $Images) { return $false }
+    $aside = "$($Folder.TrimEnd('\')).$PID.removing"
+    try { [IO.Directory]::Move($Folder, $aside) } catch { return $false }
+    Remove-Item -LiteralPath $aside -Recurse -Force -ErrorAction SilentlyContinue  # anything left goes next time
+    return -not (Test-Path -LiteralPath $aside)
+}
+
+# Removes the build folders of <VersionsRoot> other than $Keep that no engine uses (Test-FolderInUse): an engine still
+# serving an AI session keeps its whole folder until it exits, and a later update removes it. Leftovers renamed aside
+# (*.removing) go too.
+function Remove-UnusedEngineBuilds([string]$VersionsRoot, [string]$Keep, $Images = (Get-ProcessImages 'NexusBrowser')) {
     if (-not (Test-Path -LiteralPath $VersionsRoot)) { return }
-    $running = @(Get-CimInstance Win32_Process -Filter "Name='NexusBrowser.exe'" | ForEach-Object { $_.ExecutablePath })
     foreach ($dir in Get-ChildItem -LiteralPath $VersionsRoot -Directory) {
         if ($dir.FullName -eq $Keep) { continue }
-        if ($running | Where-Object { $_ -and $_.StartsWith($dir.FullName + '\', [StringComparison]::OrdinalIgnoreCase) }) { continue }
-        Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        if ($dir.Name -like '*.removing') {
+            if (-not (Test-FolderInUse $dir.FullName $Images)) { Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+            continue
+        }
+        $null = Remove-FolderIfUnused $dir.FullName $Images
     }
 }

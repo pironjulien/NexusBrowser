@@ -116,6 +116,9 @@ public sealed class UpdateWhileRunningTests(ReleaseEngine release) : IClassFixtu
             return JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))!;
         }
 
+        // The engine holds the engine.lock of its build folder (EngineLock): the cleanup cannot take it.
+        Assert.Throws<IOException>(() => new FileStream(Path.Join(running, "engine.lock"), FileMode.Open, FileAccess.ReadWrite, FileShare.None).Dispose());
+
         // Only the session is opened before the update: every tool path below runs for the first time after it.
         await Post("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""");
 
@@ -139,7 +142,7 @@ public sealed class UpdateWhileRunningTests(ReleaseEngine release) : IClassFixtu
             Assert.NotEqual(running, updated[0]);
             Assert.Equal(fingerprint, updated[1]); // the running engine's folder is kept, its file untouched
             Assert.Equal(Directory.EnumerateFiles(release.Folder).Select(Path.GetFileName).Order(),
-                Directory.EnumerateFiles(running).Select(Path.GetFileName).Where(f => f != "installation.json").Order());
+                Directory.EnumerateFiles(running).Select(Path.GetFileName).Where(f => f is not ("installation.json" or "engine.lock")).Order());
         }
 
         var tools = await Post("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");

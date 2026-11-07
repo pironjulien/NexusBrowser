@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.26] - 2026-11-07
+
+### Fixed
+- An update could delete the build folder of an engine still serving an AI session: older builds were kept only when
+  WMI named a running `NexusBrowser.exe` inside them, and WMI gives no path for an elevated process (nor one started
+  through another spelling of the path). Each engine now holds the `engine.lock` of its build folder for its whole life
+  (the installer writes it); running engines are read by `QueryFullProcessImageNameW`, which also reads an elevated
+  process, and no folder is removed while one cannot be read. A folder is renamed aside before it is deleted, so an
+  engine starting at that moment keeps it. The legacy engine folder and the former Python environment follow the same
+  rules. Tests: held lock, unreadable engine, process image, and the running release engine holding its lock.
+
 ## [2.35.25] - 2026-11-07
 
 ### Fixed

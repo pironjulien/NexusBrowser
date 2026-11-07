@@ -1,7 +1,7 @@
 {
   "name": "nexus-browser",
   "displayName": "NexusBrowser",
-  "version": "2.35.25",
+  "version": "2.35.26",
   "description": "Your real Chrome (your sessions) driven in background tabs: forms, network, dialogs, cross-origin iframes, exports, downloads. Served by the local NexusBrowser daemon; requires its Chrome extension, both installed by NexusSystem (or NexusBrowser's get.ps1).",
   "author": {
     "name": "Julien Piron",
