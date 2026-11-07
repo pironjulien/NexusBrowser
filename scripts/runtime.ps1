@@ -56,9 +56,15 @@ function Test-TaskStart([string]$State, [int]$RunningInstances) {
     $State -notin @('Running', 'Disabled') -and $RunningInstances -eq 0
 }
 
-# Engine processes whose command line matches (bridge, daemon).
-function Get-EngineProcesses([string]$Pattern) {
-    @(Get-CimInstance Win32_Process -Filter "Name='NexusBrowser.exe'" | Where-Object { $_.CommandLine -match $Pattern })
+# NexusBrowser.exe processes of this PC (pid, image, role, read_by), read by the engine $Exe (--engine-processes,
+# native\EngineProcesses.cs): image by QueryFullProcessImageNameW and role by the command line
+# (NtQueryInformationProcess) with PROCESS_QUERY_LIMITED_INFORMATION, which an engine started as administrator grants;
+# else role by the listening port it owns (bridge 9224/9225, daemon 16182); else role 'unknown'. WMI gives neither
+# path nor command line for such a process: an older bridge or daemon started as administrator was never listed.
+function Get-EngineProcesses([string]$Exe, [string[]]$Ports = @()) {
+    $result = Invoke-Native $Exe (@('--engine-processes') + $Ports) 30  # Ports: --bridge-port N --daemon-port N (tests)
+    if ($result.Code) { throw "Listing the NexusBrowser processes failed: $($result.Output)" }
+    @(($result.Output | ConvertFrom-Json).processes)
 }
 
 # Applies Get-TaskMigration on this PC. Unregistering a task leaves its running instance alive (a busy bridge or
@@ -153,18 +159,30 @@ public static class NexusBrowserProcessImage {
 # Image path of one process: "" once it has exited, $null while it runs but cannot be read.
 function Read-ProcessImage([int]$Id) { [NexusBrowserProcessImage]::Read($Id) }
 
-# Engine processes (Get-EngineProcesses) split by the image Read-ProcessImage reads: WMI's ExecutablePath is empty for
-# an elevated process, which made a current engine started as administrator look like an older build. Others: another
-# build (shut down or restarted by the installer); Unknown: running but unreadable, never touched (the caller defers).
-function Split-EngineProcesses($Processes, [string]$Exe) {
+# Engine processes (Get-EngineProcesses) of one role ('bridge', 'daemon'). Others: another build of that role (shut
+# down or restarted by the installer); Unknown: that role with an unreadable image, or any process whose role cannot be
+# read, never touched (the caller defers and reports it); Instances: every process that may be one of that role, for
+# Test-TaskStart (no second bridge or daemon while one may run).
+function Split-EngineProcesses($Processes, [string]$Role, [string]$Exe) {
     $target = [IO.Path]::GetFullPath($Exe)
     $others = New-Object Collections.Generic.List[object]; $unknown = New-Object Collections.Generic.List[object]
+    $instances = New-Object Collections.Generic.List[object]
     foreach ($process in @($Processes)) {
-        $image = Read-ProcessImage ([int]$process.ProcessId)
-        if ($null -eq $image) { $unknown.Add($process) }
-        elseif ($image -and -not [string]::Equals([IO.Path]::GetFullPath($image), $target, [StringComparison]::OrdinalIgnoreCase)) { $others.Add($process) }
+        if ($process.role -ne $Role -and $process.role -ne 'unknown') { continue }
+        $instances.Add($process)
+        if ($process.role -eq 'unknown' -or -not $process.image) { $unknown.Add($process) }
+        elseif (-not [string]::Equals([IO.Path]::GetFullPath($process.image), $target, [StringComparison]::OrdinalIgnoreCase)) { $others.Add($process) }
     }
-    [pscustomobject]@{ Others = $others.ToArray(); Unknown = $unknown.ToArray() }
+    [pscustomobject]@{ Others = $others.ToArray(); Unknown = $unknown.ToArray(); Instances = $instances.ToArray() }
+}
+
+# Journal line for a process Split-EngineProcesses could not classify.
+function Format-UnreadEngine($Process, [string]$Role) {
+    if ($Process.role -eq 'unknown') {
+        "NexusBrowser.exe $($Process.pid): role unreadable (another account or SYSTEM, no $Role port), counted as a running $Role, nothing stopped; no second $Role started."
+    } else {
+        "NexusBrowser $Role $($Process.pid): engine image unreadable (role read by $($Process.read_by)), kept until its natural exit."
+    }
 }
 
 function Get-ProcessImages([string[]]$Name) {

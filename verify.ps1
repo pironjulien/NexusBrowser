@@ -47,7 +47,7 @@ try {
         Write-Warning "Ancienne extension encore chargée ($line) : la retirer dans chrome://extensions (mêmes ports que le pont)."
     }
     if ($Browser) {
-        if (Test-TaskStart $bridge.State (Get-EngineProcesses '--bridge(\s|$)').Count) { Start-ScheduledTask -TaskName $bridgeTaskName; Start-Sleep -Seconds 2 }
+        if (Test-TaskStart $bridge.State (Split-EngineProcesses (Get-EngineProcesses $nativeExe) 'bridge' $nativeExe).Instances.Count) { Start-ScheduledTask -TaskName $bridgeTaskName; Start-Sleep -Seconds 2 }
         $bridgeStatus = Invoke-RestMethod -Uri 'http://127.0.0.1:9225/api/status' -Headers @{
             'X-Nexus-Browser-Token' = (Get-Content -LiteralPath $tokenFile -Raw).Trim()
         } -TimeoutSec 5

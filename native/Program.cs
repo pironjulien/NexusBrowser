@@ -84,6 +84,10 @@ public static class Program
             return NativeAuthHost.Run(args, tokenFile: tokenFile);
         }
 
+        // NexusBrowser.exe processes of this PC with their image and role (bridge, daemon), for the installer.
+        if (args.Contains("--engine-processes", StringComparer.OrdinalIgnoreCase))
+            return EngineProcesses.Run(args);
+
         if (args.Contains("--shutdown-bridge", StringComparer.OrdinalIgnoreCase))
             return await BridgeShutdown.MainAsync(GetArgValue(args, "--expected-pid"), GetArgValue(args, "--wait-seconds"),
                 int.TryParse(GetArgValue(args, "--port"), out int shutdownPort) ? shutdownPort : 9225, tokenFile);
@@ -159,6 +163,7 @@ public static class Program
             if (a.Equals("--bridge", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--stdio-relay", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--shutdown-bridge", StringComparison.OrdinalIgnoreCase) ||
+                a.Equals("--engine-processes", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--restart-daemon", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--mcp", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--http", StringComparison.OrdinalIgnoreCase) ||
@@ -174,7 +179,7 @@ public static class Program
         return false;
     }
 
-    private static string? GetArgValue(string[] args, string flag)
+    internal static string? GetArgValue(string[] args, string flag)
     {
         for (int i = 0; i < args.Length; i++)
         {

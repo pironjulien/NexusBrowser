@@ -124,32 +124,27 @@ public sealed class EngineCleanupTests : IDisposable
     }
 
     [Fact]
-    public async Task AnEngineOfThisBuildIsNotTakenForAnOlderOneWhateverWmiSays()
+    public void TheInstallerReadsBridgesAndDaemonsThroughTheEngine()
     {
-        // WMI's ExecutablePath is empty for an elevated process: the image is read by QueryFullProcessImageNameW.
-        string self = "[pscustomobject]@{ ProcessId = $PID; ExecutablePath = ''; CommandLine = '--bridge' }";
-        string[] lines = await RuntimeAsync(
-            $"$s = Split-EngineProcesses @({self}) ([Environment]::ProcessPath);\"$(@($s.Others).Count) $(@($s.Unknown).Count)\"\n" +
-            $"$s = Split-EngineProcesses @({self}) ([Environment]::ProcessPath.ToUpperInvariant()); \"$(@($s.Others).Count)\"\n" +
-            $"$s = Split-EngineProcesses @({self}) 'C:\\elsewhere\\NexusBrowser.exe'; \"$(@($s.Others).Count) $($s.Others[0].ProcessId -eq $PID)\"");
-        Assert.Equal(["0 0", "0", "1 True"], lines);
-
+        // Bridges and daemons are listed by the engine (EngineProcessesTests: real processes); WMI gave neither path
+        // nor command line for an engine started as administrator.
         string install = File.ReadAllText(Repo.File("scripts", "install-native.ps1"));
+        string runtime = File.ReadAllText(Repo.File("scripts", "runtime.ps1"));
+        Assert.DoesNotContain("Win32_Process", install + runtime);
         Assert.DoesNotContain("ExecutablePath", install);
-        Assert.Contains("Split-EngineProcesses (Get-EngineProcesses '--bridge(\\s|$)') $exe", install);
-        Assert.Contains("Split-EngineProcesses (Get-EngineProcesses \"--http\\s+$port\") $exe", install);
+        Assert.Contains("Split-EngineProcesses (Get-EngineProcesses $controlExe) 'bridge' $exe", install);
+        Assert.Contains("Split-EngineProcesses (Get-EngineProcesses $controlExe) 'daemon' $exe", install);
+        // A task starts only when no instance of its role may run (unknown roles included).
+        Assert.Contains("(Split-EngineProcesses (Get-EngineProcesses $controlExe) 'daemon' $exe).Instances.Count", install);
+        Assert.Contains("Test-TaskStart (Get-ScheduledTask -TaskName $bridgeTaskName).State $runningBridges.Instances.Count", install);
     }
 
     [Fact]
-    public async Task AnEngineWhoseImageCannotBeReadIsNeverTouched()
+    public async Task AFolderIsKeptWhileAProcessImageCannotBeRead()
     {
         // The reading function itself is replaced: every process runs but cannot be read.
-        string self = "[pscustomobject]@{ ProcessId = $PID; ExecutablePath = '' }";
-        string[] lines = await RuntimeAsync(
-            "function Read-ProcessImage([int]$Id) { $null }\n" +
-            $"$s = Split-EngineProcesses @({self}) 'C:\\elsewhere\\NexusBrowser.exe'; \"$(@($s.Others).Count) $(@($s.Unknown).Count)\"\n" +
-            "[string](Get-ProcessImages 'pwsh').Unknown");
-        Assert.Equal(["0 1", "True"], lines);
+        string[] lines = await RuntimeAsync("function Read-ProcessImage([int]$Id) { $null }\n[string](Get-ProcessImages 'pwsh').Unknown");
+        Assert.Equal(["True"], lines);
     }
 
     [Fact]

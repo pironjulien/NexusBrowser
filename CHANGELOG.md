@@ -5,13 +5,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.28] - 2026-11-07
+
+### Fixed
+- An older bridge or daemon started as administrator was never seen by an update: the installer listed engines by
+  their WMI command line, and WMI gives neither path nor command line for a process of a higher integrity level, seen
+  from a standard session. Such an engine was therefore never stopped or restarted, and since it was not counted,
+  the installer could start a second bridge or daemon from its task. The engine now lists them itself
+  (`NexusBrowser.exe --engine-processes`): every `NexusBrowser.exe` found by name, read with
+  `PROCESS_QUERY_LIMITED_INFORMATION` (granted by an elevated process of the same user): its image by
+  `QueryFullProcessImageNameW`, its role by its command line (`NtQueryInformationProcess`,
+  `ProcessCommandLineInformation`, parsed like the engine parses it). An engine that cannot be read at all (another
+  account, SYSTEM) is identified by the bridge or daemon port it owns (`GetExtendedTcpTable`); when no port names it,
+  its role is unknown: it is reported, counted as a running bridge and daemon (no second instance started), and
+  nothing is stopped. `verify.ps1` uses the same listing.
+- Tests: on real engine processes (bridge, daemon, another bridge; one this account cannot open, found by its port,
+  else unknown; and, when the tests run as administrator, an elevated bridge read by a standard-integrity installer),
+  replacing a test built on a WMI result WMI never produces.
+
 ## [2.35.27] - 2026-11-07
 
 ### Fixed
-- An update could stop or restart a current bridge or daemon started as administrator, taking it for an older build:
-  the installer compared WMI's `ExecutablePath`, empty for an elevated process. Running bridges and daemons, and the
-  daemon confirmed after the update, are now read by `QueryFullProcessImageNameW` (the helper of the build cleanup);
-  one that cannot be read is never stopped and its upgrade is deferred.
+- Running bridges and daemons, and the daemon confirmed after the update, are compared to the installed build by
+  `QueryFullProcessImageNameW` instead of WMI's `ExecutablePath`. This did not reach its aim: the bridges and daemons
+  compared were still listed by their WMI command line, which WMI leaves empty for an engine started as
+  administrator, so such an engine was never listed at all (the real defect, fixed in 2.35.28). Only the daemon
+  confirmation after the update benefited.
 - A legacy engine folder or former Python environment renamed aside (`<folder>.<PID>.removing`) whose deletion did
   not finish stayed forever: later updates now remove it, with the same check of use (process images, held
   `engine.lock`, unreadable processes).

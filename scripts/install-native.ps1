@@ -94,16 +94,16 @@ $action = New-ScheduledTaskAction -Execute $exe -Argument $bridgeArguments -Work
 $settings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
 if ($keepBridgeDisabled) { $settings.Enabled = $false }
-# Images read by QueryFullProcessImageNameW (Split-EngineProcesses): an engine of this build started as administrator
-# is not taken for an older one; a bridge that cannot be read is never stopped (deferred).
-$bridges = Split-EngineProcesses (Get-EngineProcesses '--bridge(\s|$)') $exe
+# Processes read by the engine (Get-EngineProcesses): an older bridge started as administrator is listed and shut
+# down; one whose image or role cannot be read is never stopped (deferred, reported).
+$bridges = Split-EngineProcesses (Get-EngineProcesses $controlExe) 'bridge' $exe
 $oldBridges = @($bridges.Others)
 $bridgeDeferred = [bool]@($bridges.Unknown).Count
-foreach ($unread in @($bridges.Unknown)) { Write-Journal "Bridge $($unread.ProcessId): engine image unreadable, kept until its next natural exit." }
+foreach ($unread in @($bridges.Unknown)) { Write-Journal (Format-UnreadEngine $unread 'bridge') }
 if ($oldBridges.Count -and -not $busy -and -not $SkipLaunch -and -not $keepBridgeDisabled) {
     foreach ($oldBridge in $oldBridges) {
-        $shutdown = Invoke-Native $controlExe @('--shutdown-bridge', '--expected-pid', "$($oldBridge.ProcessId)", '--wait-seconds', '10', '--token-file', $tokenFile) 20
-        Write-Journal "Bridge $($oldBridge.ProcessId): $($shutdown.Output)"
+        $shutdown = Invoke-Native $controlExe @('--shutdown-bridge', '--expected-pid', "$($oldBridge.pid)", '--wait-seconds', '10', '--token-file', $tokenFile) 20
+        Write-Journal "Bridge $($oldBridge.pid): $($shutdown.Output)"
         if ($shutdown.Code -ne 0) { $bridgeDeferred = $true }
     }
 } elseif ($oldBridges.Count) {
@@ -168,9 +168,9 @@ $keepSupervisorDisabled = $supervisorTask -and $supervisorTask.State -eq 'Disabl
 $mcpTokenFile = if ($env:OneDrive) { Join-Path $env:OneDrive 'Documents\NexusSecure\agents\nexus-mcp-token.txt' }
 $token = $null
 if ($supervised -and $mcpTokenFile -and (Test-Path -LiteralPath $mcpTokenFile)) { $token = (Get-Content -LiteralPath $mcpTokenFile -Raw).Trim() }
-$daemons = Split-EngineProcesses (Get-EngineProcesses "--http\s+$port") $exe
+$daemons = Split-EngineProcesses (Get-EngineProcesses $controlExe) 'daemon' $exe
 $daemonExes = @($daemons.Others)
-foreach ($unread in @($daemons.Unknown)) { Write-Journal "Daemon $($unread.ProcessId): engine image unreadable, kept until its natural exit." }
+foreach ($unread in @($daemons.Unknown)) { Write-Journal (Format-UnreadEngine $unread 'daemon') }
 if ($token) {
     # exe: the supervisor's key. python (same value): read by supervisors built before the exe key; to drop once every
     # workstation runs a NexusPoste that reads exe (an older one ignores a spec without it: daemon not started).
@@ -188,9 +188,9 @@ if ($token) {
     }
     if ($daemonExes.Count -and -not $busy -and -not $SkipLaunch -and -not $keepSupervisorDisabled) {
         foreach ($oldDaemon in $daemonExes) {
-            $restart = Invoke-Native $controlExe @('--restart-daemon', '--expected-pid', "$($oldDaemon.ProcessId)", '--port', "$port",
+            $restart = Invoke-Native $controlExe @('--restart-daemon', '--expected-pid', "$($oldDaemon.pid)", '--port', "$port",
                 '--mcp-token-file', $mcpTokenFile, '--request-file', $restartRequest, '--target-fingerprint', $fingerprint, '--wait-seconds', '10') 20
-            Write-Journal "Daemon $($oldDaemon.ProcessId): $($restart.Output)"
+            Write-Journal "Daemon $($oldDaemon.pid): $($restart.Output)"
             if ($restart.Code -ne 0) { Write-Warning 'Daemon upgrade deferred: valid sessions are preserved; legacy or unknown instances wait for natural exit.' }
         }
     }
@@ -217,9 +217,9 @@ if ($token) {
     }
     if ($existing -and $existing.State -ne 'Disabled' -and -not $busy -and -not $SkipLaunch) {
         foreach ($oldDaemon in $daemonExes) {
-            $restart = Invoke-Native $controlExe @('--restart-daemon', '--expected-pid', "$($oldDaemon.ProcessId)", '--port', "$port",
+            $restart = Invoke-Native $controlExe @('--restart-daemon', '--expected-pid', "$($oldDaemon.pid)", '--port', "$port",
                 '--mcp-token-file', $sharedTokenFile, '--request-file', $restartRequest, '--target-fingerprint', $fingerprint, '--wait-seconds', '10') 20
-            Write-Journal "Daemon $($oldDaemon.ProcessId): $($restart.Output)"
+            Write-Journal "Daemon $($oldDaemon.pid): $($restart.Output)"
             if ($restart.Code -ne 0) { Write-Warning 'Previous daemon kept: a valid HTTP session remains, or this instance does not prove session-preserving restart.' }
         }
     }
@@ -227,7 +227,7 @@ if ($token) {
         Register-ScheduledTask -TaskName $daemonTaskName -Action $daemonAction -Trigger $trigger -Principal $principal -Settings $daemonSettings `
             -Description "NexusBrowser MCP daemon (127.0.0.1:$port) shared by the AI apps, bearer token NEXUS_MCP_TOKEN." | Out-Null
     }
-    if (-not $SkipLaunch -and (Test-TaskStart (Get-ScheduledTask -TaskName $daemonTaskName).State (Get-EngineProcesses "--http\s+$port").Count)) {
+    if (-not $SkipLaunch -and (Test-TaskStart (Get-ScheduledTask -TaskName $daemonTaskName).State (Split-EngineProcesses (Get-EngineProcesses $controlExe) 'daemon' $exe).Instances.Count)) {
         Start-ScheduledTask -TaskName $daemonTaskName
     }
     Write-Host "Task '$daemonTaskName' -> $exe --http $port"
@@ -296,8 +296,12 @@ if (-not $SkipTests -and -not $UpdateOnly) {
 # --- 9. Bridge, extension and daemon checked.
 if (-not $SkipLaunch) {
     # One bridge: a kept instance (deferred, or started by the task's former name) is not doubled.
-    if (Test-TaskStart (Get-ScheduledTask -TaskName $bridgeTaskName).State (Get-EngineProcesses '--bridge(\s|$)').Count) {
+    # A NexusBrowser.exe whose role cannot be read counts as a running bridge: reported, never doubled nor stopped.
+    $runningBridges = Split-EngineProcesses (Get-EngineProcesses $controlExe) 'bridge' $exe
+    if (Test-TaskStart (Get-ScheduledTask -TaskName $bridgeTaskName).State $runningBridges.Instances.Count) {
         Start-ScheduledTask -TaskName $bridgeTaskName
+    } elseif (@($runningBridges.Unknown | Where-Object { $_.role -eq 'unknown' }).Count) {
+        Write-Warning "Bridge task not started: NexusBrowser.exe $(@($runningBridges.Unknown | Where-Object { $_.role -eq 'unknown' } | ForEach-Object pid) -join ', ') runs with a role that cannot be read (another account or SYSTEM)."
     }
     $wait = if ($pack) { 0 } else { 30 }
     if ($bridgeDeferred) { Write-Warning 'Bridge upgrade deferred: running instance kept until its next natural exit; the extension refresh has its own ownership check.' }
