@@ -439,3 +439,26 @@ public sealed partial class McpParityTests
         Assert.Equal(["create-tab"], session.Actions);
     }
 }
+
+/// <summary>The fake bridge blames the engine only for the engine's own unauthenticated calls: its loopback port can be
+/// reached by any process of the PC (a parallel test probing a port it believes free), which must not fail a test.</summary>
+public sealed class FakeBridgeAttributionTests
+{
+    [Fact]
+    public async Task AForeignConnectionIsRefusedWithoutBeingCountedAndAnEngineWithAnotherCredentialIs()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var bridge = new FakeBridge((_, _) => new JsonArray());
+        using (var http = new HttpClient())
+        using (var foreign = await http.GetAsync($"http://127.0.0.1:{bridge.Port}/health", ct))
+            Assert.Equal(System.Net.HttpStatusCode.Unauthorized, foreign.StatusCode);
+        Assert.Equal(0, bridge.Unauthorized);
+
+        using var other = new FakeBridge((_, _) => new JsonArray());
+        Assert.NotEqual(bridge.Credential, other.Credential);
+        using var server = new McpServer(agent: "Codex", bridgeHttpPort: bridge.Port, tokenFile: other.TokenFile);
+        await Assert.ThrowsAnyAsync<Exception>(() => server.CallBridgeRawAsync("list-tabs", null, 5, ("Codex", "codex-attribution"), null, ct, recover: false));
+        Assert.Equal(1, bridge.Unauthorized);
+        Assert.Empty(bridge.Requests);
+    }
+}

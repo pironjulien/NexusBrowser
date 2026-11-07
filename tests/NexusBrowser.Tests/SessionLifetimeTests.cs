@@ -162,19 +162,20 @@ public sealed class SessionLifetimeTests : IDisposable
         string a = await daemon.OpenSessionAsync("claude");
         string b = await daemon.OpenSessionAsync("claude");
         string idA = Identity("Claude", a), idB = Identity("Claude", b);
+        string announcer = $"claude-daemon-{daemon.Process.Process.Id}";
 
-        // The daemon's own first beat of B (the next one is ~37 s later): any later heartbeat is the announcement.
-        await bridge.WaitForAsync(r => r.Action == "heartbeat" && r.Header(BridgeSecurity.ClientHeader) == idB, TimeSpan.FromSeconds(5));
-        int before = bridge.Requests.Count;
-
+        // The announcement is the heartbeat sent under the daemon's own identity, which only a close sends: B's
+        // periodic beats (client B, timed by the daemon's tick) can come before or after it without being mistaken
+        // for it, so nothing waits for them.
         using (var deleted = await daemon.SendAsync(HttpMethod.Delete, "claude", null, a))
             Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
-        await daemon.WaitForStderrAsync($"NexusBrowser: session {a[..8]} (Claude) closed by the client (DELETE)", TimeSpan.FromSeconds(3));
+        await daemon.WaitForStderrAsync($"NexusBrowser: session {a[..8]} (Claude) closed by the client (DELETE)", TimeSpan.FromSeconds(10));
 
-        var clock = Stopwatch.StartNew();
-        var announced = await bridge.WaitForAsync(r => bridge.Requests.IndexOf(r) >= before && r.Action == "heartbeat" && r.Gone.Contains(idA), TimeSpan.FromSeconds(3));
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3));
-        Assert.Equal($"claude-daemon-{daemon.Process.Process.Id}", announced.Header(BridgeSecurity.ClientHeader));
+        // "At once": well before B's next periodic beat (HeartbeatIntervalSeconds, ~37 s), which would carry A anyway.
+        // The bound leaves a loaded PC (other test suites in parallel) the time to schedule the daemon and this stub.
+        var announced = await bridge.WaitForAsync(r => r.Action == "heartbeat" && r.Header(BridgeSecurity.ClientHeader) == announcer,
+            TimeSpan.FromSeconds(McpServer.HeartbeatIntervalSeconds / 3));
+        Assert.Contains(idA, announced.Gone);
         Assert.Equal("Claude", announced.Header(BridgeSecurity.AgentHeader));
         Assert.DoesNotContain(idB, announced.Gone);
 

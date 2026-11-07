@@ -203,10 +203,14 @@ internal sealed class ChildProcess : IDisposable
 /// <summary>
 /// HTTP boundary stub of the bridge: answers POST /api/command like the real bridge, records every command except
 /// heartbeats. The answer delegate returns the data, or throws to produce {"success": false, "error": message}.
+/// Its port is an ordinary loopback port: any process of the PC may connect to it (a test of another product, or of
+/// this one, that probes a port it believes free or dead). Each stub has its own credential, so an engine wired to
+/// another stub never authenticates here, and only a request that carries the engine's agent header counts as an
+/// unauthenticated engine call; a foreign connection is answered 401 and otherwise ignored.
 /// </summary>
 internal sealed class FakeBridge : IDisposable
 {
-    public const string Credential = "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"; // 64 chars
+    public string Credential { get; } = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)); // 64 chars
     private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
     private readonly CancellationTokenSource _stop = new();
     private readonly List<JsonObject> _commands = [];
@@ -282,7 +286,7 @@ internal sealed class FakeBridge : IDisposable
             JsonObject response;
             if (!headers.TryGetValue("x-nexus-browser-token", out var token) || token != Credential)
             {
-                Interlocked.Increment(ref _unauthorized);
+                if (headers.ContainsKey("x-nexus-browser-agent")) Interlocked.Increment(ref _unauthorized);
                 status = 401;
                 response = new JsonObject { ["success"] = false, ["error"] = "Authentication required" };
             }

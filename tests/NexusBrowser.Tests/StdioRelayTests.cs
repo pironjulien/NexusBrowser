@@ -306,7 +306,9 @@ public sealed class StdioRelayProcessTests : IDisposable
     public async Task StdioRelayIsNotMistakenForAnotherMode()
     {
         // Without a service the engine still answers the request (JSON-RPC error), then ends with stdin.
-        int deadPort = Ports.Free();
+        // Port 1 refuses at once and is never handed out: a port probed free could meanwhile be a listener of a parallel
+        // test (a FakeBridge), which would receive this relay's request.
+        const int deadPort = 1;
         var stopwatch = Stopwatch.StartNew();
         var (code, stdout, stderr) = await ChildProcess.RunAsync(NativeExe.Path, ["--stdio-relay", "--url", $"http://127.0.0.1:{deadPort}/mcp?agent=antigravity"],
             new Dictionary<string, string?> { ["NEXUS_MCP_TOKEN"] = "x" }, stdin: "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/list\"}\n", timeoutSeconds: 60);
