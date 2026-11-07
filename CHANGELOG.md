@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- `POST /api/update` hands the update to NexusSystem's native maintenance (the `NexusSystem Update` task,
+  NexusMaintenance.exe) whenever NexusSystem maintenance is installed. The bridge only looked for the PowerShell
+  worker of NexusSystem 1.6.54 and earlier, which the native engine removes on public installs, so those installs
+  fell back to this product's standalone Windows PowerShell updater.
+
 ## [2.35.28] - 2026-11-07
 
 ### Fixed

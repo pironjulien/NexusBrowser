@@ -1643,7 +1643,7 @@ public sealed class BridgeServer : IAsyncDisposable
             if (TryGetString(status, "state") == "updating") return (202, status);
             status["version"] = BridgeSecurity.Version;
             // The ecosystem owns its one maintenance schedule. A product request delegates to that existing task.
-            if (File.Exists(Path.Join(BridgeSecurity.HomeDir(), ".nexus", "nexussystem", "maintenance", "get-nexus.ps1")) &&
+            if (NexusSystemMaintenanceInstalled(BridgeSecurity.HomeDir()) &&
                 await RunUpdateTaskAsync("NexusSystem Update", queryFirst: true, ct))
             {
                 status["state"] = "deferred"; status["message"] = "NexusSystem maintenance requested; activation will be verified separately.";
@@ -1680,6 +1680,16 @@ public sealed class BridgeServer : IAsyncDisposable
             }
         }
         finally { _updateLock.Release(); }
+    }
+
+    /// <summary>NexusSystem maintenance is installed: its native engine (NexusMaintenance.exe, which replaces and removes
+    /// the PowerShell worker of NexusSystem releases up to 1.6.54 on public installs) or that older worker, as
+    /// NexusSystem's own MaintenanceUpdates.IsInstalled reads it. Checking the worker alone sent public installs of
+    /// NexusSystem 1.6.55 and later to this product's standalone Windows PowerShell updater.</summary>
+    internal static bool NexusSystemMaintenanceInstalled(string home)
+    {
+        var root = Path.Join(home, ".nexus", "nexussystem", "maintenance");
+        return File.Exists(Path.Join(root, "NexusMaintenance.exe")) || File.Exists(Path.Join(root, "get-nexus.ps1"));
     }
 
     private static async Task<bool> RunUpdateTaskAsync(string name, bool queryFirst, CancellationToken ct)

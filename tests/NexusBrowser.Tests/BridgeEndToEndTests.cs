@@ -351,6 +351,18 @@ public sealed class BridgeUpdateTests : IDisposable
         Assert.False(File.Exists(StatusFile));
     }
 
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("NexusMaintenance.exe", true)]
+    [InlineData("get-nexus.ps1", true)]
+    public void NexusSystemMaintenanceIsFoundByItsEngineOrItsOlderWorker(string? file, bool expected)
+    {
+        var home = _dir["home"];
+        var root = Directory.CreateDirectory(Path.Join(home, ".nexus", "nexussystem", "maintenance")).FullName;
+        if (file is not null) File.WriteAllText(Path.Join(root, file), "");
+        Assert.Equal(expected, BridgeServer.NexusSystemMaintenanceInstalled(home));
+    }
+
     [Fact]
     public async Task OtherMethodsAreNotAllowed()
     {
