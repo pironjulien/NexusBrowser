@@ -105,7 +105,7 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    uses: pironjulien/NexusSystem/.github/workflows/product-dev-release.yml@585aa435089995a78b7c3a4c457ba727c9f89840  # v1.6.54
+    uses: pironjulien/NexusSystem/.github/workflows/product-dev-release.yml@6a66dbe3c76ee85b4cde38f6b71c6410ec08c7e8  # v1.7.2
     with:
       product: NexusBrowser
       version: ${{ needs.build.outputs.version }}
@@ -117,10 +117,15 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    uses: pironjulien/NexusSystem/.github/workflows/product-promote.yml@585aa435089995a78b7c3a4c457ba727c9f89840  # v1.6.54
+      actions: read  # the commit's checks, read before anything is published
+      checks: read
+      statuses: read
+    uses: pironjulien/NexusSystem/.github/workflows/product-promote.yml@6a66dbe3c76ee85b4cde38f6b71c6410ec08c7e8  # v1.7.2
     with:
       product: NexusBrowser
       promote: ${{ inputs.promote || needs.dev.outputs.tag }}
+      # Promoted only once these workflows and every other check of the build's commit are green.
+      required-workflows: tests.yml security.yml codeql.yml install.yml scorecard.yml
       registry-only: ${{ inputs.registry }}
       mcp-package: nexus-browser-win-x64.mcpb
 
