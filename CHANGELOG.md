@@ -5,6 +5,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.30] - 2026-11-07
+
+### Fixed
+- The daemon retries a failed session heartbeat on its next 1 s tick, as its code comment promised. It recorded the
+  beat before sending it, so a failure (bridge restarting, extension reconnecting) waited a whole heartbeat interval
+  (~37 s) for the next try; the extension declares a session dead after ~97 s of silence, so two failed beats in a row
+  orphaned a live conversation's tabs. Only a delivered beat now starts the next interval.
+
+### Added
+- Tests: a failed heartbeat retried within seconds, then the normal interval again (the fake bridge can refuse
+  chosen heartbeats). The last-session announcement is matched by the daemon's own identity with a load-tolerant
+  bound; the engine-process listing test splits only the engines it started, not the PC's other NexusBrowser.exe
+  processes (a bridge restarting during the read counted as "unknown"), and probes another port when a parallel test
+  took the one it probed; the session-recovery tests use a 5 s idle lease (a loaded PC stalled a resumed session past
+  2 s). Ten consecutive runs of the suite under CPU load pass.
+
 ## [2.35.29] - 2026-11-07
 
 ### Changed

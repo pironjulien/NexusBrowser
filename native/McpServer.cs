@@ -500,7 +500,6 @@ public sealed partial class McpServer : IDisposable
                 {
                     if (lastBeat.TryGetValue(sid, out double prev) && now - prev < HeartbeatIntervalSeconds)
                         continue;
-                    lastBeat[sid] = now;
                     try
                     {
                         // Le pid du démon : à sa mort, le pont déclare aussitôt ses sessions mortes (« gone »), leurs onglets
@@ -508,10 +507,14 @@ public sealed partial class McpServer : IDisposable
                         // conversations du même agent partagent le démon, et la première à battre volait les onglets d'une
                         // autre (30/10). La conversation qui en a besoin les reprend (adopt_tab) ou les ferme.
                         await CallBridgeRawAsync("heartbeat", new JsonObject { ["reclaim"] = false }, 5.0, ident, _processPid, ct, recover: false);
+                        // Only a delivered beat starts the next interval.
+                        lastBeat[sid] = now;
                     }
                     catch (Exception caught) when (Boundary.Recoverable(caught))
                     {
-                        // Deliberate boundary: any heartbeat failure is retried next tick
+                        // Deliberate boundary: a failed beat is retried on the next 1 s tick, not one interval later. The
+                        // extension declares a session dead after SESSION_DEAD_MS (~97 s) of silence: waiting a whole
+                        // interval (~37 s) after each failure let two failed beats orphan a live conversation's tabs.
                     }
                 }
             }

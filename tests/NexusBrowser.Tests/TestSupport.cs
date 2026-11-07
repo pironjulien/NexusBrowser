@@ -238,6 +238,9 @@ internal sealed class FakeBridge : IDisposable
     /// <summary>Every authenticated request, heartbeats included, with its headers (lower-case names).</summary>
     public List<BridgeRequest> Requests { get { lock (_requests) return [.. _requests]; } }
 
+    /// <summary>Heartbeats this predicate selects are refused like a bridge without its extension (recorded first).</summary>
+    public Func<BridgeRequest, bool>? FailHeartbeat { get; init; }
+
     /// <summary>Waits until a request matching the predicate has arrived (polling, 20 ms).</summary>
     public async Task<BridgeRequest> WaitForAsync(Func<BridgeRequest, bool> match, TimeSpan timeout)
     {
@@ -294,9 +297,15 @@ internal sealed class FakeBridge : IDisposable
             {
                 var request = (JsonObject)JsonNode.Parse(body)!;
                 string action = (string)request["action"]!;
-                lock (_requests) _requests.Add(new BridgeRequest(action, (JsonObject)request.DeepClone(), headers));
+                var recorded = new BridgeRequest(action, (JsonObject)request.DeepClone(), headers);
+                lock (_requests) _requests.Add(recorded);
                 var parameters = request["params"] as JsonObject ?? new JsonObject();
-                if (action == "heartbeat")
+                if (action == "heartbeat" && FailHeartbeat?.Invoke(recorded) == true)
+                {
+                    status = 503;
+                    response = new JsonObject { ["success"] = false, ["error"] = "No Chrome browser extension connected to the NexusBrowser bridge." };
+                }
+                else if (action == "heartbeat")
                     response = new JsonObject { ["success"] = true, ["data"] = new JsonObject() };
                 else
                 {

@@ -89,6 +89,32 @@ public sealed partial class EngineProcessesTests : IDisposable
         throw new TimeoutException($"engine {child.Process.Id} does not listen; stderr={child.Stderr}");
     }
 
+    /// <summary>Starts an engine on a port probed free, listening there. A probed port is only free until someone binds
+    /// it: another test running in parallel can take it first, and the engine then exits at once (address in use), so
+    /// a new port is probed (5 tries).</summary>
+    private static async Task<(ChildProcess Engine, int Port)> StartOnFreePortAsync(Func<int> probe, Func<int, ChildProcess> start)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            int port = probe();
+            var engine = start(port);
+            try
+            {
+                await ListeningAsync(engine, port);
+                return (engine, port);
+            }
+            catch (Exception caught) when (Boundary.Recoverable(caught) && attempt < 5 && engine.Process.HasExited)
+            {
+                engine.Dispose(); // port taken between the probe and the bind: probe another one
+            }
+            catch
+            {
+                engine.Dispose();
+                throw;
+            }
+        }
+    }
+
     private static async Task<JsonObject> CommandAsync(int bridgePort, int daemonPort)
     {
         var (code, stdout, stderr) = await ChildProcess.RunAsync(NativeExe.Path,
@@ -104,12 +130,10 @@ public sealed partial class EngineProcessesTests : IDisposable
     public async Task RunningBridgeAndDaemonAreListedWithTheirRoleAndImage()
     {
         // One at a time: a free port probed before the previous engine binds could be the one it takes.
-        int bridgePort = Ports.FreePair();
-        using var bridge = StartBridge(bridgePort);
-        await ListeningAsync(bridge, bridgePort);
-        int daemonPort = Ports.Free();
-        using var daemon = new ChildProcess(NativeExe.Path, ["--http", S(daemonPort)], Env());
-        await ListeningAsync(daemon, daemonPort);
+        var (bridge, bridgePort) = await StartOnFreePortAsync(Ports.FreePair, StartBridge);
+        using var _ = bridge;
+        var (daemon, daemonPort) = await StartOnFreePortAsync(Ports.Free, port => new ChildProcess(NativeExe.Path, ["--http", S(port)], Env()));
+        using var __ = daemon;
         using var other = StartBridge(0);  // a bridge on another port (a test's): not the product's bridge
         await ListeningAsync(other);
 
@@ -123,10 +147,15 @@ public sealed partial class EngineProcessesTests : IDisposable
         }
 
         // The installer's split of that very output: the bridge of another build is shut down, this build's is kept.
+        // Only this test's engines are split: the listing also holds every other NexusBrowser.exe of the PC (the
+        // user's bridge and daemon, other tests' engines), and one starting or exiting while it is read has no
+        // readable command line, so it counts as "unknown" and would fail an assertion about these three.
         string runtime = Shells.Quote(Repo.File("scripts", "runtime.ps1")), exe = Shells.Quote(NativeExe.Path);
         string ports = $"@('--bridge-port', '{bridgePort}', '--daemon-port', '{daemonPort}')";
+        string mine = string.Join(",", new[] { bridge, daemon, other }.Select(c => S(c.Process.Id)));
         string script = _dir["split.ps1"];
-        File.WriteAllText(script, $"$ErrorActionPreference = 'Stop'\n. {runtime}\n$p = Get-EngineProcesses {exe} {ports}\n" +
+        File.WriteAllText(script, $"$ErrorActionPreference = 'Stop'\n. {runtime}\n" +
+            $"$p = @(Get-EngineProcesses {exe} {ports} | Where-Object {{ $_.pid -in @({mine}) }})\n" +
             $"$s = Split-EngineProcesses $p 'bridge' {exe}; \"$(@($s.Others).Count) $(@($s.Unknown).Count) $(@($s.Instances | ForEach-Object pid) -join ',')\"\n" +
             $"$s = Split-EngineProcesses $p 'bridge' 'C:\\elsewhere\\NexusBrowser.exe'; \"$(@($s.Others | ForEach-Object pid) -join ',')\"\n" +
             $"$s = Split-EngineProcesses $p 'daemon' 'C:\\elsewhere\\NexusBrowser.exe'; \"$(@($s.Others | ForEach-Object pid) -join ',')\"\n", Encoding.ASCII);

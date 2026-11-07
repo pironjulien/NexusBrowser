@@ -9,7 +9,9 @@ namespace NexusBrowser.Tests;
 
 /// <summary>Legacy Streamable HTTP sessions follow the official 2025-06-18 and 2025-11-25 lifecycle: a terminated
 /// id remains 404, including on initialize; recovery is a new initialize without that id. A client retaining its
-/// stale header cannot recover by repeating the same request. No real Chrome, profile or token is used.</summary>
+/// stale header cannot recover by repeating the same request. No real Chrome, profile or token is used. The idle lease
+/// is 5 s: a resumed or fresh session idle longer than the lease between two steps of the daemon (a PC loaded by
+/// parallel suites stalled one past a 2 s lease) expires again before its call is registered, and answers 404.</summary>
 public sealed class HttpSessionRecoveryTests : IDisposable
 {
     private readonly TempDir _dir = new();
@@ -23,7 +25,7 @@ public sealed class HttpSessionRecoveryTests : IDisposable
         using var bridge = new FakeBridge((action, _) => action == "list-tabs" ? new JsonArray() : new JsonObject());
         // Long enough that the fresh session never expires between this test's own requests on a loaded CI runner;
         // the first session is left idle on purpose and its expiry is awaited.
-        using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "2");
+        using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "5");
         string initialize = new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 1, ["method"] = "initialize",
             ["params"] = new JsonObject { ["protocolVersion"] = protocol, ["capabilities"] = new JsonObject(),
                 ["clientInfo"] = new JsonObject { ["name"] = "interop-fixture", ["version"] = "1" } } }.ToJsonString();
@@ -35,7 +37,7 @@ public sealed class HttpSessionRecoveryTests : IDisposable
         }
         await daemon.CallToolAsync("codex", original, "browser_list_tabs");
         var oldCall = bridge.Requests.Last(r => r.Action == "list-tabs");
-        await daemon.WaitForStderrAsync($"session {original[..8]} (Codex) expired", TimeSpan.FromSeconds(15));
+        await daemon.WaitForStderrAsync($"session {original[..8]} (Codex) expired", TimeSpan.FromSeconds(30));
 
         using (var staleInitialize = await daemon.SendAsync(HttpMethod.Post, "codex", initialize, original))
         {
@@ -72,9 +74,9 @@ public sealed class HttpSessionRecoveryTests : IDisposable
     public async Task AntigravityKeepsItsExpiredIdBecauseItsClientNeverInitializesAgain()
     {
         using var bridge = new FakeBridge((action, _) => action == "list-tabs" ? new JsonArray() : new JsonObject());
-        using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "2");
+        using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "5");
         string original = await daemon.OpenSessionAsync("antigravity");
-        await daemon.WaitForStderrAsync($"session {original[..8]} (Antigravity) expired", TimeSpan.FromSeconds(15));
+        await daemon.WaitForStderrAsync($"session {original[..8]} (Antigravity) expired", TimeSpan.FromSeconds(30));
         Assert.Equal(HttpStatusCode.NotFound, await daemon.ListToolsAsync("codex", original));  // never another agent's
         Assert.Equal(HttpStatusCode.OK, await daemon.ListToolsAsync("antigravity", original));
         await daemon.WaitForStderrAsync($"session {original[..8]} (Antigravity) resumed", TimeSpan.FromSeconds(3));
@@ -87,11 +89,11 @@ public sealed class HttpSessionRecoveryTests : IDisposable
     public async Task ClaudeKeepsItsExpiredIdButNeverOneItClosed()
     {
         using var bridge = new FakeBridge((action, _) => action == "list-tabs" ? new JsonArray() : new JsonObject());
-        using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "2");
+        using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "5");
         string kept = await daemon.OpenSessionAsync("claude"), closed = await daemon.OpenSessionAsync("claude");
         using (var deleted = await daemon.SendAsync(HttpMethod.Delete, "claude", null, closed))
             Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
-        await daemon.WaitForStderrAsync($"session {kept[..8]} (Claude) expired", TimeSpan.FromSeconds(15));
+        await daemon.WaitForStderrAsync($"session {kept[..8]} (Claude) expired", TimeSpan.FromSeconds(30));
         // Parallel calls after a pause reach one session again, so the conversation keeps its own tabs.
         Assert.Equal(HttpStatusCode.OK, await daemon.ListToolsAsync("claude", kept));
         await daemon.WaitForStderrAsync($"session {kept[..8]} (Claude) resumed", TimeSpan.FromSeconds(3));

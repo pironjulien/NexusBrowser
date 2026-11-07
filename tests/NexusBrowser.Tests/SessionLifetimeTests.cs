@@ -197,16 +197,51 @@ public sealed class SessionLifetimeTests : IDisposable
     }
 
     [Fact]
+    public async Task AFailedHeartbeatIsRetriedOnTheNextTickNotAWholeIntervalLater()
+    {
+        // The extension declares a session dead after ~97 s of silence: retrying a failed beat only one interval
+        // (~37 s) later let two failures orphan a live conversation's tabs. Only this session's first beat fails.
+        string? failed = null;
+        using var bridge = new FakeBridge((_, _) => new JsonObject())
+        {
+            FailHeartbeat = r => Interlocked.CompareExchange(ref failed, r.Header(BridgeSecurity.ClientHeader), null) is null,
+        };
+        using var daemon = await Daemon.StartAsync(bridge, _dir);
+        string session = await daemon.OpenSessionAsync("claude");
+        string id = Identity("Claude", session);
+        bool Beat(BridgeRequest r) => r.Action == "heartbeat" && r.Header(BridgeSecurity.ClientHeader) == id;
+
+        await bridge.WaitForAsync(Beat, TimeSpan.FromSeconds(10));
+        Assert.Equal(id, failed);
+        var clock = Stopwatch.StartNew();
+        var bound = TimeSpan.FromSeconds(McpServer.HeartbeatIntervalSeconds / 3); // a 1 s tick, slack for a loaded PC
+        while (bridge.Requests.Count(Beat) < 2)
+        {
+            if (clock.Elapsed > bound) Assert.Fail($"the failed beat was not retried in {bound.TotalSeconds:0} s; got: {string.Join(" | ", bridge.Requests)}");
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        // Once delivered, the next beat waits a whole interval again: no beat every second.
+        await Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Assert.Equal(2, bridge.Requests.Count(Beat));
+    }
+
+    [Fact]
     public async Task LastSessionIsAnnouncedImmediatelyAndTheNextCallStillCarriesIt()
     {
         using var bridge = new FakeBridge((action, _) => action == "list-tabs" ? new JsonArray() : new JsonObject());
         using var daemon = await Daemon.StartAsync(bridge, _dir);
         string a = await daemon.OpenSessionAsync("claude");
+        string announcer = $"claude-daemon-{daemon.Process.Process.Id}";
         using (var deleted = await daemon.SendAsync(HttpMethod.Delete, "claude", null, a))
             Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
-        await daemon.WaitForStderrAsync($"session {a[..8]} (Claude) closed by the client (DELETE)", TimeSpan.FromSeconds(3));
-        var announced = await bridge.WaitForAsync(r => r.Gone.Contains(Identity("Claude", a)), TimeSpan.FromSeconds(3));
-        Assert.Equal($"claude-daemon-{daemon.Process.Process.Id}", announced.Header(BridgeSecurity.ClientHeader));
+        await daemon.WaitForStderrAsync($"session {a[..8]} (Claude) closed by the client (DELETE)", TimeSpan.FromSeconds(10));
+
+        // Matched by the daemon's own identity, which only a close sends (A's periodic beat may come before or after
+        // it); "immediately" means well before the next periodic beat, with room for a loaded PC to schedule both ends.
+        var announced = await bridge.WaitForAsync(r => r.Action == "heartbeat" && r.Header(BridgeSecurity.ClientHeader) == announcer,
+            TimeSpan.FromSeconds(McpServer.HeartbeatIntervalSeconds / 3));
+        Assert.Contains(Identity("Claude", a), announced.Gone);
         Assert.False((bool)announced.Body["params"]!["reclaim"]!);
 
         string c = await daemon.OpenSessionAsync("claude");
