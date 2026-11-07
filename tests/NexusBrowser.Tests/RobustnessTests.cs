@@ -286,7 +286,32 @@ public sealed partial class RobustnessTests : IDisposable
         finally { Directory.Delete(link); }
     }
 
-    private static readonly string[] Runnable = [".exe", ".ps1", ".lnk", ".bat", ".cmd", ".js", ".hta", ".url"];
+    // ~\.nexus\build is lifted from the ~\.nexus secrets root only once the path is resolved: a junction inside build
+    // back to ~\.nexus (where mcp-token.txt lives) or to ~\.ssh still reaches a secrets folder.
+    [Fact]
+    public void AJunctionInsideTheNexusBuildFolderBackToSecretsIsRefused()
+    {
+        string nexus = Path.Join(TestEnvironment.Home, ".nexus"), build = Path.Join(nexus, "build");
+        string ssh = Path.Join(TestEnvironment.Home, ".ssh");
+        Directory.CreateDirectory(build);
+        Directory.CreateDirectory(ssh);
+        File.WriteAllText(Path.Join(nexus, "mcp-token.txt"), "token");
+        File.WriteAllText(Path.Join(ssh, "id_rsa"), "key");
+        string toNexus = Path.Join(build, "j-" + Guid.NewGuid().ToString("N")[..8]);
+        string toSsh = Path.Join(build, "j-" + Guid.NewGuid().ToString("N")[..8]);
+        Junction(toNexus, nexus);
+        Junction(toSsh, ssh);
+        try
+        {
+            Assert.NotNull(BridgeSecurity.UploadRefusal([Path.Join(toNexus, "mcp-token.txt")]));
+            Assert.NotNull(BridgeSecurity.UploadRefusal([Path.Join(toSsh, "id_rsa")]));
+            Assert.NotNull(BridgeSecurity.UploadRefusal([Path.Join(build, "..", "mcp-token.txt")]));
+            Assert.Null(BridgeSecurity.UploadRefusal([Path.Join(build, "x", "paquet.msixupload")]));
+        }
+        finally { Directory.Delete(toNexus); Directory.Delete(toSsh); }
+    }
+
+    private static readonly string[] Runnable =[".exe", ".ps1", ".lnk", ".bat", ".cmd", ".js", ".hta", ".url"];
 
     [Fact]
     public void ARunnableFileOrAProtectedFolderIsNeverWritten()

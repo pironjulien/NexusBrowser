@@ -554,6 +554,21 @@ public static partial class BridgeSecurity
                 // Ignore unreadable root
             }
         }
+        // ~\.nexus\build holds the build outputs of every Nexus product (a Store package is uploaded from there), not
+        // secrets: only the ~\.nexus root is lifted for it, after every junction and short name is resolved, so a link
+        // inside build back to ~\.nexus\mcp-token.txt, or a build folder that is itself a link elsewhere, stays refused.
+        string? nexusKey = null, buildKey = null;
+        try
+        {
+            nexusKey = CanonicalPath(Path.Join(HomeDir(), ".nexus"));
+            buildKey = CanonicalPath(Path.Join(HomeDir(), ".nexus", "build"));
+            if (!buildKey.StartsWith(nexusKey + @"\", StringComparison.Ordinal))
+                buildKey = null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            buildKey = null;
+        }
 
         foreach (var item in list)
         {
@@ -571,6 +586,8 @@ public static partial class BridgeSecurity
             {
                 if (key == rootKey || key.StartsWith(rootKey + @"\", StringComparison.Ordinal))
                 {
+                    if (buildKey is not null && rootKey == nexusKey && key.StartsWith(buildKey + @"\", StringComparison.Ordinal))
+                        continue;
                     return $"Upload refused: {item} is in a secrets folder ({rawRoot}). " +
                            "No token, key, Chrome profile or agent configuration is ever sent to a web page.";
                 }

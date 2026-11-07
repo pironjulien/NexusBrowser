@@ -48,6 +48,10 @@ public sealed class BridgeSecurityTests
             Path.Join(home, ".ssh", "id_ed25519"),
             Path.Join(home, ".ssh.", "id_ed25519"),
             Path.Join(home, ".nexus", "nexus-browser", "bridge-token"),
+            Path.Join(home, ".nexus", "mcp-token.txt"),
+            Path.Join(home, ".nexus", "build", "..", "mcp-token.txt"),
+            Path.Join(home, ".nexus", "build2", "x", "paquet.msixupload"),
+            Path.Join(home, ".nexus", "build"),
             Path.Join(home, "Documents", "NexusSecure", "secret.txt"),
             @"\\127.0.0.1\c$" + Path.Join(home, ".ssh", "id_rsa")[2..],
             @"\\?\" + Path.Join(home, ".codex", "auth.json"),
@@ -66,6 +70,16 @@ public sealed class BridgeSecurityTests
     [Fact]
     public void UploadFromTempIsAllowed() =>
         Assert.Null(BridgeSecurity.UploadRefusal([Path.Join(Path.GetTempPath(), "safe-upload.txt")]));
+
+    // ~\.nexus\build is where every Nexus product builds (a Store package is uploaded to Partner Center from there).
+    [Fact]
+    public void UploadFromTheNexusBuildFolderIsAllowed()
+    {
+        string home = BridgeSecurity.HomeDir();
+        Assert.Null(BridgeSecurity.UploadRefusal([Path.Join(home, ".nexus", "build", "x", "paquet.msixupload")]));
+        Assert.Null(BridgeSecurity.UploadRefusal(["~/.nexus/build/x/paquet.msixupload"]));
+        Assert.NotNull(BridgeSecurity.UploadRefusal([Path.Join(home, ".nexus", "mcp-token.txt")]));
+    }
 }
 
 /// <summary>Chrome startup on the installed Default profile (former --selftest ChromeLauncher checks). No real

@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- `browser_upload` accepts files under `~\.nexus\build`, the build folder of every Nexus product (a Store package
+  built there was refused as coming from a secrets folder). Only that folder is lifted from the `~\.nexus` refusal,
+  once junctions and short names are resolved: `~\.nexus\mcp-token.txt`, the bridge token and the rest of `~\.nexus`
+  stay refused, as does a link inside `build` back to `~\.nexus` or to another secrets folder. Writing (`output_path`)
+  is unchanged.
+
 ## [2.35.24] - 2026-11-07
 
 ### Fixed
