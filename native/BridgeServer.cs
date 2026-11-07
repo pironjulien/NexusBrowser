@@ -97,6 +97,9 @@ public sealed class BridgeServer : IAsyncDisposable
     public int HttpPort { get; private set; }
     public PairingStore Pairing => _pairing;
 
+    // _sendLock never exposes AvailableWaitHandle, so it owns no kernel handle: nothing to dispose, and disposing it
+    // while a send still waits would turn a closed socket into ObjectDisposedException.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001", Justification = "SemaphoreSlim without AvailableWaitHandle holds no unmanaged resource.")]
     public sealed class BridgeClientConnection
     {
         public WebSocket WebSocket { get; }
@@ -379,8 +382,10 @@ public sealed class BridgeServer : IAsyncDisposable
         if (!headers.TryGetValue("sec-websocket-key", out var wsKey) || string.IsNullOrWhiteSpace(wsKey))
             return;
 
+#pragma warning disable CA5350 // RFC 6455 section 4.2.2 requires SHA-1 for Sec-WebSocket-Accept (a handshake check, not security).
         string acceptKey = Convert.ToBase64String(
             SHA1.HashData(Encoding.ASCII.GetBytes(wsKey.Trim() + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")));
+#pragma warning restore CA5350
 
         string upgradeResponse =
             "HTTP/1.1 101 Switching Protocols\r\n" +
@@ -410,7 +415,7 @@ public sealed class BridgeServer : IAsyncDisposable
         {
             client = await AuthenticateWebSocketAsync(ws, origin, ct);
         }
-        catch (Exception ex) when (ex is AuthError or TimeoutException or OperationCanceledException)
+        catch (Exception ex) when (ex is AuthException or TimeoutException or OperationCanceledException)
         {
             Log("WARNING", $"WebSocket authentication rejected: {ex.Message}");
             await SafeCloseWebSocketAsync(ws, (WebSocketCloseStatus)1008, "Authentication failed");
@@ -476,7 +481,7 @@ public sealed class BridgeServer : IAsyncDisposable
                     string innerJson = client.Channel.Open(outerNode);
                     data = JsonNode.Parse(innerJson, documentOptions: BridgeAuth.StrictJson) as JsonObject;
                 }
-                catch (Exception ex) when (ex is AuthError or JsonException)
+                catch (Exception ex) when (ex is AuthException or JsonException)
                 {
                     Log("WARNING", $"Unauthenticated WebSocket message, connection closed: {ex.Message}");
                     await SafeCloseWebSocketAsync(ws, (WebSocketCloseStatus)1008, "Invalid signed message");
@@ -540,7 +545,7 @@ public sealed class BridgeServer : IAsyncDisposable
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(HandshakeTimeoutSeconds));
             string? raw = await ReceiveWebSocketTextAsync(ws, MaxHandshakeBytes, timeoutCts.Token);
             if (string.IsNullOrEmpty(raw) || raw.Length > MaxHandshakeBytes)
-                throw new AuthError("message de poignée de main invalide");
+                throw new AuthException("message de poignée de main invalide");
             JsonNode? node;
             try
             {
@@ -548,16 +553,16 @@ public sealed class BridgeServer : IAsyncDisposable
             }
             catch (JsonException)
             {
-                throw new AuthError("message de poignée de main illisible");
+                throw new AuthException("message de poignée de main illisible");
             }
             if (node is not JsonObject obj)
-                throw new AuthError("message de poignée de main invalide");
+                throw new AuthException("message de poignée de main invalide");
             return obj;
         }
 
         var hello = await ReceiveHandshakeAsync();
         if (TryGetString(hello, "type") != "auth_hello" || TryGetString(hello, "protocol") != BridgeAuth.Protocol)
-            throw new AuthError("poignée de main attendue");
+            throw new AuthException("poignée de main attendue");
 
         string clientNonce = BridgeAuth.CheckNonce(TryGetString(hello, "client_nonce"), "client_nonce");
         string extensionId = BridgeAuth.CheckExtensionId(TryGetString(hello, "extension_id"));
@@ -573,7 +578,7 @@ public sealed class BridgeServer : IAsyncDisposable
         else if (auth is "paired" or "pair")
         {
             if (origin is null || origin.TrimEnd('/') != $"chrome-extension://{extensionId}")
-                throw new AuthError("identifiant d'extension différent de l'origine de la connexion");
+                throw new AuthException("identifiant d'extension différent de l'origine de la connexion");
 
             if (auth == "paired")
             {
@@ -583,14 +588,14 @@ public sealed class BridgeServer : IAsyncDisposable
             else
             {
                 if (TryGetString(hello, "role") != PairingStore.PairingRole)
-                    throw new AuthError("rôle d'appairage attendu");
+                    throw new AuthException("rôle d'appairage attendu");
                 role = PairingStore.PairingRole;
                 token = _pairing.PendingSecret();
             }
         }
         else
         {
-            throw new AuthError("méthode d'authentification inconnue");
+            throw new AuthException("méthode d'authentification inconnue");
         }
 
         string serverNonce = BridgeAuth.NewNonce();
@@ -610,7 +615,7 @@ public sealed class BridgeServer : IAsyncDisposable
         {
             if (auth == "pair")
                 _pairing.Failed();
-            throw new AuthError("preuve du client fausse");
+            throw new AuthException("preuve du client fausse");
         }
 
         byte[] sessKey = BridgeAuth.SessionKey(token, clientNonce, serverNonce, role, extensionId);
@@ -640,11 +645,11 @@ public sealed class BridgeServer : IAsyncDisposable
             if (result.MessageType == WebSocketMessageType.Close)
                 return null;
             if (result.MessageType != WebSocketMessageType.Text)
-                throw new AuthError("message de poignée de main invalide");
+                throw new AuthException("message de poignée de main invalide");
 
             ms.Write(buffer, 0, result.Count);
             if (ms.Length > maxBytes)
-                throw new AuthError("message de poignée de main invalide");
+                throw new AuthException("message de poignée de main invalide");
 
             if (result.EndOfMessage)
                 break;
@@ -1210,7 +1215,7 @@ public sealed class BridgeServer : IAsyncDisposable
                             BridgeAuth.CheckExtensionId(extId);
                         }
                     }
-                    catch (Exception ex) when (ex is JsonException or AuthError)
+                    catch (Exception ex) when (ex is JsonException or AuthException)
                     {
                         await SendJsonResponseAsync(stream, 400, new JsonObject { ["success"] = false, ["error"] = "extension_id invalide" });
                         return;
@@ -1511,16 +1516,16 @@ public sealed class BridgeServer : IAsyncDisposable
 
         byte[] body = Encoding.UTF8.GetBytes(payload.ToJsonString(JsonOptions));
         var sb = new StringBuilder();
-        sb.Append($"HTTP/1.1 {status} {reason}\r\n");
+        sb.Append(CultureInfo.InvariantCulture, $"HTTP/1.1 {status} {reason}\r\n");
         sb.Append("Content-Type: application/json; charset=utf-8\r\n");
         sb.Append("Cache-Control: no-store\r\n");
         sb.Append("X-Content-Type-Options: nosniff\r\n");
         sb.Append("Connection: close\r\n");
-        sb.Append($"Content-Length: {body.Length}\r\n");
+        sb.Append(CultureInfo.InvariantCulture, $"Content-Length: {body.Length}\r\n");
         if (extraHeaders != null)
         {
             foreach (var kv in extraHeaders)
-                sb.Append($"{kv.Key}: {kv.Value}\r\n");
+                sb.Append(CultureInfo.InvariantCulture, $"{kv.Key}: {kv.Value}\r\n");
         }
         sb.Append("\r\n");
 

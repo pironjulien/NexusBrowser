@@ -8,9 +8,9 @@ using System.Text.RegularExpressions;
 
 namespace NexusBrowser.Native;
 
-public sealed class AuthError : Exception
+public sealed class AuthException : Exception
 {
-    public AuthError(string message) : base(message) { }
+    public AuthException(string message) : base(message) { }
 }
 
 public static class BridgeAuth
@@ -45,21 +45,21 @@ public static class BridgeAuth
     public static string CheckNonce(string? value, string name)
     {
         if (string.IsNullOrEmpty(value) || value.Length != 43 || !Base64UrlRegex.IsMatch(value))
-            throw new AuthError($"{name} invalide");
+            throw new AuthException($"{name} invalide");
         return value;
     }
 
     public static string CheckRole(string? value)
     {
         if (value is not ("service_worker" or "offscreen"))
-            throw new AuthError("rôle inconnu");
+            throw new AuthException("rôle inconnu");
         return value;
     }
 
     public static string CheckExtensionId(string? value)
     {
         if (string.IsNullOrEmpty(value) || !ExtensionIdRegex.IsMatch(value))
-            throw new AuthError("identifiant d'extension invalide");
+            throw new AuthException("identifiant d'extension invalide");
         return value;
     }
 
@@ -91,7 +91,7 @@ public static class BridgeAuth
 
     public static string FrameMac(byte[] key, string direction, long seq, string body)
     {
-        return ToBase64Url(Digest(key, direction, seq.ToString(), body));
+        return ToBase64Url(Digest(key, direction, seq.ToString(System.Globalization.CultureInfo.InvariantCulture), body));
     }
 
     public static bool Same(string? a, string b)
@@ -142,7 +142,7 @@ public static class BridgeAuth
                 !frame.TryGetPropertyValue("body", out JsonNode? bodyNode) ||
                 !frame.TryGetPropertyValue("mac", out JsonNode? macNode))
             {
-                throw new AuthError("message non signé");
+                throw new AuthException("message non signé");
             }
 
             if (seqNode is not JsonValue seqVal ||
@@ -153,7 +153,7 @@ public static class BridgeAuth
                 !bodyVal.TryGetValue<string>(out string? body) ||
                 body is null)
             {
-                throw new AuthError("message signé mal formé");
+                throw new AuthException("message signé mal formé");
             }
 
             string? mac = macNode is JsonValue macVal && macVal.GetValueKind() == JsonValueKind.String
@@ -163,11 +163,11 @@ public static class BridgeAuth
             lock (_recvLock)
             {
                 if (seq != _received + 1)
-                    throw new AuthError($"numéro d'ordre {seq} inattendu (attendu {_received + 1}) : rejeu ou perte");
+                    throw new AuthException($"numéro d'ordre {seq} inattendu (attendu {_received + 1}) : rejeu ou perte");
 
                 string expectedMac = FrameMac(_key, _receiveDirection, seq, body);
                 if (!Same(mac, expectedMac))
-                    throw new AuthError("signature du message fausse");
+                    throw new AuthException("signature du message fausse");
 
                 _received = seq;
                 return body;

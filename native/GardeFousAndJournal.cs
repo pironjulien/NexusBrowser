@@ -15,9 +15,9 @@ using System.Text.RegularExpressions;
 
 namespace NexusBrowser.Native;
 
-public sealed class EmergencyStopError : Exception
+public sealed class EmergencyStopException : Exception
 {
-    public EmergencyStopError(string message) : base(message) { }
+    public EmergencyStopException(string message) : base(message) { }
 }
 
 public sealed class EmergencyStop
@@ -97,7 +97,7 @@ public sealed class EmergencyStop
     {
         double left = RemainingSeconds();
         if (left > 0)
-            throw new EmergencyStopError(Message(left));
+            throw new EmergencyStopException(Message(left));
     }
 }
 

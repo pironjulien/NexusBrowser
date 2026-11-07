@@ -274,7 +274,7 @@ internal sealed class FakeBridge : IDisposable
             string[] lines = Encoding.ASCII.GetString(head.ToArray()).Split("\r\n");
             var headers = lines.Skip(1).Where(l => l.Contains(':'))
                 .ToDictionary(l => l[..l.IndexOf(':')].Trim().ToLowerInvariant(), l => l[(l.IndexOf(':') + 1)..].Trim());
-            int length = headers.TryGetValue("content-length", out var cl) ? int.Parse(cl) : 0;
+            int length = headers.TryGetValue("content-length", out var cl) ? int.Parse(cl, System.Globalization.CultureInfo.InvariantCulture) : 0;
             var body = new byte[length];
             await stream.ReadExactlyAsync(body, _stop.Token);
 

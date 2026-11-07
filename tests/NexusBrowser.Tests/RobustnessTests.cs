@@ -99,7 +99,7 @@ public sealed partial class RobustnessTests : IDisposable
                     string kept = BridgeAuth.CheckNonce(value, "client_nonce");
                     if (kept.Length != 43 || !Only(kept, B64)) throw new InvalidOperationException($"nonce accepted: «{kept}»");
                 }
-                catch (AuthError) { /* refused: expected */ }
+                catch (AuthException) { /* refused: expected */ }
             }
             foreach (string value in new[] { any ?? "", Damage(extension, n, c) })
             {
@@ -108,7 +108,7 @@ public sealed partial class RobustnessTests : IDisposable
                     string kept = BridgeAuth.CheckExtensionId(value);
                     if (kept.Length != 32 || !Only(kept, ch => ch is >= 'a' and <= 'p')) throw new InvalidOperationException($"extension id accepted: «{kept}»");
                 }
-                catch (AuthError) { /* refused: expected */ }
+                catch (AuthException) { /* refused: expected */ }
             }
         }));
     }
@@ -118,8 +118,8 @@ public sealed partial class RobustnessTests : IDisposable
     [Fact]
     public void ANonceOrExtensionIdEndingWithALineFeedIsRefused()
     {
-        Assert.Throws<AuthError>(() => BridgeAuth.CheckNonce(BridgeAuth.NewNonce()[..42] + "\n", "client_nonce"));
-        Assert.Throws<AuthError>(() => BridgeAuth.CheckExtensionId(new string('p', 32) + "\n"));
+        Assert.Throws<AuthException>(() => BridgeAuth.CheckNonce(BridgeAuth.NewNonce()[..42] + "\n", "client_nonce"));
+        Assert.Throws<AuthException>(() => BridgeAuth.CheckExtensionId(new string('p', 32) + "\n"));
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public sealed partial class RobustnessTests : IDisposable
                     string opened = receiver.Open(node);
                     if (opened != original) throw new InvalidOperationException($"altered frame accepted: {frame}");
                 }
-                catch (AuthError) { /* refused: expected */ }
+                catch (AuthException) { /* refused: expected */ }
             }
             // Replayed: never accepted twice.
             try
@@ -151,13 +151,13 @@ public sealed partial class RobustnessTests : IDisposable
                 receiver.Open(JsonNode.Parse(sealedFrame));
                 throw new InvalidOperationException("replayed frame accepted");
             }
-            catch (AuthError) { /* refused: expected */ }
+            catch (AuthException) { /* refused: expected */ }
         }));
         Holds(Prop.ForAll<int, string[]>((seed, drawn) =>
         {
             var receiver = new BridgeAuth.Channel(key, "s2c", "c2s");
             try { receiver.Open(AnyJson(new Random(seed), Words(drawn, "seq", "body", "mac"))); throw new InvalidOperationException("unsigned frame accepted"); }
-            catch (AuthError) { /* refused: expected */ }
+            catch (AuthException) { /* refused: expected */ }
         }));
     }
 
@@ -175,7 +175,7 @@ public sealed partial class RobustnessTests : IDisposable
                 {
                     if (new PairingStore(path).KeyFor(extension).Length != 43) throw new InvalidOperationException("short key accepted");
                 }
-                catch (AuthError) { /* refused: expected */ }
+                catch (AuthException) { /* refused: expected */ }
             }
         }), 500);
     }

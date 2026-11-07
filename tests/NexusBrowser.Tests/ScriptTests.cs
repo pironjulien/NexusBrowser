@@ -72,8 +72,8 @@ public sealed class ScriptTests : IDisposable
         string probe = _dir["parse.ps1"];
         var text = new StringBuilder("$ErrorActionPreference = 'Stop'\n");
         foreach (string script in scripts)
-            text.Append($"$t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File(script.Split('/')))}, [ref]$t, [ref]$e)\n")
-                .Append($"'{script}|' + $e.Count + '|' + (($e | ForEach-Object {{ $_.Extent.StartLineNumber.ToString() + ': ' + $_.Message }}) -join ' / ')\n");
+            text.Append(System.Globalization.CultureInfo.InvariantCulture, $"$t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File(script.Split('/')))}, [ref]$t, [ref]$e)\n")
+                .Append(System.Globalization.CultureInfo.InvariantCulture, $"'{script}|' + $e.Count + '|' + (($e | ForEach-Object {{ $_.Extent.StartLineNumber.ToString() + ': ' + $_.Message }}) -join ' / ')\n");
         File.WriteAllText(probe, text.ToString(), Encoding.ASCII);
         var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
         Assert.True(code == 0, stderr);

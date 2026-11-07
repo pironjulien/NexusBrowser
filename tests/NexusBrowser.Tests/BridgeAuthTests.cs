@@ -33,10 +33,10 @@ public sealed class BridgeAuthTests : IDisposable
         Assert.Equal(ExtensionId, BridgeAuth.CheckExtensionId(ExtensionId));
         Assert.Equal("service_worker", BridgeAuth.CheckRole("service_worker"));
         Assert.Equal("offscreen", BridgeAuth.CheckRole("offscreen"));
-        Assert.Throws<AuthError>(() => BridgeAuth.CheckNonce(nonce[..42], "c"));
-        Assert.Throws<AuthError>(() => BridgeAuth.CheckNonce(nonce[..42] + "=", "c"));
-        Assert.Throws<AuthError>(() => BridgeAuth.CheckRole("popup"));
-        Assert.Throws<AuthError>(() => BridgeAuth.CheckExtensionId("blcgddmjdkobmgakjffjpgiicjlflgjz"));
+        Assert.Throws<AuthException>(() => BridgeAuth.CheckNonce(nonce[..42], "c"));
+        Assert.Throws<AuthException>(() => BridgeAuth.CheckNonce(nonce[..42] + "=", "c"));
+        Assert.Throws<AuthException>(() => BridgeAuth.CheckRole("popup"));
+        Assert.Throws<AuthException>(() => BridgeAuth.CheckExtensionId("blcgddmjdkobmgakjffjpgiicjlflgjz"));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public sealed class BridgeAuthTests : IDisposable
         var (s2c, c2s) = Channels();
         var frame = s2c.Seal("{\"type\":\"auth_ok\"}");
         c2s.Open(frame);
-        Assert.Throws<AuthError>(() => c2s.Open(frame));
+        Assert.Throws<AuthException>(() => c2s.Open(frame));
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public sealed class BridgeAuthTests : IDisposable
         var (s2c, c2s) = Channels();
         var frame = s2c.Seal("{\"action\":\"ping\"}");
         frame["body"] = "{\"action\":\"eval\"}";
-        Assert.Throws<AuthError>(() => c2s.Open(frame));
+        Assert.Throws<AuthException>(() => c2s.Open(frame));
     }
 
     [Fact]
@@ -86,8 +86,8 @@ public sealed class BridgeAuthTests : IDisposable
     {
         // A frame the server sealed (s2c) cannot be reflected back to it as client traffic (c2s).
         var (server, _) = Channels();
-        Assert.Throws<AuthError>(() => server.Open(server.Seal("x")));
-        Assert.Throws<AuthError>(() => server.Open(new JsonObject { ["seq"] = 1, ["body"] = "x" }));
+        Assert.Throws<AuthException>(() => server.Open(server.Seal("x")));
+        Assert.Throws<AuthException>(() => server.Open(new JsonObject { ["seq"] = 1, ["body"] = "x" }));
     }
 
     [Fact]
@@ -203,8 +203,8 @@ public sealed class NativeAuthHostTests : IDisposable
         using var hostIn = toHost.Reader.AsStream();
         using var hostOut = fromHost.Writer.AsStream();
         using var fromHostStream = fromHost.Reader.AsStream();
-        var watch = Task.Run(() => NativeAuthHost.Watch(hostIn, hostOut, port, intervalMs: 20));
         var ct = TestContext.Current.CancellationToken;
+        var watch = Task.Run(() => NativeAuthHost.Watch(hostIn, hostOut, port, intervalMs: 20), ct);
         // Le guet redit l'état à chaque intervalle : lu jusqu'à la valeur attendue, jamais plus de 10 s.
         async Task Says(bool expected)
         {

@@ -8,15 +8,16 @@
     <!-- Source-generated P/Invoke (LibraryImport) of the process tests. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>NexusBrowser.Tests</RootNamespace>
+    <!-- Locked restore, like the engine (Dependabot reads packages.lock.json). xunit.v3 runs on Microsoft.Testing.Platform
+         (global.json): no VSTest packages. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <!-- Test results beside the build, never in the repository (OneDrive). -->
     <TestingPlatformCommandLineArguments>$(TestingPlatformCommandLineArguments) --results-directory "$(NexusBrowserBuild)TestResults"</TestingPlatformCommandLineArguments>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="xunit.v3" Version="4.0.1" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageReference Include="xunit.v3" Version="4.0.2" />
     <!-- Property-based robustness tests (RobustnessTests.cs). -->
-    <PackageReference Include="FsCheck" Version="3.4.0" />
+    <PackageReference Include="FsCheck" Version="3.6.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\native\NexusBrowser.csproj" />

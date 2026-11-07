@@ -173,7 +173,7 @@ public sealed partial class McpServer
         return destination;
     }
 
-    private async Task<JsonNode?> FinishGsuiteExportAsync(JsonNode? value, int maxChars, CancellationToken ct)
+    private static async Task<JsonNode?> FinishGsuiteExportAsync(JsonNode? value, int maxChars, CancellationToken ct)
     {
         if (value is not JsonObject data) return value;
         byte[]? downloaded = null;

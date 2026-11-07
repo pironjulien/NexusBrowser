@@ -10,5 +10,10 @@
     <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
     <!-- The product version (VERSION) on every binary, so Windows shows the real one. -->
     <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>
+    <!-- Code analysis enforced: the recommended .NET rules, and every warning fails the build (local and CI).
+         Rules turned off on purpose are listed with their reason in .editorconfig. -->
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 </Project>

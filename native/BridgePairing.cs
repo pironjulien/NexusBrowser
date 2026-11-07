@@ -68,11 +68,11 @@ public sealed class PairingStore
         lock (_lock)
         {
             if (_offer is null)
-                throw new AuthError("aucun appairage en attente : en demander un nouveau");
+                throw new AuthException("aucun appairage en attente : en demander un nouveau");
             if (_clock() >= _expires)
             {
                 _offer = null;
-                throw new AuthError("appairage expiré (5 minutes) : en demander un nouveau");
+                throw new AuthException("appairage expiré (5 minutes) : en demander un nouveau");
             }
             return _offer;
         }
@@ -109,7 +109,7 @@ public sealed class PairingStore
             string checkedId = BridgeAuth.CheckExtensionId(extensionId);
             var keys = ReadLocked();
             if (!keys.TryGetValue(checkedId, out var key) || string.IsNullOrEmpty(key) || key.Length != 43)
-                throw new AuthError("extension non appairée à ce pont : l'appairer depuis l'application NexusBrowser");
+                throw new AuthException("extension non appairée à ce pont : l'appairer depuis l'application NexusBrowser");
             return key;
         }
     }
@@ -148,7 +148,7 @@ public sealed class PairingStore
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            throw new AuthError("fichier des extensions appairées illisible");
+            throw new AuthException("fichier des extensions appairées illisible");
         }
     }
 

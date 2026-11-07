@@ -285,7 +285,7 @@ public sealed class BridgeUpdateTests : IDisposable
         _dir.Dispose();
     }
 
-    private async Task<(HttpStatusCode Code, JsonObject Body)> UpdateAsync(BridgeServer bridge, HttpMethod method, string? token)
+    private static async Task<(HttpStatusCode Code, JsonObject Body)> UpdateAsync(BridgeServer bridge, HttpMethod method, string? token)
     {
         using var http = new HttpClient();
         using var request = new HttpRequestMessage(method, $"http://127.0.0.1:{bridge.HttpPort}/api/update");

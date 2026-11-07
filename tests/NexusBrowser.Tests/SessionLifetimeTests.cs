@@ -31,14 +31,14 @@ internal sealed class Daemon : IDisposable
         var env = new Dictionary<string, string?>
         {
             ["NEXUS_MCP_TOKEN"] = new string('d', 64),
-            ["NEXUS_BROWSER_HTTP_PORT"] = bridge.Port.ToString(),
+            ["NEXUS_BROWSER_HTTP_PORT"] = bridge.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["NEXUS_BROWSER_TOKEN_FILE"] = bridge.TokenFile,
             ["NEXUS_SHARED_HOME"] = dir["shared"],
             ["NEXUS_JOURNAL_HOME"] = dir["journal"],
             ["NEXUS_BROWSER_SESSION_IDLE_SECONDS"] = idleSeconds,
             ["NEXUS_BROWSER_RESTART_REQUEST"] = dir["daemon-restart.request"],
         };
-        var daemon = new Daemon(new ChildProcess(NativeExe.Path, ["--http", port.ToString()], env), $"http://127.0.0.1:{port}") { RestartPath = dir["daemon-restart.request"] };
+        var daemon = new Daemon(new ChildProcess(NativeExe.Path, ["--http", port.ToString(System.Globalization.CultureInfo.InvariantCulture)], env), $"http://127.0.0.1:{port}") { RestartPath = dir["daemon-restart.request"] };
         try
         {
             var clock = Stopwatch.StartNew();

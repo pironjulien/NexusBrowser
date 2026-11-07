@@ -5,6 +5,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- MCP `initialize` answers with a protocol version the server supports (2024-11-05, 2025-03-26, 2025-06-18,
+  2025-11-25): an unknown requested version gets the latest supported one instead of being echoed back.
+
+### Changed
+- Code analysis enforced: .NET `latest-recommended` rules with warnings as errors (`Directory.Build.props`), the few
+  rules turned off listed with their reason in `.editorconfig`. Fixed on the way: culture-invariant HTTP headers and
+  frame MAC sequence numbers, ordinal suffix checks, an explicit `CancellationToken.None` where an accepted HTTP
+  client must always release its admission; `AuthError` and `EmergencyStopError` renamed `AuthException` and
+  `EmergencyStopException`.
+- Tests restored from a lock file (`tests/NexusBrowser.Tests/packages.lock.json`); the VSTest packages
+  (`Microsoft.NET.Test.Sdk`, `xunit.runner.visualstudio`) are gone, xUnit runs on Microsoft.Testing.Platform only.
+  `xunit.v3` 4.0.2, `FsCheck` 3.6.0.
+- Release workflow on NexusSystem's shared workflows v1.6.54 (pinned by commit SHA).
+
 ## [2.35.22] - 2026-11-06
 
 ### Fixed

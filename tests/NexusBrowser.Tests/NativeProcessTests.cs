@@ -132,7 +132,7 @@ public sealed partial class NativeProcessTests : IDisposable
         string wsAddress = (await FirstLineAsync(bridge, 15)).Trim()["WebSocket: ".Length..];
         string httpAddress = (await FirstLineAsync(bridge, 15)).Trim()["HTTP REST: ".Length..];
         int wsPort = new Uri(wsAddress).Port, httpPort = new Uri(httpAddress).Port;
-        env["NEXUS_BROWSER_HTTP_PORT"] = httpPort.ToString();
+        env["NEXUS_BROWSER_HTTP_PORT"] = httpPort.ToString(System.Globalization.CultureInfo.InvariantCulture);
         _ = bridge.Process.StandardOutput.ReadToEndAsync(ct); // keep draining
 
         using var http = new HttpClient();
@@ -194,7 +194,7 @@ public sealed partial class NativeProcessTests : IDisposable
         var ct = TestContext.Current.CancellationToken;
         string token = new('d', 64);
         int port = Ports.Free();
-        using var daemon = new ChildProcess(NativeExe.Path, ["--http", port.ToString()], new Dictionary<string, string?>
+        using var daemon = new ChildProcess(NativeExe.Path, ["--http", port.ToString(System.Globalization.CultureInfo.InvariantCulture)], new Dictionary<string, string?>
         {
             ["NEXUS_MCP_TOKEN"] = token,
             ["NEXUS_SHARED_HOME"] = _dir["shared"],
@@ -250,7 +250,7 @@ public sealed partial class NativeProcessTests : IDisposable
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         string home = _dir["home"];
-        var (code, _, stderr) = await ChildProcess.RunAsync(NativeExe.Path, ["--http", port.ToString()], new Dictionary<string, string?>
+        var (code, _, stderr) = await ChildProcess.RunAsync(NativeExe.Path, ["--http", port.ToString(System.Globalization.CultureInfo.InvariantCulture)], new Dictionary<string, string?>
         {
             ["NEXUS_MCP_TOKEN"] = new string('x', 64),
             ["USERPROFILE"] = home,

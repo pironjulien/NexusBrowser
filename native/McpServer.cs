@@ -25,6 +25,9 @@ public sealed partial class McpServer : IDisposable
     public const string ServerName = "nexus-browser";
     public const string DefaultProtocolVersion = "2025-06-18";
     public const string StatelessProtocolVersion = "2026-07-28";
+    // Versions negotiated by initialize, oldest first (a tools-only server works the same under each);
+    // 2026-07-28 has no initialize (server/discover).
+    internal static readonly string[] InitializeProtocolVersions = ["2024-11-05", "2025-03-26", DefaultProtocolVersion, "2025-11-25"];
     // Scheduled task that starts the bridge on demand (scripts\runtime.ps1, $taskNames).
     internal const string BridgeTaskName = "NexusBrowser Bridge";
     public const double HeartbeatIntervalSeconds = 60.0 / 1.618;
@@ -401,12 +404,13 @@ public sealed partial class McpServer : IDisposable
                     if (_httpDraining) { client.Dispose(); continue; }
                     _httpClients++;
                 }
+                // Never cancelled before it starts: the task itself disposes the client and releases its admission.
                 _ = Task.Run(async () =>
                 {
                     using var _ = client;
                     try { await HandleHttpDaemonClientAsync(client, expectedAuth, serverCt); }
                     finally { lock (_httpSessionsLock) _httpClients--; }
-                });
+                }, CancellationToken.None);
             }
         }
         finally
@@ -811,14 +815,14 @@ public sealed partial class McpServer : IDisposable
         string reason = status switch { 202 => "Accepted", 503 => "Service Unavailable", _ => "OK" };
         byte[] body = payload != null ? Encoding.UTF8.GetBytes(payload.ToJsonString(CompactJson)) : [];
         var sb = new StringBuilder();
-        sb.Append($"HTTP/1.1 {status} {reason}\r\n");
+        sb.Append(CultureInfo.InvariantCulture, $"HTTP/1.1 {status} {reason}\r\n");
         sb.Append("Content-Type: application/json; charset=utf-8\r\n");
         sb.Append("Connection: close\r\n");
-        sb.Append($"Content-Length: {body.Length}\r\n");
+        sb.Append(CultureInfo.InvariantCulture, $"Content-Length: {body.Length}\r\n");
         if (extraHeaders != null)
         {
             foreach (var kv in extraHeaders)
-                sb.Append($"{kv.Key}: {kv.Value}\r\n");
+                sb.Append(CultureInfo.InvariantCulture, $"{kv.Key}: {kv.Value}\r\n");
         }
         sb.Append("\r\n");
         await stream.WriteAsync(Encoding.ASCII.GetBytes(sb.ToString()));
@@ -945,10 +949,9 @@ public sealed partial class McpServer : IDisposable
 
     private static JsonObject HandleInitialize(JsonObject? @params)
     {
-        string requested = @params?["protocolVersion"]?.GetValue<string>() ?? DefaultProtocolVersion;
         return new JsonObject
         {
-            ["protocolVersion"] = requested,
+            ["protocolVersion"] = NegotiateProtocolVersion(@params?["protocolVersion"]),
             ["capabilities"] = new JsonObject
             {
                 ["tools"] = new JsonObject { ["listChanged"] = false },
@@ -956,6 +959,17 @@ public sealed partial class McpServer : IDisposable
             ["serverInfo"] = BuildServerInfo(),
             ["instructions"] = Instructions,
         };
+    }
+
+    /// <summary>MCP lifecycle: the requested version when this server supports it, otherwise the latest one it
+    /// supports (the client then decides whether to continue). No version at all keeps the default.</summary>
+    internal static string NegotiateProtocolVersion(JsonNode? requested)
+    {
+        if (requested is null) return DefaultProtocolVersion;
+        string? version = requested is JsonValue value && value.TryGetValue(out string? text) ? text : null;
+        return version is not null && Array.IndexOf(InitializeProtocolVersions, version) >= 0
+            ? version
+            : InitializeProtocolVersions[^1];
     }
 
     private static JsonObject HandleDiscover() => new()
@@ -1942,11 +1956,11 @@ public sealed partial class McpServer : IDisposable
     // Light English stemming of one word for WebMcpReason: -ing, -ies, -es, -s, -ed.
     private static string Stem(string w)
     {
-        if (w.Length > 5 && w.EndsWith("ing")) return w[..^3];
-        if (w.Length > 4 && w.EndsWith("ies")) return w[..^3] + "y";
+        if (w.Length > 5 && w.EndsWith("ing", StringComparison.Ordinal)) return w[..^3];
+        if (w.Length > 4 && w.EndsWith("ies", StringComparison.Ordinal)) return w[..^3] + "y";
         if (w.Length > 4 && new[] { "shes", "ches", "sses", "xes" }.Any(w.EndsWith)) return w[..^2];
-        if (w.Length > 3 && w.EndsWith('s') && !w.EndsWith("ss")) return w[..^1];
-        if (w.Length > 4 && w.EndsWith("ed")) return w[..^2];
+        if (w.Length > 3 && w.EndsWith('s') && !w.EndsWith("ss", StringComparison.Ordinal)) return w[..^1];
+        if (w.Length > 4 && w.EndsWith("ed", StringComparison.Ordinal)) return w[..^2];
         return w;
     }
 

@@ -1,0 +1,15 @@
+# Code analysis policy (Directory.Build.props: AnalysisLevel latest-recommended, warnings are errors).
+# Only the rules below are turned off, each with its reason; every other recommended rule fails the build.
+root = true
+
+[*.cs]
+# Small constant key lists read once per tool call (argument shaping), not hot paths: inline arrays read better.
+dotnet_diagnostic.CA1861.severity = none
+# Optional bool flags follow the CancellationToken on purpose in a few internal helpers (call sites name them).
+dotnet_diagnostic.CA1068.severity = none
+# "Short" is a verb-free label helper (one word per client), not a type name.
+dotnet_diagnostic.CA1720.severity = none
+
+[tests/**.cs]
+# xUnit collection definitions are named *Collection by xUnit convention.
+dotnet_diagnostic.CA1711.severity = none

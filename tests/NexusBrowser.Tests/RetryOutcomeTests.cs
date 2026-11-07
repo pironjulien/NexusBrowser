@@ -20,8 +20,8 @@ public sealed class RetryOutcomeTests
     [InlineData("Invalid tool arguments: arguments.tab_id: integer expected")]
     [InlineData("No Chrome browser extension connected to the NexusBrowser bridge. Make sure the extension is active in Chrome.")]
     [InlineData("URL refused: file:///C:/x (http, https, data: or about:blank only; never file://, chrome://, javascript:).")]
-    // Refusal of the extension while it drains its commands for a reload (extension/background.js, RELOADING_MESSAGE).
-    [InlineData("The NexusBrowser extension is reloading for an update: nothing was done. Retry in a few seconds; your tabs are kept.")]
+    // Refusal of the extension while it drains its commands for a reload (extension/background.js, RELOADING_MESSAGE,
+    // the same text as BridgeServer.ReloadingMessage).
     [InlineData(BridgeServer.ReloadingMessage)]
     public void AFailureBeforeThePageIsNotDoneAndSafeToResend(string message)
     {

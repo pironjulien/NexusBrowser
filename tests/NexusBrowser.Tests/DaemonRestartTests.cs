@@ -23,8 +23,8 @@ public sealed class DaemonRestartTests : IDisposable
         using (var anonymous = await http.GetAsync(daemon.Base + "/restart-capabilities", TestContext.Current.CancellationToken)) Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
         string tokenFile = _dir["mcp-token"];
         File.WriteAllText(tokenFile, daemon.Token);
-        var requested = await ChildProcess.RunAsync(NativeExe.Path, ["--restart-daemon", "--port", new Uri(daemon.Base).Port.ToString(),
-            "--expected-pid", daemon.Process.Process.Id.ToString(), "--request-file", daemon.RestartPath, "--target-fingerprint", new string('a', 64),
+        var requested = await ChildProcess.RunAsync(NativeExe.Path, ["--restart-daemon", "--port", new Uri(daemon.Base).Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "--expected-pid", daemon.Process.Process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), "--request-file", daemon.RestartPath, "--target-fingerprint", new string('a', 64),
             "--mcp-token-file", tokenFile, "--wait-seconds", "0.1"]);
         Assert.Equal(3, requested.Code);
         Assert.True(JsonNode.Parse(requested.Stdout)!["requested"]!.GetValue<bool>());
@@ -77,7 +77,7 @@ public sealed class DaemonRestartTests : IDisposable
     public async Task LegacyUnknownOrMismatchedDaemonNeverGetsARequestFile(string scenario)
     {
         string json = """{"service":"nexus-browser","preserve_http_sessions":true,"request_schema":1,"pid":123,"instance_id":"0123456789abcdef0123456789abcdef"}""";
-        if (scenario.StartsWith("legacy")) json = "{\"status\":\"ok\",\"version\":\"" + (scenario == "legacy2330" ? "2.33.0" : "2.33.2") + "\"}";
+        if (scenario.StartsWith("legacy", StringComparison.Ordinal)) json = "{\"status\":\"ok\",\"version\":\"" + (scenario == "legacy2330" ? "2.33.0" : "2.33.2") + "\"}";
         else if (scenario == "wrong-pid") json = json.Replace("123", "456");
         else if (scenario == "missing-instance") json = json.Replace("0123456789abcdef0123456789abcdef", "");
         else if (scenario == "wrong-schema") json = json.Replace("\"request_schema\":1", "\"request_schema\":2");
@@ -110,7 +110,7 @@ public sealed class HttpRestartRaceTests : IDisposable
     private readonly TempDir _dir = new();
     public void Dispose() => _dir.Dispose();
 
-    private async Task WaitUntilAsync(Func<bool> condition)
+    private static async Task WaitUntilAsync(Func<bool> condition)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (!condition()) await Task.Delay(10, timeout.Token);
