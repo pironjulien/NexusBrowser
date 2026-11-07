@@ -99,3 +99,36 @@ function Get-BuildFingerprint([string]$Directory) {
     $file = if (Test-Path -LiteralPath $dll) { $dll } else { Join-Path $Directory 'NexusBrowser.exe' }
     (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
 }
+
+# Installs a build once in <VersionsRoot>\<first 16 characters of its fingerprint> and never writes into that folder
+# again: a release engine is a .NET single file that reads its own executable for each assembly on first use, so an
+# engine in use must never see its file renamed or replaced under it. An incomplete leftover (no executable) is
+# replaced; an existing folder whose engine does not match the fingerprint is refused, never run or overwritten.
+function Install-EngineBuild([string]$Candidate, [string]$VersionsRoot) {
+    $fingerprint = Get-BuildFingerprint $Candidate
+    $directory = Join-Path $VersionsRoot $fingerprint.Substring(0, 16)
+    $new = -not (Test-Path -LiteralPath (Join-Path $directory 'NexusBrowser.exe'))
+    if ($new) {
+        $staging = "$directory.tmp-$PID"
+        New-Item -ItemType Directory -Force $staging | Out-Null
+        Get-ChildItem -LiteralPath $Candidate | Copy-Item -Destination $staging -Recurse -Force
+        if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force }  # incomplete leftover
+        Rename-Item -LiteralPath $staging -NewName (Split-Path -Leaf $directory)
+    }
+    if ((Get-BuildFingerprint $directory) -cne $fingerprint) {
+        throw "Installed build cache does not match the verified payload: $directory. It was not executed or overwritten."
+    }
+    [pscustomobject]@{ Directory = $directory; Fingerprint = $fingerprint; New = $new }
+}
+
+# Removes the build folders of <VersionsRoot> other than $Keep that no NexusBrowser.exe process runs from: an engine
+# still serving an AI session keeps its whole folder until it exits, and a later update removes it.
+function Remove-UnusedEngineBuilds([string]$VersionsRoot, [string]$Keep) {
+    if (-not (Test-Path -LiteralPath $VersionsRoot)) { return }
+    $running = @(Get-CimInstance Win32_Process -Filter "Name='NexusBrowser.exe'" | ForEach-Object { $_.ExecutablePath })
+    foreach ($dir in Get-ChildItem -LiteralPath $VersionsRoot -Directory) {
+        if ($dir.FullName -eq $Keep) { continue }
+        if ($running | Where-Object { $_ -and $_.StartsWith($dir.FullName + '\', [StringComparison]::OrdinalIgnoreCase) }) { continue }
+        Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

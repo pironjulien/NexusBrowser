@@ -55,20 +55,11 @@ if (Test-Path -LiteralPath (Join-Path $prebuilt 'NexusBrowser.exe')) {
     $candidate = Join-Path $buildRoot 'candidate'
     & (Join-Path $PSScriptRoot 'build-native.ps1') -OutputDirectory $candidate
 }
-$fingerprint = Get-BuildFingerprint $candidate
-$versionDir = Join-Path $versionsRoot $fingerprint.Substring(0, 16)
-if (-not (Test-Path -LiteralPath (Join-Path $versionDir 'NexusBrowser.exe'))) {
-    $staging = "$versionDir.tmp-$PID"
-    New-Item -ItemType Directory -Force $staging | Out-Null
-    Get-ChildItem -LiteralPath $candidate | Copy-Item -Destination $staging -Recurse -Force
-    if (Test-Path -LiteralPath $versionDir) { Remove-Item -LiteralPath $versionDir -Recurse -Force }  # incomplete leftover
-    Rename-Item -LiteralPath $staging -NewName (Split-Path -Leaf $versionDir)
-    Write-Journal "Engine $version installed in $versionDir."
-}
+$build = Install-EngineBuild $candidate $versionsRoot
+$fingerprint = $build.Fingerprint
+$versionDir = $build.Directory
+if ($build.New) { Write-Journal "Engine $version installed in $versionDir." }
 $exe = Join-Path $versionDir 'NexusBrowser.exe'
-if ((Get-BuildFingerprint $versionDir) -cne $fingerprint) {
-    throw "Installed build cache does not match the verified payload: $versionDir. It was not executed or overwritten."
-}
 $controlExe = if ($controlEngine) { $controlEngine } else { $exe }
 $check = Invoke-Native $exe @('--version') 30
 if ($check.Code -or $check.Output -ne $version) { throw "Installed engine answers '$($check.Output)', expected $version." }
@@ -336,14 +327,8 @@ if ($UpdateOnly) {
 }
 
 # --- 10. Older builds no process runs any more, and the legacy fixed folder, are removed.
+Remove-UnusedEngineBuilds $versionsRoot $versionDir
 $running = @(Get-CimInstance Win32_Process -Filter "Name='NexusBrowser.exe'" | ForEach-Object { $_.ExecutablePath })
-if (Test-Path -LiteralPath $versionsRoot) {
-    foreach ($dir in Get-ChildItem -LiteralPath $versionsRoot -Directory) {
-        if ($dir.FullName -eq $versionDir) { continue }
-        if ($running | Where-Object { $_ -and $_.StartsWith($dir.FullName + '\', [StringComparison]::OrdinalIgnoreCase) }) { continue }
-        Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
 $legacyDir = Split-Path $legacyExe
 if ((Test-Path -LiteralPath $legacyDir) -and -not ($running -contains $legacyExe)) {
     Remove-Item -LiteralPath $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
