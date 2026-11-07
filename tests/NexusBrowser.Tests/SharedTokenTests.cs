@@ -1,50 +1,44 @@
-using System.Text;
+using NexusBrowser.Native;
 using Xunit;
 
 namespace NexusBrowser.Tests;
 
+/// <summary>One shared MCP token per PC (native\InstallSupport.cs, SharedToken): concurrent installers end with the same
+/// token, an empty file is repaired, an existing token is never regenerated, a daemon reading it never blocks them.</summary>
 public sealed class SharedTokenTests : IDisposable
 {
     private readonly TempDir _dir = new();
     public void Dispose() => _dir.Dispose();
 
-    [Theory]
-    [InlineData(Shells.WindowsPowerShell)]
-    [InlineData(Shells.Pwsh)]
-    public async Task ConcurrentInstallersReuseOneTokenAndRepairAnEmptyFile(string shell)
+    [Fact]
+    public async Task ConcurrentInstallersReuseOneTokenAndRepairAnEmptyFile()
     {
         string tokenFile = _dir[Path.Join("shared", "token.txt")];
         Directory.CreateDirectory(Path.GetDirectoryName(tokenFile)!);
-        string script = _dir["resolve.ps1"];
-        File.WriteAllText(script, $"""
-            $ErrorActionPreference = 'Stop'
-            . {Shells.Quote(Repo.File("scripts", "Resolve-NexusToken.ps1"))}
-            $file = Resolve-NexusTokenFile -Explicit @({Shells.Quote(tokenFile)})
-            [IO.File]::ReadAllText($file).Trim()
-            """, Encoding.ASCII);
-
-        async Task<string> Run()
-        {
-            var result = await Shells.FileAsync(shell, script);
-            Assert.True(result.Code == 0, result.Stderr);
-            return result.Stdout.Trim();
-        }
+        string Run() => File.ReadAllText(SharedToken.ResolveFile([tokenFile], _dir["home"])).Trim();
 
         foreach (bool emptyFile in new[] { false, true })
         {
             if (emptyFile) File.WriteAllText(tokenFile, "");
-            var tokens = await Task.WhenAll(Run(), Run());
+            var tokens = await Task.WhenAll(Task.Run(Run), Task.Run(Run));
             Assert.Equal(tokens[0], tokens[1]);
             Assert.Matches("^[0-9a-f]{64}$", tokens[0]);
             Assert.Equal(tokens[0], File.ReadAllText(tokenFile));
-            Assert.Equal(tokens[0], await Run());
+            Assert.Equal(tokens[0], Run());
         }
 
         const string existing = "already-installed-token-shared-by-every-daemon";
         File.WriteAllText(tokenFile, existing + "\n");
-        Assert.Equal(existing, await Run());
+        Assert.Equal(existing, Run());
         Assert.Equal(existing + "\n", File.ReadAllText(tokenFile));
         using var reader = File.Open(tokenFile, FileMode.Open, FileAccess.Read, FileShare.Read);
-        Assert.Equal(existing, await Run()); // existing daemon readers remain compatible with installer serialization
+        Assert.Equal(existing, Run()); // existing daemon readers remain compatible with installer serialization
+    }
+
+    [Fact]
+    public void WithoutAnExplicitFileTheTokenLivesInTheUsersNexusFolder()
+    {
+        string home = _dir["home"];
+        Assert.Equal(Path.Join(home, ".nexus", "mcp-token.txt"), SharedToken.ResolveFile([null, ""], home));
     }
 }

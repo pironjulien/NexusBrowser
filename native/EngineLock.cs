@@ -5,8 +5,8 @@ namespace NexusBrowser.Native;
 
 /// <summary>
 /// Marks this engine's build folder as in use for the whole life of the process. The installer writes an empty
-/// engine.lock in each build folder (scripts\runtime.ps1, Install-EngineBuild); every engine opens the one beside it
-/// without delete sharing and never closes it, so the cleanup of older builds (Remove-UnusedEngineBuilds) sees the
+/// engine.lock in each build folder (InstallSupport.cs, EngineBuilds.Install); every engine opens the one beside it
+/// without delete sharing and never closes it, so the cleanup of older builds (EngineBuilds.RemoveUnused) sees the
 /// folder in use whatever spelling of the path started the process, and Windows refuses to rename it. A single-file
 /// engine is otherwise only mapped: Windows renames the folder of such a running program.
 /// A folder without the file (development build) or a lock tested by the cleanup at that instant: nothing held.

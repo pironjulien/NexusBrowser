@@ -9,7 +9,7 @@ namespace NexusBrowser.Native;
 
 /// <summary>
 /// The NexusBrowser.exe processes of this PC with their image and role, for the installer (--engine-processes,
-/// scripts\runtime.ps1 Get-EngineProcesses). WMI gives neither the path nor the command line of a process of a higher
+/// Installer.cs and scripts\runtime.ps1 Get-EngineProcesses). WMI gives neither the path nor the command line of a process of a higher
 /// integrity level (an engine started as administrator), so an older bridge or daemon started that way was never listed:
 /// never stopped, and its task started a second instance. Here every process is found by name (any account), then read
 /// with PROCESS_QUERY_LIMITED_INFORMATION, which an elevated process of the same user grants: its image by
@@ -30,7 +30,7 @@ public static partial class EngineProcesses
     private static readonly string[] EarlierModes =
     [
         "--version", "--fingerprint", "--refresh-extension", "--register", "--rotate", "--auth-host", "--engine-processes",
-        "--shutdown-bridge", "--restart-daemon", "--stdio-relay",
+        "--shutdown-bridge", "--restart-daemon", "--stdio-relay", "--install", "--self-update", "--registry-worker",
     ];
 
     /// <summary>The role Program.RunAsync gives these arguments (argv without the executable): the product's bridge

@@ -47,6 +47,17 @@ public static class Program
         string? logFile = GetArgValue(args, "--log-file");
         string? agent = GetArgValue(args, "--agent");
 
+        // Installation and update (Installer.cs): get.ps1 only downloads, checks and starts this engine.
+        if (args.Contains("--install", StringComparer.OrdinalIgnoreCase))
+            return Installer.Run(args, Console.Out);
+
+        if (args.Contains("--self-update", StringComparer.OrdinalIgnoreCase))
+            return SelfUpdate.Run(Console.Out);
+
+        if (args.Contains("--registry-worker", StringComparer.OrdinalIgnoreCase))
+            return RealRegistry.Worker(GetArgValue(args, "--request") ?? throw new ArgumentException("--request is required"),
+                GetArgValue(args, "--response") ?? throw new ArgumentException("--response is required"));
+
         if (args.Contains("--version", StringComparer.OrdinalIgnoreCase))
         {
             Console.WriteLine(BridgeSecurity.Version);
@@ -170,6 +181,9 @@ public static class Program
                 a.Equals("--rotate", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--refresh-extension", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--register", StringComparison.OrdinalIgnoreCase) ||
+                a.Equals("--install", StringComparison.OrdinalIgnoreCase) ||
+                a.Equals("--self-update", StringComparison.OrdinalIgnoreCase) ||
+                a.Equals("--registry-worker", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--version", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--fingerprint", StringComparison.OrdinalIgnoreCase))
             {

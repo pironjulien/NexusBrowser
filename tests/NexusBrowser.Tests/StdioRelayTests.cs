@@ -226,8 +226,8 @@ public sealed class StdioRelayProcessTests : IDisposable
 
     private static string Comspec => Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe";
 
-    // current.json as install-native.ps1 writes it (ConvertTo-Json of a hashtable): Windows PowerShell puts two spaces
-    // after the colon, pwsh one; the key order is not fixed.
+    // current.json as the PowerShell installers up to 2.35.32 wrote it (ConvertTo-Json of a hashtable): Windows PowerShell
+    // puts two spaces after the colon, pwsh one; the key order is not fixed. The engine's installer writes plain JSON.
     private static void WriteCurrentJson(string root, string fingerprint, bool windowsPowerShell)
     {
         string exe = Path.Join(root, "versions", fingerprint[..16], "NexusBrowser.exe").Replace(@"\", @"\\", StringComparison.Ordinal);

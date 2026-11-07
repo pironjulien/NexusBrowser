@@ -111,8 +111,9 @@ gh attestation verify get.ps1 --repo pironjulien/NexusBrowser --signer-repo piro
 powershell -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
 ```
 
-It downloads the latest release for your PC (x64 or ARM64), checks it against `SHA256SUMS.txt`, unpacks it into
-`%LOCALAPPDATA%\NexusBrowser\app`, sets up the local bridge, the native host and the shared MCP daemon
+It downloads the latest release for your PC (x64 or ARM64), checks it against `SHA256SUMS.txt` (and its build
+provenance when the GitHub CLI is signed in), then starts the release's own engine (`NexusBrowser.exe --install`),
+which unpacks it into `%LOCALAPPDATA%\NexusBrowser\app`, sets up the local bridge, the native host and the shared MCP daemon
 (`127.0.0.1:16182`, shared token file `NEXUS_MCP_TOKEN_FILE`, otherwise `~\.nexus\mcp-token.txt`, mirrored in your
 user variable `NEXUS_MCP_TOKEN`), and declares the `nexus-browser` server to every AI client it finds: **Claude
 Code**, **Claude Desktop**, **Codex** and **Antigravity**. No Python, no .NET to install: the engine is
@@ -134,7 +135,8 @@ them.
 The bridge can also update a public install itself (the contract shared by the Nexus products): it writes
 `~\.nexus\status\browser.json` (`version`, `latest` read from the `releases/latest` redirect at most once a day,
 `state`, `message`), `GET /api/update` returns it and `POST /api/update` (bridge token) starts the "NexusBrowser
-Update" task, which runs `get.ps1` outside the bridge and records `done` or `failed` (the current version is kept;
+Update" task, which runs the installed engine (`NexusBrowser.exe --self-update`: NexusSystem's maintenance when it is
+installed, else the latest release, checked, installed by its own engine) outside the bridge (the current version is kept;
 deferred while an agent works in Chrome). A clone updates with git instead.
 
 Automatic maintenance is owned by NexusSystem (`get-nexus.ps1 -Maintain`), not by a second product timer. It calls

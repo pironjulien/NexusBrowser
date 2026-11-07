@@ -86,7 +86,7 @@ public sealed class BridgeServer : IAsyncDisposable
     private bool _draining;
     private int _httpCommands;
     // Answer to a command that meets an extension reloading for an update: it never ran (retry_safe, "not_done").
-    // Scheduled task the installer registers for a public install (scripts\runtime.ps1, $taskNames).
+    // Scheduled task the installer registers for a public install (InstallSupport.cs, TaskNames).
     internal const string UpdateTaskName = "NexusBrowser Update";
     internal const string ReloadingMessage = "The NexusBrowser extension is reloading for an update: nothing was done. " +
         "Retry in a few seconds; your tabs are kept.";

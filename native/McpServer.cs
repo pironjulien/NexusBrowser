@@ -28,7 +28,7 @@ public sealed partial class McpServer : IDisposable
     // Versions negotiated by initialize, oldest first (a tools-only server works the same under each);
     // 2026-07-28 has no initialize (server/discover).
     internal static readonly string[] InitializeProtocolVersions = ["2024-11-05", "2025-03-26", DefaultProtocolVersion, "2025-11-25"];
-    // Scheduled task that starts the bridge on demand (scripts\runtime.ps1, $taskNames).
+    // Scheduled task that starts the bridge on demand (InstallSupport.cs, TaskNames).
     internal const string BridgeTaskName = "NexusBrowser Bridge";
     public const double HeartbeatIntervalSeconds = 60.0 / 1.618;
     public const double TransportMarginSeconds = 5.0;

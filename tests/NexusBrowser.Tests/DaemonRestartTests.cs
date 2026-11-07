@@ -96,9 +96,11 @@ public sealed class DaemonRestartTests : IDisposable
     [Fact]
     public void EveryInstallerPathUsesTheCurrentControllerAndNeverWritesALegacyRequest()
     {
-        string install = File.ReadAllText(Repo.File("scripts", "install-native.ps1"));
-        Assert.Equal(2, install.Split("$restart = Invoke-Native $controlExe @('--restart-daemon'").Length - 1);
-        Assert.DoesNotContain("WriteAllText($restartRequest", install);
+        // One restart path for both daemon kinds (supervised, public task), always through the current controller.
+        string install = File.ReadAllText(Repo.File("native", "Installer.cs"));
+        Assert.Equal(1, install.Split("host.RunEngine(controlExe, [\"--restart-daemon\"").Length - 1);
+        Assert.Equal(3, install.Split("RestartDaemons(").Length - 1);  // its definition and the two daemon kinds
+        Assert.DoesNotContain("WriteAllText(layout.RestartRequest", install);
         Assert.DoesNotContain("Stop-Process", install);
         Assert.DoesNotContain("Stop-ScheduledTask", install);
     }

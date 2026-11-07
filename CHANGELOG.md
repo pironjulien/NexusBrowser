@@ -5,6 +5,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.36.0] - 2026-11-08
+
+### Changed
+- The installation and the update are the engine's own code: `NexusBrowser.exe --install` (C#, `native/Installer.cs`)
+  replaces about 1,200 lines of PowerShell (`install-native.ps1`, `runtime.ps1`'s install functions,
+  `self-update.ps1`, `update-receipt.ps1`, `Resolve-NexusToken.ps1`, most of `get.ps1`). `get.ps1` is now a minimal
+  starter: it downloads the release package of this PC's architecture, checks it against `SHA256SUMS.txt` and, when
+  the GitHub CLI is signed in, its build provenance (`gh attestation verify`), unpacks it and starts the package's own
+  engine, which switches `%LOCALAPPDATA%\NexusBrowser\app` by one rename, installs its immutable build in `versions\`,
+  declares the native host, the tasks (Task Scheduler API, no PowerShell cmdlet), the shared daemon and the AI clients,
+  and restores the previous package on failure. Same folders, files and names as before: existing installs, NexusSystem
+  maintenance (`get.ps1 -UpdateOnly`, `NEXUS_UPDATE_RESULT`) and the pack (`NEXUS_PACK_RESULT` last) are unchanged.
+- The "NexusBrowser Update" task runs the installed engine itself (`--self-update`) instead of a PowerShell updater
+  copied into `updaters\` (removed): NexusSystem's maintenance when it is installed, else the latest release checked
+  the same way and installed by its own engine. After a failed update, the task keeps the new build's updater, never
+  the restored package's.
+- The real HKCU write under a packaged app (Claude) runs the engine itself outside the package (`--registry-worker`
+  in a one-shot task) instead of a PowerShell worker; the native host key and the removal of the old NexusAGY key
+  share one pass. `scripts/registre-reel.ps1` stays, for NexusPoste.
+- A failed update is restored by the new package's engine from the previous package's checked files only (digest
+  taken before the switch, the same as `scripts/payload-integrity.ps1`); `scripts/install-native.ps1` remains as the
+  entry point through which `get.ps1` of 2.35.32 and earlier hands such a restore to this engine.
 ## [2.35.32] - 2026-11-07
 
 ### Changed
@@ -2075,7 +2097,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.35.32...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.0...HEAD
+[2.36.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.35.32...v2.36.0
 [2.33.11]: https://github.com/pironjulien/NexusBrowser/compare/v2.33.10...v2.33.11
 [2.33.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.32.0...v2.33.0
 [2.26.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.3

@@ -207,23 +207,17 @@ public sealed partial class EngineProcessesTests : IDisposable
         Assert.Equal("unknown", (string?)entry["role"]);
         Assert.Equal("none", (string?)entry["read_by"]);
 
-        string script = _dir["unknown.ps1"];
-        string json = _dir["list.json"];
-        File.WriteAllText(json, list.ToJsonString());
-        File.WriteAllText(script, $"$ErrorActionPreference = 'Stop'\n. {Shells.Quote(Repo.File("scripts", "runtime.ps1"))}\n" +
-            $"$p = @((Get-Content -LiteralPath {Shells.Quote(json)} -Raw | ConvertFrom-Json).processes)\n" +
-            "foreach ($role in 'bridge', 'daemon') {\n" +
-            "  $s = Split-EngineProcesses $p $role 'C:\\elsewhere\\NexusBrowser.exe'\n" +
-            $"  $u = @($s.Unknown | Where-Object pid -eq {bridge.Process.Id})\n" +
-            "  \"$(@($s.Others | Where-Object pid -eq " + S(bridge.Process.Id) + ").Count) $($u.Count) $(Test-TaskStart 'Ready' $s.Instances.Count) $(Format-UnreadEngine $u[0] $role)\"\n" +
-            "}\n", Encoding.ASCII);
-        var (code, stdout, stderr) = await Shells.FileAsync(Shells.Pwsh, script, timeoutSeconds: 120);
-        Assert.True(code == 0, stdout + stderr);
-        string[] lines = Shells.Lines(stdout);
-        Assert.Equal(2, lines.Length);
-        Assert.StartsWith($"0 1 False NexusBrowser.exe {bridge.Process.Id}: role unreadable", lines[0]);
-        Assert.StartsWith($"0 1 False NexusBrowser.exe {bridge.Process.Id}: role unreadable", lines[1]);
-        Assert.True(EngineProcesses.Read(bridge.Process.Id) is (false, null, null));
+        // The installer's split of that listing (native\InstallSupport.cs, EngineSplit): counted as a running instance
+        // of each role (no second bridge or daemon started), never taken for another build to stop.
+        var entries = list["processes"]!.AsArray().Select(p => new EngineProcesses.Entry((int)p!["pid"]!, (string?)p["image"], (string)p["role"]!, (string)p["read_by"]!)).ToList();
+        foreach (string role in new[] { "bridge", "daemon" })
+        {
+            var split = EngineSplit.Of(entries, role, @"C:\elsewhere\NexusBrowser.exe");
+            Assert.DoesNotContain(split.Others, p => p.Pid == bridge.Process.Id);
+            var unread = Assert.Single(split.Unknown, p => p.Pid == bridge.Process.Id);
+            Assert.False(TaskNames.ShouldStart("Ready", split.Instances.Count));
+            Assert.StartsWith($"NexusBrowser.exe {bridge.Process.Id}: role unreadable", EngineSplit.Unread(unread, role));
+        }        Assert.True(EngineProcesses.Read(bridge.Process.Id) is (false, null, null));
         Assert.False(bridge.Process.HasExited);  // nothing stopped
     }
 

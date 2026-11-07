@@ -238,8 +238,8 @@ public sealed class RepositoryTests
         Assert.Contains("full access to the page", readme);
         Assert.Contains("[masked value]", readme);
         // Copied into the Antigravity plugin: the one skill of the shared plugin folder.
-        string install = Text("scripts", "install-native.ps1");
+        string install = Text("native", "Installer.cs");
         Assert.DoesNotContain(@"perso\nexus-browser", install);
-        Assert.Contains(@"skills\nexus-browser\SKILL.md", install);
+        Assert.Contains("Path.Join(pluginSource, \"skills\", \"nexus-browser\", \"SKILL.md\")", install);
     }
 }

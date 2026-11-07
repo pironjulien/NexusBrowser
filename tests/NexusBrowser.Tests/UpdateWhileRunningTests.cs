@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
+using NexusBrowser.Native;
 using Xunit;
 
 namespace NexusBrowser.Tests;
@@ -51,8 +52,8 @@ public sealed class ReleaseEngine : IDisposable
 /// NexusFree 1.3.3 found that replacing that file under a running engine (renamed aside, new version copied to its
 /// path) makes every later tool call fail with an empty error. NexusBrowser installs each build in its own folder,
 /// never written again, and removes an older folder only once no engine runs from it. Here the real release engine
-/// runs from such a folder, the next build is installed and the cleanup runs with the installer's own functions
-/// (scripts\runtime.ps1), and the engine must still answer; the in-place replacement is checked too, to show this
+/// runs from such a folder, the next build is installed and the cleanup runs with the installer's own code
+/// (native\InstallSupport.cs, EngineBuilds), and the engine must still answer; the in-place replacement is checked too, to show this
 /// test sees the failure when it happens. The release publish loads the whole machine for a while: this class runs
 /// alone, after the parallel tests, so their timing budgets (daemon restart polls) are not eaten by it.
 /// </summary>
@@ -63,14 +64,6 @@ public sealed class UpdateWhileRunningTests(ReleaseEngine release) : IClassFixtu
 
     public void Dispose() => _dir.Dispose();
 
-    private async Task<string[]> RuntimeAsync(string commands)
-    {
-        string script = _dir[$"runtime-{Guid.NewGuid():N}.ps1"];
-        File.WriteAllText(script, $"$ErrorActionPreference = 'Stop'\n. {Shells.Quote(Repo.File("scripts", "runtime.ps1"))}\n{commands}\n", Encoding.ASCII);
-        var (code, stdout, stderr) = await Shells.FileAsync(Shells.Pwsh, script, timeoutSeconds: 120);
-        Assert.True(code == 0, stdout + stderr);
-        return Shells.Lines(stdout);
-    }
 
     [Theory]
     [InlineData(false)]
@@ -80,9 +73,8 @@ public sealed class UpdateWhileRunningTests(ReleaseEngine release) : IClassFixtu
         var ct = TestContext.Current.CancellationToken;
         await release.EnsureAsync();
         string versions = _dir["NexusBrowser\\versions"];
-        string q = Shells.Quote(versions);
-        string[] installed = await RuntimeAsync($"$b = Install-EngineBuild {Shells.Quote(release.Folder)} {q}; $b.Directory; $b.Fingerprint");
-        string running = installed[0], fingerprint = installed[1];
+        var installed = EngineBuilds.Install(release.Folder, versions);
+        string running = installed.Directory, fingerprint = installed.Fingerprint;
         string exe = Path.Join(running, "NexusBrowser.exe");
 
         string token = new('u', 64);
@@ -133,14 +125,15 @@ public sealed class UpdateWhileRunningTests(ReleaseEngine release) : IClassFixtu
         else
         {
             // The next build (the same engine with other bytes: another fingerprint), installed and cleaned up as
-            // install-native.ps1 does while this engine serves its session.
+            // the installer does while this engine serves its session.
             string next = _dir["next"];
             Directory.CreateDirectory(next);
             foreach (string file in Directory.EnumerateFiles(release.Folder)) File.Copy(file, Path.Join(next, Path.GetFileName(file)));
             await File.AppendAllTextAsync(Path.Join(next, "NexusBrowser.exe"), "next build", ct);
-            string[] updated = await RuntimeAsync($"$b = Install-EngineBuild {Shells.Quote(next)} {q}; Remove-UnusedEngineBuilds {q} $b.Directory; $b.Directory; Get-BuildFingerprint {Shells.Quote(running)}");
-            Assert.NotEqual(running, updated[0]);
-            Assert.Equal(fingerprint, updated[1]); // the running engine's folder is kept, its file untouched
+            var updated = EngineBuilds.Install(next, versions);
+            EngineBuilds.RemoveUnused(versions, [updated.Directory], ProcessImages.Read("NexusBrowser"));
+            Assert.NotEqual(running, updated.Directory);
+            Assert.Equal(fingerprint, EngineBuilds.Fingerprint(running)); // the running engine's folder is kept, its file untouched
             Assert.Equal(Directory.EnumerateFiles(release.Folder).Select(Path.GetFileName).Order(),
                 Directory.EnumerateFiles(running).Select(Path.GetFileName).Where(f => f is not ("installation.json" or "engine.lock")).Order());
         }
@@ -161,7 +154,7 @@ public sealed class UpdateWhileRunningTests(ReleaseEngine release) : IClassFixtu
         daemon.Process.Kill(entireProcessTree: true);
         await daemon.Process.WaitForExitAsync(ct);
         string current = Directory.EnumerateDirectories(versions).Single(d => d != running);
-        await RuntimeAsync($"Remove-UnusedEngineBuilds {q} {Shells.Quote(current)}");
+        EngineBuilds.RemoveUnused(versions, [current], ProcessImages.Read("NexusBrowser"));
         Assert.False(Directory.Exists(running));
         Assert.True(File.Exists(Path.Join(current, "NexusBrowser.exe")));
     }

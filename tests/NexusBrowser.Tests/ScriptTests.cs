@@ -112,36 +112,6 @@ public sealed class ScriptTests : IDisposable
     [Theory]
     [InlineData(Shells.WindowsPowerShell)]
     [InlineData(Shells.Pwsh)]
-    public async Task ActivationReceiptNeedsTheLoadedFingerprintAndVerifiedExtension(string shell)
-    {
-        string probe = _dir["activation.ps1"];
-        File.WriteAllText(probe,
-            "$ErrorActionPreference='Stop'\n$t=$null;$e=$null\n" +
-            $"$ast=[System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("scripts", "update-receipt.ps1"))},[ref]$t,[ref]$e)\n" +
-            "$f=$ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ActivationState'},$true)[0]\n" +
-            "$fn=Join-Path (Split-Path $PSCommandPath) 'activation-function.ps1';[IO.File]::WriteAllText($fn,$f.Extent.Text);. $fn\n" +
-            "$Published='2.33.5';$hash='a'*64;$current=[pscustomobject]@{version='2.33.5';fingerprint=$hash}\n" +
-            "$daemon=[pscustomobject]@{status='ok';service='nexus-browser';version='2.33.5';fingerprint=$hash;pid=1}\n" +
-            "$bridge=[pscustomobject]@{status='online';version='2.33.5';fingerprint=$hash;pid=2}\n" +
-            "$extension=[pscustomobject]@{verified=$true}\n" +
-            "(Get-ActivationState $current $daemon $bridge $extension)|ConvertTo-Json -Depth 5 -Compress\n" +
-            "$daemon.fingerprint='b'*64;(Get-ActivationState $current $daemon $bridge $extension)|ConvertTo-Json -Depth 5 -Compress\n" +
-            "$daemon.fingerprint=$hash;$extension.verified=$false;(Get-ActivationState $current $daemon $bridge $extension)|ConvertTo-Json -Depth 5 -Compress\n",
-            Encoding.ASCII);
-        var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
-        Assert.True(code == 0, stderr);
-        var receipts = Shells.Lines(stdout).Select(l => JsonNode.Parse(l)!).ToList();
-        Assert.Equal("done", (string?)receipts[0]["state"]);
-        Assert.Equal("2.33.5", (string?)receipts[0]["active"]);
-        Assert.Equal("deferred", (string?)receipts[1]["state"]);
-        Assert.Null(receipts[1]["active"]);
-        Assert.Equal("daemon-activation-pending", (string?)receipts[1]["reason"]);
-        Assert.Equal("extension-activation-pending", (string?)receipts[2]["reason"]);
-    }
-
-    [Theory]
-    [InlineData(Shells.WindowsPowerShell)]
-    [InlineData(Shells.Pwsh)]
     public async Task AConcurrentInstallerDefersBeforeTouchingItsDownload(string shell)
     {
         string root = _dir["locked-install"];
@@ -153,46 +123,6 @@ public sealed class ScriptTests : IDisposable
         Assert.Contains("\"reason\":\"maintenance-in-progress\"", stdout);
         Assert.False(Directory.Exists(Path.Join(root, "download")));
         Assert.False(Directory.Exists(Path.Join(root, "app.next")));
-    }
-
-    [Theory]
-    [InlineData(Shells.WindowsPowerShell)]
-    [InlineData(Shells.Pwsh)]
-    public async Task CachedActivationVerifiesTheWholePayloadWithoutExecutingItsScripts(string shell)
-    {
-        string payload = _dir["cached-payload"], probe = _dir["cache-verifier.ps1"];
-        Directory.CreateDirectory(payload);
-        File.WriteAllText(Path.Join(payload, "get.ps1"), "throw 'must never execute cached code'");
-        File.WriteAllText(Path.Join(payload, "engine.txt"), "verified engine");
-        File.WriteAllText(probe,
-            "$ErrorActionPreference='Stop'\n$t=$null;$e=$null\n" +
-            $"$ast=[System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("get.ps1"))},[ref]$t,[ref]$e)\n" +
-            "$f=$ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-CachedPayloadFingerprint'},$true)[0]\n" +
-            "$fn=Join-Path (Split-Path $PSCommandPath) 'cache-function.ps1';[IO.File]::WriteAllText($fn,$f.Extent.Text);. $fn\n" +
-            $"Get-CachedPayloadFingerprint {Shells.Quote(payload)}\n" +
-            $"& {Shells.Quote(Repo.File("scripts", "payload-integrity.ps1"))} -Path {Shells.Quote(payload)}\n" +
-            $"[IO.File]::WriteAllText({Shells.Quote(Path.Join(payload, "get.ps1"))},'changed cached installer')\n" +
-            $"Get-CachedPayloadFingerprint {Shells.Quote(payload)}\n", Encoding.ASCII);
-        var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
-        Assert.True(code == 0, stderr);
-        var hashes = Shells.Lines(stdout);
-        Assert.Equal(3, hashes.Length);
-        Assert.Equal(hashes[0], hashes[1]);
-        Assert.NotEqual(hashes[0], hashes[2]);
-    }
-
-    [Fact]
-    public void EveryInstallRefreshesTheExistingClientsOfTheNewEngine()
-    {
-        // A development install (install.ps1 without -Register) must not leave Antigravity's plugin manifest and guide,
-        // or an exact stdio route, one version behind: it refreshes what is already installed, nothing more.
-        string install = File.ReadAllText(Repo.File("scripts", "install-native.ps1"));
-        Assert.Contains("if (-not $Register) { $registrationArgs += '--update-only' }", install);
-        Assert.DoesNotContain("if ($Register -or $UpdateOnly) {\n    $registrationArgs", install.Replace("\r\n", "\n"));
-        int section = install.IndexOf("# --- 8.", StringComparison.Ordinal);
-        int call = install.IndexOf("Invoke-Native $controlExe $registrationArgs", StringComparison.Ordinal);
-        Assert.True(section > 0 && call > section, $"section={section} call={call}");
-        Assert.DoesNotMatch(@"\n\s*if \([^)]*\$Register[^)]*\) \{\s*\n\s*\$registrationArgs", install[section..call].Replace("\r\n", "\n"));
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -215,14 +145,27 @@ public sealed class ScriptTests : IDisposable
     }
 
     [Fact]
-    public void GetVerifiesSha256SumsBeforeUnpacking()
+    public void GetVerifiesSha256SumsAndProvenanceBeforeUnpacking()
     {
-        int check = Get.IndexOf("Get-ExpectedHash $sums $zipName", StringComparison.Ordinal);
-        int compare = Get.IndexOf("if ($actual -ne $expected) { throw", StringComparison.Ordinal);
+        int compare = Get.IndexOf("if ($sha -ne (Get-ExpectedHash $sums $zipName)) { throw", StringComparison.Ordinal);
+        int provenance = Get.IndexOf("attestation verify $zip --repo $repository --signer-repo pironjulien/NexusSystem", StringComparison.Ordinal);
         int extract = Get.IndexOf("[IO.Compression.ZipFile]::ExtractToDirectory($zip", StringComparison.Ordinal);
-        Assert.True(check > 0 && compare > check && extract > compare, $"check={check} compare={compare} extract={extract}");
+        int start = Get.IndexOf("$code = Invoke-Engine $engine $arguments", StringComparison.Ordinal);
+        Assert.True(compare > 0 && provenance > compare && extract > provenance && start > extract, $"compare={compare} provenance={provenance} extract={extract} start={start}");
         Assert.Contains("SHA256SUMS.txt missing from the release: installation refused.", Get);
         Assert.Contains("Get-FileHash -LiteralPath $zip -Algorithm SHA256", Get);
+    }
+
+    /// <summary>get.ps1 only fetches, checks and starts the package's engine: every installation step is the engine's
+    /// (native\Installer.cs), so the downloaded script stays small and never changes the PC by itself.</summary>
+    [Fact]
+    public void GetIsAMinimalStarterOfTheEnginesInstaller()
+    {
+        Assert.Contains("@('--install', '--switch', '--source', $package, $mode)", Get);
+        Assert.Contains("@('--install', '--reuse-installed', '--update-only')", Get);
+        foreach (string step in new[] { "ScheduledTask", "HKCU", "robocopy", "install.ps1", "Rename-Item", "SetEnvironmentVariable", "registre-reel" })
+            Assert.DoesNotContain(step, Get.Replace("A clone installs with its own install.ps1", "", StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.True(Get.Split('\n').Count(l => l.Trim().Length > 0 && !l.TrimStart().StartsWith('#')) < 160, "get.ps1 grew past a starter");
     }
 
     [Fact]
@@ -267,81 +210,6 @@ public sealed class ScriptTests : IDisposable
         ], Shells.Lines(stdout));
     }
 
-    /// <summary>The installer's journal callback runs inside Move-ProductTasks: its step lines reach install.log, never a
-    /// file named after the callback's text (PowerShell names are case-insensitive, so a parameter called $Journal once
-    /// hid the script's $journal path).</summary>
-    [Theory]
-    [InlineData(Shells.WindowsPowerShell)]
-    [InlineData(Shells.Pwsh)]
-    public async Task TaskMigrationStepsAreWrittenToTheInstallJournal(string shell)
-    {
-        string probe = _dir["journal-probe.ps1"];
-        string work = Path.GetDirectoryName(probe)!;
-        File.WriteAllText(probe,
-            "$ErrorActionPreference = 'Stop'\n$t = $null; $e = $null\n" +
-            $"$runtime = [System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("scripts", "runtime.ps1"))}, [ref]$t, [ref]$e)\n" +
-            $"$installer = [System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("scripts", "install-native.ps1"))}, [ref]$t, [ref]$e)\n" +
-            "$parts = @($runtime.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Move-ProductTasks' }, $true) | ForEach-Object { $_.Extent.Text })\n" +
-            "$parts += @($installer.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Write-Journal' }, $true) | ForEach-Object { $_.Extent.Text })\n" +
-            "function Get-ScheduledTask { @([pscustomobject]@{ TaskName = 'Nexus Browser Bridge' }) }\n" +
-            "function Get-TaskMigration { @([pscustomobject]@{ Step = 'Rename'; Role = 'Bridge'; From = 'Nexus Browser Bridge'; To = 'NexusBrowser Bridge' }) }\n" +
-            "function Export-ScheduledTask { '<Task />' }\nfunction Register-ScheduledTask { }\nfunction Unregister-ScheduledTask { }\n" +
-            "$taskNames = @{}; $legacyTaskNames = @{}\n" +
-            "$fn = Join-Path (Split-Path $PSCommandPath) 'journal-functions.ps1'; [IO.File]::WriteAllText($fn, ($parts -join \"`n\")); . $fn\n" +
-            "$utf8 = New-Object Text.UTF8Encoding $false\n" +
-            "$journal = Join-Path (Split-Path $PSCommandPath) 'install.log'\n" +
-            "Set-Location (Split-Path $PSCommandPath)\n" +
-            "Move-ProductTasks '2.35.12' { param($Text) Write-Journal $Text } 6>$null | Out-Null\n" +
-            "(Get-Content -LiteralPath $journal -Raw).Trim().Substring(20)\n" +
-            "@(Get-ChildItem -LiteralPath (Split-Path $PSCommandPath) -File | Where-Object Name -like '*param*').Count\n",
-            Encoding.ASCII);
-        var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
-        Assert.True(code == 0, stderr);
-        Assert.Equal(["Task 'Nexus Browser Bridge' renamed 'NexusBrowser Bridge'.", "0"], Shells.Lines(stdout));
-        Assert.True(Directory.Exists(work));
-    }
-
-    /// <summary>Task names before 2.35.12 ("Nexus Browser ...") are renamed to the ones the installed engine calls, or
-    /// removed when that name exists; a rollback to an older engine renames them back; a task never starts beside a
-    /// running instance of its role (a bridge or daemon kept from its former name). Pure functions, no real task.</summary>
-    [Theory]
-    [InlineData(Shells.WindowsPowerShell)]
-    [InlineData(Shells.Pwsh)]
-    public async Task TaskMigrationRenamesTheOtherNameSetAndNeverDoublesAnInstance(string shell)
-    {
-        string probe = _dir["task-migration.ps1"];
-        File.WriteAllText(probe,
-            "$ErrorActionPreference = 'Stop'\n$t = $null; $e = $null\n" +
-            $"$ast = [System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("scripts", "runtime.ps1"))}, [ref]$t, [ref]$e)\n" +
-            "$wanted = 'taskNamesSince', 'taskNames', 'legacyTaskNames'\n" +
-            "$parts = @($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.AssignmentStatementAst] -and $wanted -contains $_.Left.VariablePath.UserPath } | ForEach-Object { $_.Extent.Text })\n" +
-            "$parts += @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in 'Get-TaskNameSets', 'Get-TaskMigration', 'Test-TaskStart' }, $true) | ForEach-Object { $_.Extent.Text })\n" +
-            "$fn = Join-Path (Split-Path $PSCommandPath) 'task-functions.ps1'; [IO.File]::WriteAllText($fn, ($parts -join \"`n\")); . $fn\n" +
-            "function Plan([string]$Version, [string[]]$Existing) { $s = @(Get-TaskMigration $Version $Existing | ForEach-Object { \"$($_.Role):$($_.Step):$($_.From)>$($_.To)\" }); if ($s) { $s -join ',' } else { 'none' } }\n" +
-            "$legacy = 'Nexus Browser Bridge', 'Nexus Browser MCP', 'Nexus Browser Update'\n" +
-            "$current = 'NexusBrowser Bridge', 'NexusBrowser MCP', 'NexusBrowser Update'\n" +
-            "Plan '2.35.12' $legacy\n" +
-            "Plan '2.35.12' @('Nexus Browser Bridge', 'NexusBrowser Bridge', 'Nexus Browser Update', 'NexusAGY Browser Bridge')\n" +
-            "Plan '2.36.0' $current\n" +
-            "Plan '2.35.11' $current\n" +
-            "Plan '2.35.12' @()\n" +
-            "(Get-TaskNameSets '2.35.11').Keep.Bridge\n" +
-            "\"$(Test-TaskStart 'Ready' 0) $(Test-TaskStart 'Ready' 1) $(Test-TaskStart 'Running' 0) $(Test-TaskStart 'Disabled' 0)\"\n",
-            Encoding.ASCII);
-        var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
-        Assert.True(code == 0, stderr);
-        Assert.Equal(
-        [
-            "Bridge:Rename:Nexus Browser Bridge>NexusBrowser Bridge,Daemon:Rename:Nexus Browser MCP>NexusBrowser MCP,Update:Rename:Nexus Browser Update>NexusBrowser Update",
-            "Bridge:Remove:Nexus Browser Bridge>NexusBrowser Bridge,Update:Rename:Nexus Browser Update>NexusBrowser Update",
-            "none",
-            "Bridge:Rename:NexusBrowser Bridge>Nexus Browser Bridge,Daemon:Rename:NexusBrowser MCP>Nexus Browser MCP,Update:Rename:NexusBrowser Update>Nexus Browser Update",
-            "none",
-            "Nexus Browser Bridge",
-            "True False False False",
-        ], Shells.Lines(stdout));
-    }
-
     /// <summary>The engine starts its tasks by the names the installer registers; the former names (with a space)
     /// survive only in the migration table, the history and the CI fixture that recreates an older install.</summary>
     [Fact]
@@ -349,7 +217,9 @@ public sealed class ScriptTests : IDisposable
     {
         string runtime = File.ReadAllText(Repo.File("scripts", "runtime.ps1"));
         Assert.Contains($"Bridge = '{McpServer.BridgeTaskName}'; Daemon = 'NexusBrowser MCP'; Update = '{BridgeServer.UpdateTaskName}'", runtime);
-        string[] allowed = ["CHANGELOG.md", "README.md", "scripts/runtime.ps1", ".github/workflows/install.yml", "tests/NexusBrowser.Tests/ScriptTests.cs"];
+        Assert.Equal((McpServer.BridgeTaskName, BridgeServer.UpdateTaskName), (TaskNames.Bridge, TaskNames.Update));
+        string[] allowed = ["CHANGELOG.md", "README.md", "scripts/runtime.ps1", ".github/workflows/install.yml", "tests/NexusBrowser.Tests/ScriptTests.cs",
+            "native/InstallSupport.cs", "tests/NexusBrowser.Tests/InstallerTests.cs"];
         var offending = new List<string>();
         foreach (string file in Directory.EnumerateFiles(Repo.Root, "*", SearchOption.AllDirectories))
         {

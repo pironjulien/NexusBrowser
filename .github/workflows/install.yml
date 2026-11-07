@@ -91,8 +91,11 @@ jobs:
       - name: Self-update contract (task and state of the bridge)
         shell: pwsh
         run: |
+          # The update task runs the installed engine itself (--self-update): no PowerShell updater.
           $task = Get-ScheduledTask -TaskName 'NexusBrowser Update' -ErrorAction SilentlyContinue
-          if (-not $task -or $task.Actions.Execute -ne 'conhost.exe' -or $task.Actions.Arguments -notmatch 'self-update\.ps1') { throw 'update task missing or not native' }
+          $exe = (Get-Content (Join-Path $env:LOCALAPPDATA 'NexusBrowser\current.json') -Raw | ConvertFrom-Json).exe
+          if (-not $task -or $task.Actions.Execute -ne $exe -or $task.Actions.Arguments -ne '--self-update') { throw "update task missing or not the engine: $($task.Actions | ConvertTo-Json -Compress)" }
+          if (Test-Path (Join-Path $env:LOCALAPPDATA 'NexusBrowser\updaters')) { throw 'PowerShell updaters left behind' }
           $token = (Get-Content (Join-Path $HOME '.nexus\nexus-browser\bridge-token') -Raw).Trim()
           $state = Invoke-RestMethod -Uri 'http://127.0.0.1:9225/api/update' -Headers @{ 'X-Nexus-Browser-Token' = $token }
           Write-Host ($state | ConvertTo-Json -Compress)
@@ -128,9 +131,9 @@ jobs:
           $root = Join-Path $env:LOCALAPPDATA 'NexusBrowser'
           $app = Join-Path $root 'app'
           function Assert-Working([string]$Case) {
-            $left = @(Get-ChildItem $root -Directory | Where-Object Name -notin 'app', 'versions', 'updaters' | ForEach-Object Name)
+            $left = @(Get-ChildItem $root -Directory | Where-Object Name -notin 'app', 'versions' | ForEach-Object Name)
             if ($left) { throw "$Case : folders left behind: $left" }
-            if ((Get-Content (Join-Path $app 'install.ps1') -Raw) -match 'Injected failure') { throw "$Case : broken version installed" }
+            if (Test-Path (Join-Path $app 'broken-update.txt')) { throw "$Case : broken version installed" }
             $health = Invoke-RestMethod 'http://127.0.0.1:16182/health' -TimeoutSec 5
             Write-Host "$Case : working version kept, daemon $($health.version) running"
           }
@@ -143,47 +146,32 @@ jobs:
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
           if ($LASTEXITCODE -eq 0) { throw 'tampered package: the update should have been refused' }
           Assert-Working 'tampered package'
-          # 2. The installer fails: the previous folder comes back and is installed again.
+          # 2. The installation fails after the switch (no extension origin for the native host): the previous folder
+          #    comes back and the engine of the new package registers it again; no script of either package runs.
+          $before = Get-Content (Join-Path $root 'current.json') -Raw | ConvertFrom-Json
           $broken = Join-Path $env:RUNNER_TEMP 'broken-install'
           Copy-Item $app $broken -Recurse
-          $install = Join-Path $broken 'install.ps1'
-          (Get-Content $install -Raw).Replace('exit $LASTEXITCODE', @'
-          $current = Join-Path $env:LOCALAPPDATA 'NexusBrowser\current.json'
-          $state = Get-Content $current -Raw | ConvertFrom-Json
-          $state.version = 'broken-update-fixture'
-          $state | ConvertTo-Json | Set-Content $current
-          throw 'Injected failure (CI)'
-          '@) | Set-Content $install -NoNewline
-          # A previous installer with unsafe legacy behavior must NEVER execute during recovery.
-          $legacyTrap = Join-Path $env:RUNNER_TEMP 'old-installer-was-run'
-          "[IO.File]::WriteAllText('$legacyTrap', 'unsafe old installer ran'); throw 'Legacy installer trap'" | Set-Content (Join-Path $app 'install.ps1')
+          Set-Content (Join-Path $broken 'broken-update.txt') 'this package must not stay installed'
+          $config = Join-Path $broken 'native\resources\bridge_config.json'
+          $json = Get-Content $config -Raw | ConvertFrom-Json
+          $json.allowed_origins = @()
+          $json | ConvertTo-Json -Depth 5 | Set-Content $config
+          $trap = Join-Path $env:RUNNER_TEMP 'installer-script-was-run'
+          foreach ($folder in $app, $broken) {
+            "[IO.File]::WriteAllText('$trap', 'a package script ran'); throw 'Installer script trap'" | Set-Content (Join-Path $folder 'install.ps1')
+          }
           $env:NEXUS_BROWSER_SOURCE = $broken
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
-          if ($LASTEXITCODE -eq 0) { throw 'failing installer: the update should have failed' }
-          if (Test-Path $legacyTrap) { throw 'rollback executed the previous installer' }
+          if ($LASTEXITCODE -eq 0) { throw 'failing installation: the update should have failed' }
+          if (Test-Path $trap) { throw 'the update or its rollback executed a package script' }
           $restored = Get-Content (Join-Path $root 'current.json') -Raw | ConvertFrom-Json
-          if ($restored.version -eq 'broken-update-fixture') { throw 'rollback did not restore the configuration' }
+          if ($restored.exe -ne $before.exe -or $restored.version -ne $before.version) { throw 'rollback did not restore the configuration' }
           $updater = Get-ScheduledTask -TaskName 'NexusBrowser Update'
-          if ($updater.Actions.Arguments -notmatch '\\NexusBrowser\\updaters\\[0-9a-f]{16}\\scripts\\self-update\.ps1') { throw 'rollback restored a previous unsafe updater' }
+          if ($updater.Actions.Arguments -ne '--self-update' -or $updater.Actions.Execute -notmatch '\\NexusBrowser\\versions\\[0-9a-f]{16}\\NexusBrowser\.exe$') { throw 'rollback left an update task off the engine' }
           & pwsh -NoProfile -File .\tests\install-smoke.ps1 -EntriesOnly
           if ($LASTEXITCODE) { throw 'restored client entries or daemon do not match the previous payload' }
-          Assert-Working 'failing installer'
-          # 3. A changed prior payload refuses recovery and keeps the new safe controller for diagnosis/retry.
-          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'install.ps1') (Join-Path $broken 'install.ps1') -Force
-          $install = Join-Path $broken 'install.ps1'
-          (Get-Content $install -Raw).Replace('exit $LASTEXITCODE', @'
-          [IO.File]::AppendAllText((Join-Path $env:LOCALAPPDATA 'NexusBrowser\app.previous\VERSION'), 'changed')
-          throw 'Injected recovery failure (CI)'
-          '@) | Set-Content $install -NoNewline
-          $env:NEXUS_BROWSER_SOURCE = $broken
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\get.ps1
-          if ($LASTEXITCODE -eq 0) { throw 'changed rollback payload should have been refused' }
-          $safeController = Join-Path $root 'app.failed\scripts\install-native.ps1'
-          if (-not (Test-Path $safeController)) { throw 'failed recovery discarded the safe controller' }
-          if ((Get-FileHash $safeController).Hash -ne (Get-FileHash (Join-Path $broken 'scripts\install-native.ps1')).Hash) { throw 'recovery controller changed' }
-          if (Test-Path $legacyTrap) { throw 'failed recovery executed the previous installer' }
-          exit 0  # the step's result is the assertions above, not the expected failure code of the last get.ps1
-
+          Assert-Working 'failing installation'
+          # The restore refused when the previous payload changes meanwhile is covered by InstallerTests (xUnit).
   pack:
     # The Nexus pack (get-nexus.ps1) runs get.ps1 with NEXUS_PACK=1 on a clean Windows: no question, no wait, no window,
     # exit code 0, a NEXUS_PACK_RESULT line, Antigravity as a plugin; the guide is the pack's own last step.
