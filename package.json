@@ -1,0 +1,14 @@
+{
+  "name": "nexusbrowser-checks",
+  "private": true,
+  "description": "Development checks only (type check of the Chrome extension's service worker); nothing here ships.",
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.3.7",
+    "devtools-protocol": "0.0.1729950",
+    "typescript": "7.0.2"
+  }
+}

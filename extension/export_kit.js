@@ -954,6 +954,7 @@ function agyExportKit() {
         const two = (n) => String(n).padStart(2, "0");
         return h ? `${h}:${two(m)}:${two(r)}` : `${two(m)}:${two(r)}`;
     }
+    /** @returns {Promise<void>} */
     function sleep(ms) { return new Promise(resolve => (typeof setTimeout === "function" ? setTimeout(resolve, ms) : resolve())); }
     function timedTextEntries(videoId) {
         try {
@@ -965,10 +966,14 @@ function agyExportKit() {
     function playerResponse(videoId) {
         const candidates = [];
         try {
-            const player = typeof document !== "undefined" && document.getElementById ? document.getElementById("movie_player") : null;
+            // YouTube's player element exposes its own API (getPlayerResponse, getOption, setOption, loadModule...).
+            const player = /** @type {any} */ (typeof document !== "undefined" && document.getElementById ? document.getElementById("movie_player") : null);
             if (player && typeof player.getPlayerResponse === "function") candidates.push(player.getPlayerResponse());
         } catch (_) {}
-        try { if (typeof window !== "undefined" && window.ytInitialPlayerResponse) candidates.push(window.ytInitialPlayerResponse); } catch (_) {}
+        try {
+            const page = /** @type {any} */ (typeof window !== "undefined" ? window : null);
+            if (page && page.ytInitialPlayerResponse) candidates.push(page.ytInitialPlayerResponse);
+        } catch (_) {}
         return candidates.find(pr => pr && pr.videoDetails && pr.videoDetails.videoId === videoId) || null;
     }
     function trackUrl(baseUrl, fmt, track, tlang) {
@@ -1029,7 +1034,7 @@ function agyExportKit() {
         if (!parsed) {
             // Piste vide : YouTube exige le jeton du lecteur. URL signée déjà vue, sinon sous-titres activés un instant.
             let entries = timedTextEntries(videoId);
-            const player = typeof document !== "undefined" && document.getElementById ? document.getElementById("movie_player") : null;
+            const player = /** @type {any} */ (typeof document !== "undefined" && document.getElementById ? document.getElementById("movie_player") : null);
             if (!entries.length && spec.enableCaptions !== false && player && typeof player.setOption === "function") {
                 let before = null;
                 try { before = typeof player.getOption === "function" ? player.getOption("captions", "track") : null; } catch (_) {}

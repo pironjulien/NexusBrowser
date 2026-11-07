@@ -1,6 +1,6 @@
 # Dependabot: weekly updates of the pinned GitHub Actions (SHA + version comment) and of the project's dependencies.
 # A 7-day cooldown lets a compromised release be caught before it is proposed (zizmor dependabot-cooldown).
-# NuGet: the engine and its tests (packages.lock.json, *.csproj).
+# NuGet: the engine and its tests (packages.lock.json, *.csproj). npm: the development checks (package-lock.json).
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -18,3 +18,12 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      checks:
+        patterns: ["*"]

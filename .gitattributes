@@ -2,3 +2,6 @@
 * text=auto eol=lf
 *.cmd text eol=crlf
 *.bat text eol=crlf
+# NuGet rewrites its lock files with the platform's line ending (CRLF on Windows) at every restore: checked out the
+# same way, a restore leaves the tree clean. Git still stores LF, so Dependabot's Linux restore changes nothing.
+packages.lock.json text eol=crlf

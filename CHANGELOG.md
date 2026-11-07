@@ -5,7 +5,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- `NexusBrowser.exe --stdio-relay [--url <service>] [--product <name>]`: relays JSON-RPC lines from stdin to the shared
+  local service (MCP Streamable HTTP, token `NEXUS_MCP_TOKEN` or `~\.nexus\mcp-token.txt`) and writes every reply,
+  JSON or event stream, back on stdout one line each; a request the service cannot answer gets a JSON-RPC error
+  saying how to install or start NexusBrowser.
+- Type check of the extension's service worker (`background.js` and the scripts it imports): `tsc` with `checkJs`,
+  Chrome and DevTools Protocol types (`types/chrome-devtools.d.ts` types `chrome.debugger.sendCommand` per CDP
+  method), TypeScript 7.0.2, `@types/chrome` 0.3.7 and `devtools-protocol` locked in `package-lock.json`; run by
+  `test.ps1` (so by the Tests and Release workflows), Dependabot follows them. Development only: nothing ships.
+
+### Changed
+- Antigravity Marketplace plugin: `plugin/antigravity/scripts/start.cmd` runs the installed engine (the newest build
+  in `%LOCALAPPDATA%\NexusBrowser\versions`) with `--stdio-relay`, instead of `scripts/bridge.ps1`, which started
+  `powershell.exe` and compiled the same relay in C# (`Add-Type`) at every start. Same relay; without an installed
+  engine the launcher now ends at once with the install hint on stderr.
+- Extension service worker: the 94 empty `catch` blocks either trace the failure at debug level (`swallowed()`,
+  DevTools "Verbose") or, in code serialized into pages, say why it is harmless. The type check's findings are fixed
+  (CDP results typed, `Object.assign` for flagged errors, explicit casts for YouTube's player API); no behaviour
+  change.
+
 ### Fixed
+- Dependabot's NuGet updates: `Directory.Build.props` takes the user profile from .NET instead of `$(USERPROFILE)`,
+  unset on Dependabot's Linux runner (restore denied at `/.nexus`), and joins paths with .NET.
+- `packages.lock.json` no longer shows as modified after every restore on Windows: checked out with CRLF, the line
+  ending NuGet writes (`.gitattributes`), still stored with LF.
 - MCP `initialize` answers with a protocol version the server supports (2024-11-05, 2025-03-26, 2025-06-18,
   2025-11-25): an unknown requested version gets the latest supported one instead of being echoed back.
 

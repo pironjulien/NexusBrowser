@@ -1,12 +1,14 @@
 <Project>
   <!-- Build and test outputs outside OneDrive and AppData: ~\.nexus\build\nexus-browser\<project>
-       (NEXUS_BROWSER_BUILD_ROOT: another root, for parallel builds). -->
+       (NEXUS_BROWSER_BUILD_ROOT: another root, for parallel builds). The user profile comes from .NET, not
+       $(USERPROFILE): Dependabot restores on Linux, where USERPROFILE is unset and '/.nexus' at the file system root
+       was denied, so its NuGet updates silently found nothing. Paths are joined by .NET, valid on Windows and Linux. -->
   <PropertyGroup>
     <NexusBrowserBuildRoot>$(NEXUS_BROWSER_BUILD_ROOT)</NexusBrowserBuildRoot>
-    <NexusBrowserBuildRoot Condition="'$(NexusBrowserBuildRoot)' == ''">$(USERPROFILE)\.nexus\build\nexus-browser</NexusBrowserBuildRoot>
-    <NexusBrowserBuild>$(NexusBrowserBuildRoot)\$(MSBuildProjectName)\</NexusBrowserBuild>
-    <BaseIntermediateOutputPath>$(NexusBrowserBuild)obj\</BaseIntermediateOutputPath>
-    <BaseOutputPath>$(NexusBrowserBuild)bin\</BaseOutputPath>
+    <NexusBrowserBuildRoot Condition="'$(NexusBrowserBuildRoot)' == ''">$([System.IO.Path]::Combine($([System.Environment]::GetFolderPath(SpecialFolder.UserProfile)), '.nexus', 'build', 'nexus-browser'))</NexusBrowserBuildRoot>
+    <NexusBrowserBuild>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::Combine('$(NexusBrowserBuildRoot)', '$(MSBuildProjectName)'))))</NexusBrowserBuild>
+    <BaseIntermediateOutputPath>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::Combine('$(NexusBrowserBuild)', 'obj'))))</BaseIntermediateOutputPath>
+    <BaseOutputPath>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::Combine('$(NexusBrowserBuild)', 'bin'))))</BaseOutputPath>
     <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
     <!-- The product version (VERSION) on every binary, so Windows shows the real one. -->
     <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>

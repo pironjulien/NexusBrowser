@@ -8,6 +8,16 @@ if (typeof importScripts === "function") importScripts("locator_kit.js");
 // Exports de contenu (agyExportKit) : Markdown de la page, Google Docs/Sheets/Slides, transcriptions YouTube.
 if (typeof importScripts === "function") importScripts("export_kit.js");
 
+/**
+ * Expected failure set aside by the service worker (tab closed meanwhile, debugger detached, optional Chrome API
+ * absent, page gone): the command goes on without it. Traced at debug level (DevTools, "Verbose" level) so a real
+ * problem stays visible when looking for it, never shown to the agent. Code serialized into pages cannot call it:
+ * its catch blocks say why the failure is harmless instead.
+ */
+function swallowed(where, error) {
+    console.debug(`[NexusBrowser] ${where}: ${error?.message || error}`);
+}
+
 // Fonctions du code RÉELLEMENT chargé, annoncées par ping : la validation réelle les compare à cette même liste lue
 // dans le fichier du dépôt (mesuré le 15/10 : un rechargement peut garder l'ancien service worker avec le nouveau
 // numéro de version). Ajouter ici chaque nouvelle capacité visible.
@@ -157,7 +167,8 @@ async function loadExtensionState() {
                 }
             }
         }
-        if (Number.isFinite(stored?.[STOP_KEY])) stoppedUntil = Math.max(stoppedUntil, stored[STOP_KEY]);
+        const storedStop = stored?.[STOP_KEY];
+        if (typeof storedStop === "number" && Number.isFinite(storedStop)) stoppedUntil = Math.max(stoppedUntil, storedStop);
         const seen = stored?.[SEEN_KEY];
         if (seen && typeof seen === "object") {
             for (const [key, at] of Object.entries(seen)) {
@@ -273,9 +284,7 @@ function stopMessage() {
 /** Point de contrôle des boucles et des envois d'entrées : lève une erreur pendant l'arrêt d'urgence. */
 function assertNotStopped() {
     if (stopActive()) {
-        const error = new Error(stopMessage());
-        error.emergencyStop = true;
-        throw error;
+        throw Object.assign(new Error(stopMessage()), { emergencyStop: true });
     }
 }
 
@@ -291,7 +300,7 @@ async function emergencyStop({ holdMs = STOP_HOLD_MS, source = "pont" } = {}) {
                 if (target.attached && Number.isInteger(target.tabId) && tabOwners.has(target.tabId)) toDetach.add(target.tabId);
             }
         }
-    } catch (_) {}
+    } catch (error) { swallowed("emergency stop: listing debugger targets", error); }
     for (const tabId of toDetach) await detachDebugger(tabId);
     for (const [tabId, pending] of [...pendingFileChoosers]) {
         pendingFileChoosers.delete(tabId);
@@ -309,7 +318,7 @@ async function extensionInstallationType() {
         const self = await chrome.management.getSelf();
         if (self.installType === "development") return "development";
         if (chrome.runtime.id === "fjapmaccbgdfneoccclmlpgknbbfkaco" && self.installType === "normal") return "store";
-    } catch (_) {}
+    } catch (error) { swallowed("installation type", error); }
     return "unknown";
 }
 
@@ -497,7 +506,7 @@ function watchBridge() {
     });
     try {
         port.postMessage({ op: "watch" });
-    } catch (_) {}
+    } catch (error) { swallowed("bridge watch request", error); }
 }
 
 /** Vrai tant que le guet est en place et que le pont n'écoute pas (ou pas encore dit). */
@@ -599,7 +608,7 @@ async function ensureOffscreenDocument() {
             const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
             if (contexts && contexts.length > 0) return;
         }
-    } catch (_) {}
+    } catch (error) { swallowed("offscreen contexts", error); }
     try {
         await chrome.offscreen.createDocument({
             url: "offscreen.html",
@@ -607,7 +616,7 @@ async function ensureOffscreenDocument() {
             justification: "NexusBrowser persistent local WebSocket bridge connection"
         });
         console.log("[NexusBrowser] Offscreen keepalive document created.");
-    } catch (_) {}
+    } catch (error) { swallowed("offscreen keepalive document", error); }
 }
 
 /** Message venu d'une page de l'extension (fenêtre de la barre d'outils, offscreen), jamais d'un script de contenu ni d'une page web. */
@@ -707,7 +716,8 @@ const activeUploads = new Set();
 const captureScreencasts = new Set();
 const captureTargetKey = (target) => `${target.tabId}|${target.sessionId || ""}`;
 
-chrome.debugger.onEvent.addListener(async (source, method, params) => {
+// params: any, its shape depends on the CDP event named by method (checked field by field below).
+chrome.debugger.onEvent.addListener(async (source, method, /** @type {any} */ params) => {
     if (!source.tabId) return;
     if (method === "Page.screencastFrame") {
         if (captureScreencasts.has(captureTargetKey(source)) && Number.isInteger(params?.sessionId)) {
@@ -1005,8 +1015,8 @@ async function reloadWhenIdle(params = {}) {
             "agents keep working." };
     }
     // Table des onglets écrite avant le rechargement : les agents la retrouvent telle quelle.
-    try { await saveExtensionState(); } catch (_) {}
-    setTimeout(() => { try { chrome.runtime.reload(); } catch(e) {} }, 100);
+    try { await saveExtensionState(); } catch (error) { swallowed("state saved before reload", error); }
+    setTimeout(() => { try { chrome.runtime.reload(); } catch (error) { swallowed("extension reload", error); } }, 100);
     return { data: { reloading: true, version: extensionVersion(), drained_ms: Date.now() - started } };
 }
 
@@ -1082,7 +1092,7 @@ async function handleCommand(req) {
     // Erreur brute de Chrome sur une page qu'il protège : message clair, quelle que soit la commande.
     if (typeof result?.error === "string" && CHROME_PROTECTED_RAW.test(result.error)) {
         let url = null;
-        if (tabId !== null) try { url = (await chrome.tabs.get(tabId))?.url || null; } catch (_) {}
+        if (tabId !== null) try { url = (await chrome.tabs.get(tabId))?.url || null; } catch (error) { swallowed("tab address for the journal", error); }
         result = { error: clearProtectedError(result.error, url) };
     }
     // Onglet ouvert ou mené sur une page protégée : dit dès la réponse, avant toute attente ou lecture vouée à l'échec.
@@ -1193,6 +1203,7 @@ async function sendCommandWatchingDialogs(target, method, commandParams) {
     const watch = waitForDialog(target.tabId);
     const call = chrome.debugger.sendCommand(target, method, commandParams);
     try {
+        /** @type {{ value?: any, dialog?: any }} */
         const outcome = await Promise.race([
             call.then(value => ({ value })),
             watch.promise.then(dialog => ({ dialog }))
@@ -1440,12 +1451,12 @@ function agyTextKit(install) {
             out = out || [];
             if (!root || !root.querySelectorAll) return out;
             let list = [];
-            try { list = Array.from(root.querySelectorAll("*")); } catch (_) {}
+            try { list = Array.from(root.querySelectorAll("*")); } catch (_) { /* root not queryable (detached or foreign document): no element from it */ }
             for (const el of list) {
                 out.push(el);
                 if (el.shadowRoot) __agyAllElements(el.shadowRoot, out);
                 if (__agyTag(el) === "IFRAME") {
-                    try { if (el.contentDocument) __agyAllElements(el.contentDocument, out); } catch (_) {}
+                    try { if (el.contentDocument) __agyAllElements(el.contentDocument, out); } catch (_) { /* cross-origin frame: its document is not readable, skipped */ }
                 }
             }
             return out;
@@ -1510,7 +1521,7 @@ function agyTextKit(install) {
         function __agyShadowControl(el) {
             if (!el || !el.shadowRoot || !String(__agyTag(el)).includes("-")) return null;
             let inner = [];
-            try { inner = Array.from(el.shadowRoot.querySelectorAll("button, a[href], [role='button'], [role='link']")); } catch (_) {}
+            try { inner = Array.from(el.shadowRoot.querySelectorAll("button, a[href], [role='button'], [role='link']")); } catch (_) { /* shadow root not queryable: its controls are skipped */ }
             return inner[0] || null;
         }
         // Contrôle le plus proche dans l'arbre RENDU : un texte placé dans un <slot> remonte par ce slot jusqu'au
@@ -1543,7 +1554,7 @@ function agyTextKit(install) {
         const kit = { __agyNorm, __agyAttr, __agyTag, __agySkipped, __agyLabels, __agyAllElements, __agyIsInteractive,
             __agyIsVisible, __agyDepth, __agyKey, __agyLess, __agyPick, __agyInteractiveTarget, __agyFindByText };
         if (!install) return kit;
-        try { (typeof window !== "undefined" ? window : globalThis).__nexusBrowserTextKit = kit; } catch (_) {}
+        try { (typeof window !== "undefined" ? window : globalThis).__nexusBrowserTextKit = kit; } catch (_) { /* the page forbids the global: the kit is still returned for this call */ }
         return true;
 }
 
@@ -1564,7 +1575,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
     let store = win0.__nexusBrowserMouse;
     if (!store || !store.probes || typeof store.probes.get !== "function") {
         store = { probes: new Map(), seq: 0 };
-        try { win0.__nexusBrowserMouse = store; } catch (_) {}
+        try { win0.__nexusBrowserMouse = store; } catch (_) { /* the page forbids the global: the store lives for this call only */ }
     }
     if (!store.layers || typeof store.layers.get !== "function") store.layers = new Map();
 
@@ -1609,9 +1620,9 @@ function agyMouseKit(spec, textKit, locatorKit) {
         try {
             const els = root.querySelectorAll(selector);
             if (els && els[index]) return els[index];
-        } catch (_) {}
+        } catch (_) { /* invalid selector for this document: not found here */ }
         let all = [];
-        try { all = root.querySelectorAll("*"); } catch (_) {}
+        try { all = root.querySelectorAll("*"); } catch (_) { /* root not queryable: no element from it */ }
         for (const child of all) {
             if (child.shadowRoot) {
                 const res = findDeep(child.shadowRoot, selector, index);
@@ -1619,14 +1630,14 @@ function agyMouseKit(spec, textKit, locatorKit) {
             }
         }
         let frames = [];
-        try { frames = root.querySelectorAll("iframe"); } catch (_) {}
+        try { frames = root.querySelectorAll("iframe"); } catch (_) { /* root not queryable: no frame from it */ }
         for (const frame of frames) {
             try {
                 if (frame.contentDocument) {
                     const res = findDeep(frame.contentDocument, selector, index);
                     if (res) return res;
                 }
-            } catch (_) {}
+            } catch (_) { /* cross-origin frame: its document is not readable, skipped */ }
         }
         return null;
     }
@@ -1652,7 +1663,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             return null;
         }
         let list = [];
-        try { list = lk.query(doc0, { role: m.role, name: m.name, exact: true }).matches; } catch (_) {}
+        try { list = lk.query(doc0, { role: m.role, name: m.name, exact: true }).matches; } catch (_) { /* kit query failed on this document: no match, the mark is not recovered */ }
         if (list.length !== 1) {
             const what = m.role + " " + JSON.stringify(m.name);
             locateFailure = {
@@ -1700,7 +1711,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             for (let i = 0; a && i < 64; i++) {
                 let inner = null;
                 if (a.shadowRoot && a.shadowRoot.activeElement) inner = a.shadowRoot.activeElement;
-                else if (String(a.tagName || "").toUpperCase() === "IFRAME") { try { inner = a.contentDocument && a.contentDocument.activeElement; } catch (_) {} }
+                else if (String(a.tagName || "").toUpperCase() === "IFRAME") { try { const frameDoc = /** @type {HTMLIFrameElement} */ (a).contentDocument; inner = frameDoc && frameDoc.activeElement; } catch (_) { /* cross-origin frame: the focus stays on the frame element */ } }
                 if (!inner || inner === a) break;
                 a = inner;
             }
@@ -1763,7 +1774,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         if (tagUp(el) === "LABEL" && el.control) return el.control;
         if (!editableOf(el) && typeof el.querySelectorAll === "function") {
             let inner = [];
-            try { inner = Array.from(el.querySelectorAll("input, textarea, select, [contenteditable='true'], [contenteditable='']")).filter(editableOf); } catch (_) {}
+            try { inner = Array.from(el.querySelectorAll("input, textarea, select, [contenteditable='true'], [contenteditable='']")).filter(editableOf); } catch (_) { /* element not queryable: no editable descendant */ }
             if (inner.length === 1) return inner[0];
         }
         return el;
@@ -1803,7 +1814,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             const v = viewOf(fe).win;
             const cs = v && typeof v.getComputedStyle === "function" ? v.getComputedStyle(fe) : null;
             if (cs) { padL = parseFloat(cs.paddingLeft) || 0; padT = parseFloat(cs.paddingTop) || 0; }
-        } catch (_) {}
+        } catch (_) { /* computed style unavailable (detached frame): no padding offset */ }
         return { x: r.left + (fe.clientLeft || 0) + padL, y: r.top + (fe.clientTop || 0) + padT };
     }
     // Point local (repère du document de l'élément) -> viewport principal ; chaque cadre parent doit aussi être atteint.
@@ -1870,7 +1881,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             try {
                 const path = typeof ev.composedPath === "function" ? ev.composedPath() : null;
                 if (path && path.length) origin = path[0];
-            } catch (_) {}
+            } catch (_) { /* composedPath unavailable: the event target is the origin */ }
             if (!reaches(origin, el)) return;
             if (ev.isTrusted) {
                 probe.trusted++;
@@ -1892,7 +1903,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         store.probes.delete(id);
         if (probe.attached) {
             for (const type of probe.types) {
-                try { probe.doc.removeEventListener(type, probe.listener, true); } catch (_) {}
+                try { probe.doc.removeEventListener(type, probe.listener, true); } catch (_) { /* document already gone: nothing left to unhook */ }
             }
         }
         return probe;
@@ -1983,7 +1994,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         try {
             if (layer.value) layer.el.style.setProperty("pointer-events", layer.value, layer.priority);
             else layer.el.style.removeProperty("pointer-events");
-        } catch (_) {}
+        } catch (_) { /* element gone or style locked: nothing left to restore */ }
     }
     // Barre fixe ou collante (en-tête, barre du bas) : l'élément défile hors d'elle, une fois.
     function stickyBar(n) {
@@ -2037,7 +2048,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         const el = spec.forEdit ? editTargetOf(found) : found;
         const scroll = spec.scroll || "center";
         if (scroll !== "none" && typeof el.scrollIntoView === "function") {
-            try { el.scrollIntoView({ behavior: "instant", block: scroll, inline: scroll }); } catch (_) {}
+            try { el.scrollIntoView({ behavior: "instant", block: scroll, inline: scroll }); } catch (_) { /* element cannot scroll into view (detached): the click reports where it landed */ }
         }
         // Clic et survol : un calque intérieur du même contrôle (fond de survol d'un bouton) reçoit le geste pour lui.
         const ctl = spec.passThrough && !spec.forEdit ? controlOf(el) : null;
@@ -2143,7 +2154,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         const owner = spec.__owner;
         if (!owner) return { ok: false, reason: "owner frame not found" };
         if (spec.phase === "reveal") {
-            try { owner.scrollIntoView({ behavior: "instant", block: "center", inline: "center" }); } catch (_) {}
+            try { owner.scrollIntoView({ behavior: "instant", block: "center", inline: "center" }); } catch (_) { /* frame owner cannot scroll into view: the caller measures where it is */ }
             return { ok: true };
         }
         // Point local au cadre enfant -> repère du cadre racine de ce contexte (cadres same-origin remontés).
@@ -2224,7 +2235,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             const where = box || win0;
             if (typeof where.scrollBy === "function") where.scrollBy({ ...move, behavior: spec.behavior || "instant" });
             else if (box) { if (horizontal) box.scrollLeft += delta; else box.scrollTop += delta; }
-        } catch (_) {}
+        } catch (_) { /* scroll refused by the page: the caller reads the new position and reports no movement */ }
         const after = pos();
         return {
             success: true,
@@ -2271,7 +2282,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             const a = deepActive();
             if (!a) return false;
             if (a === el) return true;
-            try { if (typeof el.contains === "function" && el.contains(a)) return true; } catch (_) {}
+            try { if (typeof el.contains === "function" && el.contains(a)) return true; } catch (_) { /* foreign node: not contained */ }
             try { return kind === "contenteditable" && typeof a.contains === "function" && a.isContentEditable && a.contains(el); } catch (_) { return false; }
         };
         const state = (extra) => Object.assign({
@@ -2291,7 +2302,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         const op = spec.op || "state";
         if (op === "state") return state();
         if (op === "focus") {
-            try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (__) {} }
+            try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (__) { /* focus refused: the caller checks the active element */ } }
             return state();
         }
         if (op === "caretEnd" || op === "selectAll") {
@@ -2311,7 +2322,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
                     sel.removeAllRanges();
                     sel.addRange(range);
                 }
-            } catch (_) {}
+            } catch (_) { /* selection API refused by this editor: the caller reads the caret back */ }
             return state();
         }
         if (op === "selection") {
@@ -2332,14 +2343,14 @@ function agyMouseKit(spec, textKit, locatorKit) {
             // Repli : setter natif du prototype (React 18/19) puis input/change synthétiques (isTrusted=false).
             const value = String(spec.value === undefined || spec.value === null ? "" : spec.value);
             const next = spec.append ? readValue() + value : value;
-            try { el.focus({ preventScroll: true }); } catch (_) {}
+            try { el.focus({ preventScroll: true }); } catch (_) { /* focus refused: the caller checks the active element */ }
             if (kind === "contenteditable") {
                 el.textContent = next;
-                try { el.dispatchEvent(new own.win.InputEvent("input", { bubbles: true, inputType: "insertText", data: value })); } catch (_) {}
+                try { el.dispatchEvent(new own.win.InputEvent("input", { bubbles: true, inputType: "insertText", data: value })); } catch (_) { /* InputEvent refused by the page: the value is read back by the caller */ }
             } else {
                 const proto = kind === "textarea" ? own.win.HTMLTextAreaElement : (kind === "select" ? own.win.HTMLSelectElement : own.win.HTMLInputElement);
                 let setter = null;
-                try { setter = proto && Object.getOwnPropertyDescriptor(proto.prototype, "value").set; } catch (_) {}
+                try { setter = proto && Object.getOwnPropertyDescriptor(proto.prototype, "value").set; } catch (_) { /* no native value setter on this element: plain assignment below */ }
                 if (setter) { try { setter.call(el, next); } catch (_) { el.value = next; } } else el.value = next;
                 const Ev = own.win.Event || (typeof Event !== "undefined" ? Event : null);
                 if (Ev) {
@@ -2353,7 +2364,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             let options = Array.from(el.options || []);
             if (kind !== "select" && !options.length && typeof el.querySelectorAll === "function") {
                 // Composant qui expose value et des <option> (ou équivalents) : même traitement que l'ancien chemin.
-                try { options = Array.from(el.querySelectorAll("option")); } catch (_) {}
+                try { options = Array.from(el.querySelectorAll("option")); } catch (_) { /* select not queryable: no option */ }
             }
             if (kind !== "select" && !options.length) {
                 return { error: "<" + (describe(el) || "element") + "> is not a <select>: click the list, then the option (browser_click with locator role=option)." };
@@ -2397,7 +2408,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             if (want.option !== undefined) {
                 let options = Array.from(el.options || []);
                 if (kind !== "select" && !options.length && typeof el.querySelectorAll === "function") {
-                    try { options = Array.from(el.querySelectorAll("option")); } catch (_) {}  // comme selectOption
+                    try { options = Array.from(el.querySelectorAll("option")); } catch (_) { /* select not queryable: no option */ }  // comme selectOption
                 }
                 const low = (v) => n(v).toLowerCase();
                 const textOf = (o) => o.text !== undefined ? o.text : (o.innerText !== undefined ? o.innerText : o.textContent);
@@ -2444,7 +2455,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         // Repli sans débogueur : événements synthétiques (isTrusted=false), signalés comme tels à l'appelant.
         const el = locate(spec.locate);
         if (!el) return notFound(spec.locate);
-        try { el.scrollIntoView({ behavior: "instant", block: "center", inline: "center" }); } catch (_) {}
+        try { el.scrollIntoView({ behavior: "instant", block: "center", inline: "center" }); } catch (_) { /* element cannot scroll into view (detached): the click reports where it landed */ }
         const r = rectOf(el);
         const cx = r.left + r.width / 2;
         const cy = r.top + r.height / 2;
@@ -2452,7 +2463,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
         const ME = (view && view.MouseEvent) || (typeof MouseEvent !== "undefined" ? MouseEvent : null);
         const fire = (type, extra) => {
             if (!ME) return;
-            try { el.dispatchEvent(new ME(type, Object.assign({ bubbles: true, cancelable: true, view, clientX: cx, clientY: cy }, extra || {}))); } catch (_) {}
+            try { el.dispatchEvent(new ME(type, Object.assign({ bubbles: true, cancelable: true, view, clientX: cx, clientY: cy }, extra || {}))); } catch (_) { /* event refused by the page: the caller reads the result back */ }
         };
         if (spec.action === "hover") {
             fire("mouseover");
@@ -2462,7 +2473,7 @@ function agyMouseKit(spec, textKit, locatorKit) {
             fire("mouseup", { button: 2, buttons: 0 });
             fire("contextmenu", { button: 2, buttons: 0 });
         } else {
-            if (typeof el.focus === "function") { try { el.focus(); } catch (_) {} }
+            if (typeof el.focus === "function") { try { el.focus(); } catch (_) { /* focus refused: the caller checks the active element */ } }
             const count = spec.clickCount === 2 ? 2 : 1;
             for (let i = 1; i <= count; i++) {
                 if (typeof el.click === "function") el.click();
@@ -2503,7 +2514,8 @@ const MOUSE_KIT_SOURCE = agyMouseKit.toString();
 const TEXT_KIT_SOURCE = agyTextKit.toString();
 const LOCATOR_KIT_SOURCE = agyLocatorKit.toString();
 // Moteur de localisation aussi utilisé côté extension (motifs, comparaison des noms renvoyés par l'arbre AX).
-const LK = agyLocatorKit();
+// Without install, the kit itself (never the "installed" true of chrome.scripting's fallback).
+const LK = /** @type {Exclude<ReturnType<typeof agyLocatorKit>, true>} */ (agyLocatorKit());
 // Rôle et nom de chaque mark, relevés à sa pose et gardés dans la page (monde isolé) : une mark dont la page a remplacé
 // l'élément est retrouvée par eux quand un seul élément les porte encore (recoverMark du kit souris).
 const SOM_META_SCRIPT = `(() => {
@@ -2521,7 +2533,7 @@ const SOM_META_SCRIPT = `(() => {
             const role = lk.roleOf(el);
             const name = lk.norm(lk.accessibleName(el));
             if (role && name) meta.set(mark, { role, name });
-        } catch (_) {}
+        } catch (_) { /* role or name unreadable for this element: no recovery data for its mark */ }
     }
     window.__nexus_som_meta = meta;
     return meta.size;
@@ -2537,6 +2549,7 @@ const NOTHING_SENT = "Nothing was sent.";
 /**
  * Attente interrompue par l'arrêt d'urgence (frappe, glisser, attentes de chargement, de réseau, de téléchargement) :
  * lève l'erreur d'arrêt avant, pendant (réveil immédiat) et après.
+ * @returns {Promise<void>}
  */
 function sleepMs(ms) {
     assertNotStopped();
@@ -2627,9 +2640,7 @@ function mouseDragSequence(from, to, steps) {
 }
 
 function mousePageError(details) {
-    const error = new Error(details?.exception?.description || details?.text || "Page script error (mouse)");
-    error.pageError = true;
-    return error;
+    return Object.assign(new Error(details?.exception?.description || details?.text || "Page script error (mouse)"), { pageError: true });
 }
 
 /**
@@ -2733,7 +2744,7 @@ async function runMouseSequence(target, sequence, moveDelayMs = 0) {
         try {
             const pending = chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", releaseEvent);
             if (pending && typeof pending.catch === "function") pending.catch(() => {});
-        } catch (_) {}
+        } catch (error) { swallowed("mouse button release", error); }
     };
     for (let i = 0; i < sequence.length; i++) {
         const event = sequence[i];
@@ -2812,15 +2823,15 @@ function trackChildSession(source, params) {
     });
     if (info.type !== "iframe") return;
     const child = { tabId, sessionId: params.sessionId };
-    for (const [method, commandParams] of [
+    for (const [method, commandParams] of /** @type {Array<[string, object]>} */ ([
         ["Page.enable", {}],
         ["Network.enable", {}],
         ["Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }]
-    ]) {
+    ])) {
         try {
             const pending = chrome.debugger.sendCommand(child, method, commandParams);
             if (pending && typeof pending.catch === "function") pending.catch(() => {});
-        } catch (_) {}
+        } catch (error) { swallowed("child frame session setup", error); }
     }
 }
 
@@ -2862,7 +2873,7 @@ async function listFrameRoots(target) {
     const sessionRoot = new Map();
     for (const s of sessions) {
         let tree = null;
-        try { tree = (await chrome.debugger.sendCommand(s.target, "Page.getFrameTree"))?.frameTree; } catch (_) {}
+        try { tree = (await chrome.debugger.sendCommand(s.target, "Page.getFrameTree"))?.frameTree; } catch (error) { swallowed("frame tree", error); }
         if (!tree?.frame) continue;
         const walk = async (node, parentOrigin, parentRoot, isSessionRoot) => {
             const f = node.frame || {};
@@ -2946,7 +2957,7 @@ async function frameReachable(target, frame) {
 async function ensureDomAgent(target) {
     const key = sessionKey(target);
     if (domEnabledSessions.has(key)) return;
-    try { await chrome.debugger.sendCommand(target, "DOM.enable"); } catch (_) {}
+    try { await chrome.debugger.sendCommand(target, "DOM.enable"); } catch (error) { swallowed("DOM agent", error); }
     domEnabledSessions.add(key);
 }
 
@@ -3038,7 +3049,7 @@ async function ownerCall(root, spec) {
         try {
             const pending = chrome.debugger.sendCommand(ownerTarget, "Runtime.releaseObject", { objectId });
             if (pending && typeof pending.catch === "function") pending.catch(() => {});
-        } catch (_) {}
+        } catch (error) { swallowed("owner object release", error); }
     }
 }
 
@@ -3133,7 +3144,7 @@ async function axRegister(root, locator) {
                         let w = this.ownerDocument && this.ownerDocument.defaultView;
                         for (let i = 0; w && i < 32; i++) {
                             let fe = null;
-                            try { fe = w.frameElement; } catch (_) {}
+                            try { fe = w.frameElement; } catch (_) { /* cross-origin parent: the walk stops at this frame */ }
                             if (!fe || !fe.ownerDocument) break;
                             w = fe.ownerDocument.defaultView;
                         }
@@ -3149,7 +3160,7 @@ async function axRegister(root, locator) {
                 registered++;
                 const pending = chrome.debugger.sendCommand(root.target, "Runtime.releaseObject", { objectId });
                 if (pending && typeof pending.catch === "function") pending.catch(() => {});
-            } catch (_) {}
+            } catch (error) { swallowed("accessibility node registration", error); }
         }
         return registered ? token : null;
     } catch (_) {
@@ -3347,7 +3358,7 @@ async function releaseMouseProbes(where, probeIds, layerIds = null) {
     const ids = probeIds.filter(Boolean);
     const layers = (layerIds || []).filter(Boolean);
     if (!ids.length && !layers.length) return;
-    try { await pageCall(where, { phase: "release", probeIds: ids, layerIds: layers }); } catch (_) {}
+    try { await pageCall(where, { phase: "release", probeIds: ids, layerIds: layers }); } catch (error) { swallowed("mouse probe release", error); }
 }
 
 // Repli sans débogueur : monde ISOLÉ de l'extension (celui des scripts de contenu), jamais le monde de la page.
@@ -3537,7 +3548,7 @@ function chromeProtectedMessage(url) {
     try {
         const u = new URL(String(url));
         where = ` (${/^https?:$/.test(u.protocol) ? u.origin : `${u.protocol}//${u.host}`})`;
-    } catch (_) {}
+    } catch (_) { /* not a URL: the message names no site */ }
     return `Page protected by Chrome${where}: no extension may read or drive it (Chrome Web Store, chrome:// pages). ` +
         "Use NexusWindows to inspect the window or take a desktop screenshot in the background, or use the " +
         "Chrome Web Store API. Foreground interaction is only needed if the desktop action requires it.";
@@ -3550,7 +3561,7 @@ function clearProtectedError(message, url = null) {
 
 async function ensureDebugger(tabId) {
     let tab = null;
-    try { tab = await chrome.tabs.get(tabId); } catch(e) {}
+    try { tab = await chrome.tabs.get(tabId); } catch (error) { swallowed("tab before attaching the debugger", error); }
     
     if (tab && isProtectedUrl(tab.url)) {
         throw new Error(`Protected internal URL cannot be debugged: ${tab.url}`);
@@ -3662,7 +3673,7 @@ async function detachDebugger(tabId) {
     forgetFocusEmulation(tabId);
     try {
         if (chrome.debugger?.detach) await chrome.debugger.detach({ tabId });
-    } catch (_) {}
+    } catch (error) { swallowed("debugger detach", error); }
 }
 
 /**
@@ -3861,7 +3872,7 @@ async function startBusySpin() {
     busySpinTimer = setInterval(() => {
         // L'éclat ne passe qu'une fois ; ensuite les tours s'enchaînent.
         busySpinFrame = busySpinFrame + 1 < frames.length ? busySpinFrame + 1 : Math.min(BUSY_FLASH_FRAMES, frames.length - 1);
-        try { chrome.action.setIcon({ imageData: frames[busySpinFrame] })?.catch?.(() => {}); } catch (_) {}
+        try { chrome.action.setIcon({ imageData: frames[busySpinFrame] })?.catch?.(() => {}); } catch (error) { swallowed("busy icon frame", error); }
     }, Math.round(BUSY_LINGER_MS / BUSY_SPIN_FRAMES));
 }
 
@@ -3871,13 +3882,13 @@ function stopBusySpin() {
     try {
         const icons = chrome.runtime?.getManifest?.()?.action?.default_icon;
         if (icons) chrome.action?.setIcon?.({ path: icons })?.catch?.(() => {});
-    } catch (_) {}
+    } catch (error) { swallowed("busy icon reset", error); }
 }
 
 async function refreshBusyIndicator() {
     if (typeof chrome === "undefined") return;
     const on = busyAgents.size > 0;
-    try { chrome.action?.setBadgeText?.({ text: "" }); } catch (_) {}  // ancien point bleu d'une version précédente
+    try { chrome.action?.setBadgeText?.({ text: "" }); } catch (error) { swallowed("badge reset", error); }  // ancien point bleu d'une version précédente
     if (on) await startBusySpin();
     else stopBusySpin();
 }
@@ -3906,7 +3917,7 @@ async function groupTabs(params = {}) {
     try {
         const firstTab = await chrome.tabs.get(tabIds[0]);
         windowId = firstTab?.windowId;
-    } catch (_) {}
+    } catch (error) { swallowed("window of the first grouped tab", error); }
 
     let groupId = null;
     if (windowId && chrome.tabGroups.query) {
@@ -3916,13 +3927,13 @@ async function groupTabs(params = {}) {
             if (existing) {
                 groupId = existing.id;
             }
-        } catch (_) {}
+        } catch (error) { swallowed("existing tab groups", error); }
     }
 
     if (groupId !== null) {
-        groupId = await chrome.tabs.group({ tabIds, groupId });
+        groupId = await chrome.tabs.group({ tabIds: /** @type {[number, ...number[]]} */ (tabIds), groupId });
     } else {
-        groupId = await chrome.tabs.group({ tabIds });
+        groupId = await chrome.tabs.group({ tabIds: /** @type {[number, ...number[]]} */ (tabIds) });
     }
 
     // Titre, couleur et repli ne sont annoncés que s'ils ont vraiment été appliqués (relus dans la réponse de Chrome).
@@ -3993,7 +4004,7 @@ async function backgroundWindowId() {
 async function tabOfNewWindow(win) {
     let tab = win?.tabs?.[0] || null;
     if (!tab && Number.isInteger(win?.id) && chrome.tabs?.query) {
-        try { [tab] = await chrome.tabs.query({ windowId: win.id }); } catch (_) {}
+        try { [tab] = await chrome.tabs.query({ windowId: win.id }); } catch (error) { swallowed("first tab of a new window", error); }
     }
     if (!tab || !Number.isInteger(tab.id)) {
         throw new Error(`Window ${win?.id ?? "?"} created, but its tab was not found: no tab assigned to the agent.`);
@@ -4087,7 +4098,7 @@ async function adoptTab(params = {}, client = null) {
         return { error: `Adoption of tab ${tabId} refused by default: it is the user's tab. Only if the user explicitly asked for it, retry with user_asked=True.` };
     }
     let tab = null;
-    try { tab = await chrome.tabs.get(tabId); } catch (_) {}
+    try { tab = await chrome.tabs.get(tabId); } catch (error) { swallowed("tab to adopt", error); }
     if (tab && isProtectedUrl(tab.url)) return { error: `Tab ${tabId} is protected (${tab.url}): never handed to an agent.` };
     // Place d'origine gardée (fenêtre, position, groupe) : l'onglet rejoint le groupe de l'agent, comme ceux qu'il ouvre,
     // et release_tab le remet où Julien l'avait.
@@ -4165,10 +4176,11 @@ async function closeTab(params = {}) {
     const open = pendingDialogs.get(tabId);
     if (open) throw new Error(`${describeDialog(open)}. Answer it first with handle_dialog (browser_handle_dialog), then close the tab.`);
     // Débogueur attaché d'abord, comme pour navigate : le beforeunload de la page est vu.
-    try { await ensureDebugger(tabId); } catch (_) {}
+    try { await ensureDebugger(tabId); } catch (error) { swallowed("debugger before closing a tab", error); }
     const watch = waitForDialog(tabId);
     const removal = chrome.tabs.remove(tabId);
     try {
+        /** @type {{ dialog?: any }} */
         const outcome = await Promise.race([removal.then(() => ({})), watch.promise.then(dialog => ({ dialog }))]);
         if (outcome.dialog) {
             removal.catch(() => {});
@@ -4205,9 +4217,9 @@ async function navigateTab(params) {
 
     resetNetworkTracking(tabId);
     // Débogueur attaché d'abord : une boîte beforeunload de la page quittée est vue (rapportée, onglet gardé derrière).
-    try { await ensureDebugger(tabId); } catch (_) {}
+    try { await ensureDebugger(tabId); } catch (error) { swallowed("debugger before navigation", error); }
     let before = null;
-    try { before = (await chrome.tabs.get(tabId))?.url || null; } catch (_) {}
+    try { before = (await chrome.tabs.get(tabId))?.url || null; } catch (error) { swallowed("address before navigation", error); }
     const updatedTab = await chrome.tabs.update(tabId, { url });
     return await settleNavigation(tabId, updatedTab, { before, url });
 }
@@ -4263,7 +4275,7 @@ async function reloadTab(params) {
     resetNetworkTracking(tabId);
     await chrome.tabs.reload(tabId, { bypassCache: params.bypassCache || false });
     let tab = null;
-    try { tab = await chrome.tabs.get(tabId); } catch (_) {}
+    try { tab = await chrome.tabs.get(tabId); } catch (error) { swallowed("tab to reload", error); }
     const settled = await settleNavigation(tabId, tab);
     if (settled.error || settled.data?.dialogOpened) return settled;
     return { data: { success: true, ...(settled.data?.note ? { note: settled.data.note } : {}) } };
@@ -4530,7 +4542,7 @@ async function registerSnapshotRefs(target, candidates, numbering) {
                         backendNodeId: node.backendNodeId, executionContextId: contextId
                     });
                     if (res?.object?.objectId) handles.push({ node, objectId: res.object.objectId });
-                } catch (_) {}
+                } catch (error) { swallowed("snapshot node resolution", error); }
             }
             // Un élément déjà numéroté par l'instantané précédent du même document garde son numéro ; les nouveaux
             // prennent la suite (numbering.refs : backendNodeId -> numéro).
@@ -4616,7 +4628,7 @@ async function getAccessibilitySnapshot(tabId, params = {}) {
     }
     let url = "";
     let title = "";
-    try { ({ url = "", title = "" } = await chrome.tabs.get(tabId)); } catch (_) {}
+    try { ({ url = "", title = "" } = await chrome.tabs.get(tabId)); } catch (error) { swallowed("tab address and title for the snapshot", error); }
     // Même document : numéros gardés. Autre document : table repartie de 1 (les marks d'avant sont mortes).
     const prev = snapshotStates.get(tabId);
     const same = !!prev && prev.url === url && prev.refs.size < SNAPSHOT_MAX_REFS;
@@ -4685,7 +4697,7 @@ async function getPageContent(params = {}) {
             try {
                 const proj = await projectToTop(root, [{ x: 0, y: 0 }], false);
                 if (proj.ok) offset = proj.points[0];
-            } catch (_) {}
+            } catch (error) { swallowed("frame offset for page content", error); }
             for (const el of value.elements) {
                 top.data.elements.push({
                     ...el,
@@ -4742,12 +4754,12 @@ function pageContentScript(params) {
                     if (el.shadowRoot) {
                         try {
                             elements.push(...scanNode(el.shadowRoot, (prefix ? prefix + " > " : "") + (el.tagName.toLowerCase() + "#shadow")));
-                        } catch(e) {}
+                        } catch (e) { /* closed or foreign shadow root: skipped */ }
                     }
                     if (el.tagName.toLowerCase() === "iframe" && el.contentDocument) {
                         try {
                             elements.push(...scanNode(el.contentDocument, (prefix ? prefix + " > " : "") + (el.id || "iframe")));
-                        } catch(e) {}
+                        } catch (e) { /* cross-origin frame: its document is not readable, skipped */ }
                     }
                 });
                 return elements;
@@ -4907,7 +4919,7 @@ function releaseKeyQuietly(target, params) {
     try {
         const pending = chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", params);
         if (pending && typeof pending.catch === "function") pending.catch(() => {});
-    } catch (_) {}
+    } catch (error) { swallowed("key release", error); }
 }
 
 function keyFields(def, modifiers) {
@@ -4948,6 +4960,7 @@ async function pressKeyCombo(target, combo) {
     const textual = !(bits & (MODIFIER_BITS.Alt | MODIFIER_BITS.Control | MODIFIER_BITS.Meta)) && def.text;
     const shifted = (bits & MODIFIER_BITS.Shift) && def.key.length === 1;
     const fields = keyFields(shifted ? { ...def, key: def.key.toUpperCase() } : def, bits);
+    /** @type {import("devtools-protocol").Protocol.Input.DispatchKeyEventRequest} */
     const down = { type: textual ? "keyDown" : "rawKeyDown", ...fields };
     if (textual) {
         const text = shifted ? def.text.toUpperCase() : def.text;
@@ -5098,6 +5111,7 @@ async function typeWithDebugger(target, locate, opts) {
         if (res?.__dialog) throw Object.assign(new Error("dialog"), { dialog: res.__dialog });
         return res;
     };
+    /** @type {Record<string, any>} */
     const base = {
         tagName: prep.tagName, id: prep.id, replace: opts.replace,
         ...(root.key !== "top" ? { frame: prep.frame, crossOriginFrame: true } : {}),
@@ -5212,6 +5226,7 @@ async function typeWithDebugger(target, locate, opts) {
             pressed.push(combo);
             if (r.dialog) return { data: { ...dialogInterruption(r.dialog), ...base, method: "cdp", verified, keys: pressed } };
         }
+        /** @type {Record<string, any>} */
         const data = {
             success: true, ...base, method: "cdp", typing: opts.perKey ? "keys" : "insertText", focus, selection,
             verified, value: shownValue(after.value, state.sensitive || after.sensitive), trusted_input: trustedInput,
@@ -5338,13 +5353,14 @@ async function pageClip(target, rect) {
     let zoom = 1;
     try {
         const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+        /** @type {{ pageX?: number, pageY?: number }} */
         const view = metrics?.cssVisualViewport || metrics?.visualViewport || metrics?.cssLayoutViewport || metrics?.layoutViewport || {};
         pageX = Number(view.pageX) || 0;
         pageY = Number(view.pageY) || 0;
         // Zoom de la page (Ctrl + molette, zoom par défaut de Chrome) : la zone de capture est en pixels non zoomés.
         // Sans lui, Chrome à 90 % rognait à côté de l'élément (image blanche ; mesuré le 18/10).
         zoom = Number(metrics?.cssVisualViewport?.zoom) > 0 ? Number(metrics.cssVisualViewport.zoom) : 1;
-    } catch (_) {}
+    } catch (error) { swallowed("layout metrics for a clip", error); }
     let x = (Number(rect.x) + pageX) * zoom;
     let y = (Number(rect.y) + pageY) * zoom;
     let width = Number(rect.width) * zoom;
@@ -5371,7 +5387,7 @@ function captureMaskScript(on) {
         if (!${on ? "true" : "false"}) {
             const n = saved.length;
             for (const [el, value, priority] of saved.splice(0)) {
-                try { if (value) el.style.setProperty(P, value, priority); else el.style.removeProperty(P); } catch (_) {}
+                try { if (value) el.style.setProperty(P, value, priority); else el.style.removeProperty(P); } catch (_) { /* element gone or style locked: nothing left to restore */ }
             }
             return n;
         }
@@ -5382,7 +5398,7 @@ function captureMaskScript(on) {
                 if (el.shadowRoot) visit(el.shadowRoot);
                 if (String(el.tagName).toUpperCase() === "IFRAME") {
                     let doc = null;
-                    try { doc = el.contentDocument; } catch (_) {}
+                    try { doc = el.contentDocument; } catch (_) { /* cross-origin frame: its document is not readable, skipped */ }
                     visit(doc);
                 }
                 if (seen.has(el) || !el.style || String(el.type || "").toLowerCase() === "password") continue;
@@ -5464,7 +5480,7 @@ function nextFrameScript(ms, paint) {
             if (done) return;
             done = true;
             if (timer !== null) clearTimeout(timer);
-            try { if (observer) observer.disconnect(); } catch (_) {}
+            try { if (observer) observer.disconnect(); } catch (_) { /* observer already disconnected */ }
             resolve(value);
         };
         const timer = setTimeout(() => finish("timeout"), ${Math.max(0, Math.round(ms))});
@@ -5599,7 +5615,7 @@ async function takeScreenshot(params = {}) {
         try {
             const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
             if (Number(metrics?.cssVisualViewport?.zoom) > 0) zoom = Number(metrics.cssVisualViewport.zoom);
-        } catch (_) {}
+        } catch (error) { swallowed("page zoom for an element screenshot", error); }
         const ratio = await evaluateIsolated({ tabId, code: "window.devicePixelRatio" });
         const devicePixelRatio = Number(ratio?.data) > 0 ? Number(ratio.data) : null;
         return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip, zoom, devicePixelRatio, ...captureReadiness(settle, shot) } };
@@ -5623,7 +5639,7 @@ async function takeScreenshot(params = {}) {
                         try {
                             const els = root.querySelectorAll(selector);
                             if (els.length > 0) return els[0];
-                        } catch(e) {}
+                        } catch (e) { /* invalid selector for this document: not found here */ }
                     }
                     if (root.querySelectorAll) {
                         for (const child of root.querySelectorAll("*")) {
@@ -5728,7 +5744,7 @@ async function takeScreenshot(params = {}) {
             try {
                 const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
                 if (Number(metrics?.cssVisualViewport?.zoom) > 0) zoom = Number(metrics.cssVisualViewport.zoom);
-            } catch (_) {}
+            } catch (error) { swallowed("page zoom for a full-page screenshot", error); }
             const devicePixelRatio = Number(rect.devicePixelRatio) > 0 ? Number(rect.devicePixelRatio) : null;
             return { data: { dataUrl: `data:${mimeType};base64,${shot.data}`, mimeType, clip, zoom, devicePixelRatio, ...captureReadiness(settle, shot) } };
         } else {
@@ -5740,6 +5756,7 @@ async function takeScreenshot(params = {}) {
         // Page entière (comme Puppeteer fullPage) : taille du contenu en pixels CSS, zoom de la page appliqué comme
         // pour un élément (pageClip), hauteur bornée à la taille d'image maximale de Chrome.
         const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+        /** @type {{ width?: number, height?: number }} */
         const size = metrics?.cssContentSize || metrics?.contentSize || {};
         const zoom = Number(metrics?.cssVisualViewport?.zoom) > 0 ? Number(metrics.cssVisualViewport.zoom) : 1;
         const width = Math.min(Math.max(1, Math.ceil(Number(size.width) || 0)), Math.floor(FULL_PAGE_MAX_PX / zoom));
@@ -6060,7 +6077,7 @@ async function uploadFiles(params = {}) {
             if (target && fileChooserIntercepted) {
                 await chrome.debugger.sendCommand(target, "Page.setInterceptFileChooserDialog", { enabled: false });
             }
-        } catch (_) {}
+        } catch (error) { swallowed("file chooser interception off", error); }
         activeUploads.delete(tabId);
     }
 }
@@ -6144,9 +6161,9 @@ async function visionInspect(params = {}) {
                     for (const f of iframes) {
                         try {
                             if (f.contentDocument) collectCandidates(f.contentDocument, list);
-                        } catch(_) {}
+                        } catch (_) { /* cross-origin frame: its document is not readable, skipped */ }
                     }
-                } catch(_) {}
+                } catch (_) { /* frames not queryable: none scanned */ }
                 return list;
             }
 
@@ -6166,7 +6183,7 @@ async function visionInspect(params = {}) {
                 if (rect.bottom < 0 || rect.top > h || rect.right < 0 || rect.left > w) continue;
 
                 let style;
-                try { style = window.getComputedStyle(el); } catch(_) {}
+                try { style = window.getComputedStyle(el); } catch (_) { /* computed style unavailable (detached element): treated as visible */ }
                 if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) continue;
 
                 window.__nexus_som_elements.set(markerId, el);
@@ -6291,7 +6308,7 @@ function maskParams(text) {
         const eq = part.indexOf("=");
         if (eq <= 0) return part;
         let name = part.slice(0, eq);
-        try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch (_) {}
+        try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch (_) { /* malformed percent-encoding: the raw name is kept */ }
         return SECRET_URL_PARAM.test(name) || LK.sensitiveName(name) ? `${part.slice(0, eq)}=[masked]` : part;
     }).join("&");
 }
@@ -6533,7 +6550,7 @@ async function getNetworkResponse(params = {}) {
             const bytes = new Uint8Array(raw.length);
             for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
             body = new TextDecoder("utf-8").decode(bytes);
-        } catch (_) {}
+        } catch (error) { swallowed("base64 response body decoding", error); }
     }
     // Secrets masqués AVANT la troncature (une coupe ne laisse jamais passer la fin d'un jeton).
     const masked = maskSecretBody(body, rec.mimeType);
@@ -6621,9 +6638,9 @@ function maskFormBody(text, counter) {
         const eq = part.indexOf("=");
         if (eq <= 0) return part;
         let name = part.slice(0, eq);
-        try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch (_) {}
+        try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch (_) { /* malformed percent-encoding: the raw name is kept */ }
         let value = part.slice(eq + 1);
-        try { value = decodeURIComponent(value.replace(/\+/g, " ")); } catch (_) {}
+        try { value = decodeURIComponent(value.replace(/\+/g, " ")); } catch (_) { /* malformed percent-encoding: the raw value is kept */ }
         if (!secretBodyParam(name, value) || eq === part.length - 1) return part;
         counter.count++;
         return `${part.slice(0, eq)}=[masked]`;
@@ -6727,7 +6744,7 @@ async function waitForDownload(params = {}, client = null) {
         : (tabId !== null && lastActionAt.has(tabId) ? lastActionAt.get(tabId) - 1000 : Date.now() - 60000);
     let origin = null;
     if (tabId !== null) {
-        try { origin = originOf((await chrome.tabs.get(tabId)).url); } catch (_) {}
+        try { origin = originOf((await chrome.tabs.get(tabId)).url); } catch (error) { swallowed("tab origin for the download", error); }
     }
     const fromTab = (d) => !origin || [d.referrer, d.url, d.finalUrl].some(u => u && originOf(u) === origin);
     const start = Date.now();
@@ -6909,7 +6926,7 @@ async function findElements(params = {}) {
             try {
                 const proj = await projectToTop(part.root, [{ x: 0, y: 0 }], false);
                 if (proj.ok) offset = proj.points[0];
-            } catch (_) {}
+            } catch (error) { swallowed("frame offset for found elements", error); }
         }
         for (const c of part.candidates) {
             if (c.box) c.box = { ...c.box, x: Math.round((c.box.x + offset.x) * 10) / 10, y: Math.round((c.box.y + offset.y) * 10) / 10 };
@@ -6964,7 +6981,7 @@ async function waitForLoad(params = {}) {
             // Page protected by Chrome reached by a redirect: said at once, never waited for until the timeout.
             if (CHROME_PROTECTED_RAW.test(String(e?.message || ""))) {
                 let url = null;
-                try { url = (await chrome.tabs.get(tabId))?.url || null; } catch (_) {}
+                try { url = (await chrome.tabs.get(tabId))?.url || null; } catch (error) { swallowed("tab address before waiting for load", error); }
                 return { error: chromeProtectedMessage(url) };
             }
         }
@@ -7042,7 +7059,7 @@ async function getCookies(params = {}) {
         commandParams.urls = params.urls;
     } else {
         let tab = null;
-        try { tab = await chrome.tabs.get(tabId); } catch(e) {}
+        try { tab = await chrome.tabs.get(tabId); } catch (error) { swallowed("tab for its cookies", error); }
         if (tab?.url && !isProtectedUrl(tab.url)) {
             commandParams.urls = [tab.url];
         }
@@ -7142,7 +7159,7 @@ async function exportGsuite(params = {}) {
     }
     if (fetched?.downloadId !== undefined) {
         // Fichier gardé pour le client ; seule l'entrée de l'historique des téléchargements de Julien est retirée.
-        try { await chrome.downloads.erase({ id: fetched.downloadId }); } catch (_) {}
+        try { await chrome.downloads.erase({ id: fetched.downloadId }); } catch (error) { swallowed("export download entry erase", error); }
     }
     const data = {
         kind: plan.kind,
@@ -7219,8 +7236,8 @@ async function downloadViaBrowser(url, filename, timeoutMs) {
 
 /** Fichier d'un téléchargement refusé ou inachevé supprimé, et entrée retirée de l'historique. */
 async function discardDownload(id) {
-    try { await chrome.downloads.removeFile(id); } catch (_) {}
-    try { await chrome.downloads.erase({ id }); } catch (_) {}
+    try { await chrome.downloads.removeFile(id); } catch (error) { swallowed("discarded download file removal", error); }
+    try { await chrome.downloads.erase({ id }); } catch (error) { swallowed("discarded download entry erase", error); }
 }
 
 /** Transcription de la vidéo YouTube ouverte dans l'onglet (piste choisie par langue, json3 ou vtt). */
@@ -7276,9 +7293,9 @@ async function getInteractiveMap(params = {}) {
                 for (const f of iframes) {
                     try {
                         if (f.contentDocument) collectElements(f.contentDocument, elements);
-                    } catch(e) {}
+                    } catch (e) { /* cross-origin frame: its document is not readable, skipped */ }
                 }
-            } catch(e) {}
+            } catch (e) { /* frames not queryable: none scanned */ }
             return elements;
         }
 
@@ -7306,7 +7323,7 @@ async function getInteractiveMap(params = {}) {
             try {
                 const style = window.getComputedStyle(el);
                 if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") continue;
-            } catch(e) {}
+            } catch (e) { /* computed style unavailable (detached element): treated as visible */ }
 
             window.__nexus_som_elements.set(markId, el);
 
@@ -7400,7 +7417,7 @@ async function getInteractiveMap(params = {}) {
         try {
             const proj = await projectToTop(root, [{ x: 0, y: 0 }], false);
             if (proj.ok) offset = proj.points[0];
-        } catch (_) {}
+        } catch (error) { swallowed("frame offset for the interactive map", error); }
         const vw = top.data.viewport?.width || 1;
         const vh = top.data.viewport?.height || 1;
         for (const el of value.elements) {
@@ -7562,7 +7579,7 @@ async function dragAndDrop(params = {}) {
                 return { data: { ...dialogInterruption(res.__dialog), ...report, method: "cdp+html5_fallback", html5_fallback: true } };
             }
             html5Fallback = !!res?.dispatched;
-        } catch (_) {}
+        } catch (error) { swallowed("HTML5 drag-and-drop fallback", error); }
     }
     const srcProbe = src ? await readMouseProbe(src.root, src.probeId) : null;
     if (dst) await readMouseProbe(dst.root, dst.probeId);

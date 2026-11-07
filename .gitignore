@@ -16,3 +16,6 @@ TestResults/
 *.log
 *.bak
 *.tmp
+
+# Development checks (package.json): npm ci installs them here
+node_modules/

@@ -44,10 +44,16 @@ public sealed class RepositoryTests
         Assert.Equal(File.ReadAllBytes(Repo.File("plugin", "logo.png")), File.ReadAllBytes(Repo.File("plugin", "antigravity", "logo.png")));
         Assert.InRange(((string)Json("plugin", "plugin.json")["description"]!).Length, 120, 160);
         Assert.True(File.Exists(Repo.File("plugin", "antigravity", "README.md")));
-        var args = Json("plugin", "antigravity", "mcp_config.json")["mcpServers"]!["nexus-browser"]!["args"]!.AsArray().Select(a => (string?)a).ToList();
-        Assert.Equal(@"${PLUGIN_ROOT}\scripts\bridge.ps1", args[args.IndexOf("-File") + 1]);
-        Assert.Equal("http://127.0.0.1:16182/mcp?agent=antigravity", args[args.IndexOf("-Url") + 1]);
-        Assert.Contains(@".nexus"", ""mcp-token.txt""", Text("plugin", "antigravity", "scripts", "bridge.ps1"));
+        // The engine's own --stdio-relay, found by a launcher relative to ${PLUGIN_ROOT}: no PowerShell, nothing compiled.
+        var server = Json("plugin", "antigravity", "mcp_config.json")["mcpServers"]!["nexus-browser"]!;
+        Assert.Equal("cmd.exe", (string?)server["command"]);
+        var args = server["args"]!.AsArray().Select(a => (string?)a).ToList();
+        Assert.Equal(["/d", "/c", @"${PLUGIN_ROOT}\scripts\start.cmd", "--stdio-relay"], args.Take(4));
+        Assert.Equal(StdioRelay.DefaultUrl, args[args.IndexOf("--url") + 1]);
+        Assert.Equal(StdioRelay.DefaultProduct, args[args.IndexOf("--product") + 1]);
+        Assert.Equal(["logo.png", "mcp_config.json", "plugin.json", "README.md", Path.Join("scripts", "start.cmd"), Path.Join("skills", "nexus-browser", "SKILL.md")],
+            Directory.EnumerateFiles(Repo.File("plugin", "antigravity"), "*", SearchOption.AllDirectories)
+                .Select(f => Path.GetRelativePath(Repo.File("plugin", "antigravity"), f)).Order(StringComparer.OrdinalIgnoreCase));
     }
 
     [Fact]

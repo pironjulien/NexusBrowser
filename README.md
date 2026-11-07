@@ -216,9 +216,10 @@ the extension before creating the tab. Read tools and idle heartbeats leave a cl
 | Folder | Role |
 | --- | --- |
 | [`extension/`](extension) | Chrome MV3 extension "NexusBrowser": CDP actions, locators, network, dialogs, cross-origin iframes, exports, tab ownership |
-| [`native/`](native) | The engine, `NexusBrowser.exe` (C#, .NET 10): native host `com.nexus.browser_auth` (`--auth-host`), local bridge (`--bridge`: WebSocket 9224 for the extension, HTTP 9225 for the agents), the 49 MCP tools over stdio (`--mcp`) or as the shared HTTP daemon (`--http 16182`), client registration (`--register`), extension check (`--refresh-extension`); shared policy and page probes in `native/resources/` |
-| [`plugin/`](plugin) | Plugin with the skill (`plugin/skills`) and the Antigravity plugin (`plugin/antigravity`); `install.ps1` copies the skill into that plugin only |
+| [`native/`](native) | The engine, `NexusBrowser.exe` (C#, .NET 10): native host `com.nexus.browser_auth` (`--auth-host`), local bridge (`--bridge`: WebSocket 9224 for the extension, HTTP 9225 for the agents), the 49 MCP tools over stdio (`--mcp`) or as the shared HTTP daemon (`--http 16182`), client registration (`--register`), extension check (`--refresh-extension`), stdio relay to the shared daemon for the Antigravity Marketplace plugin (`--stdio-relay`); shared policy and page probes in `native/resources/` |
+| [`plugin/`](plugin) | Plugin with the skill (`plugin/skills`) and the Antigravity plugin (`plugin/antigravity`, whose `scripts/start.cmd` runs the installed engine with `--stdio-relay`); `install.ps1` copies the skill into that plugin only |
 | [`tests/`](tests) | Engine tests (xUnit v3, `dotnet test`), extension tests (`node --test`), the clean-Windows install check |
+| [`tsconfig.json`](tsconfig.json), [`types/`](types), [`package.json`](package.json) | Type check of the extension's service worker (`tsc`, Chrome and DevTools Protocol types, versions locked in `package-lock.json`), run by `test.ps1`; development only, nothing ships |
 | [`benchmarks/`](benchmarks/README.md) | Token and success benchmark against Chrome DevTools MCP and Playwright MCP (results and method in its README) |
 | [`mcpb/`](mcpb) | Claude Desktop extension (`nexus-browser-win-x64.mcpb`, `nexus-browser-win-arm64.mcpb`, attached to every release: the self-contained engine itself, `--mcp`) |
 | [`gemini-extension.json`](gemini-extension.json) | Gemini CLI extension: `gemini extensions install https://github.com/pironjulien/NexusBrowser` (the shared local daemon, token `NEXUS_MCP_TOKEN`) |

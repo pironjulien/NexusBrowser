@@ -92,6 +92,16 @@ public static class Program
                 int.TryParse(GetArgValue(args, "--port"), out int daemonPort) ? daemonPort : 16182,
                 GetArgValue(args, "--mcp-token-file"), GetArgValue(args, "--request-file"), GetArgValue(args, "--target-fingerprint"));
 
+        if (args.Contains("--stdio-relay", StringComparer.OrdinalIgnoreCase))
+        {
+            // Antigravity Marketplace plugin: stdio to the shared HTTP service (plugin/antigravity/scripts/start.cmd).
+            using var handler = new SocketsHttpHandler { UseProxy = false };
+            using var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
+            using var stdout = Console.OpenStandardOutput();
+            return await StdioRelay.RunAsync(stdin, stdout, Console.Error, new Uri(GetArgValue(args, "--url") ?? StdioRelay.DefaultUrl),
+                GetArgValue(args, "--product") ?? StdioRelay.DefaultProduct, StdioRelay.ResolveToken(), handler);
+        }
+
         if (args.Contains("--bridge", StringComparer.OrdinalIgnoreCase))
         {
             logFile ??= Path.Join(BridgeSecurity.DefaultDataDir(), "bridge.log");
@@ -146,6 +156,7 @@ public static class Program
         foreach (var a in args)
         {
             if (a.Equals("--bridge", StringComparison.OrdinalIgnoreCase) ||
+                a.Equals("--stdio-relay", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--shutdown-bridge", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--restart-daemon", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("--mcp", StringComparison.OrdinalIgnoreCase) ||

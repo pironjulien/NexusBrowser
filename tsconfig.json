@@ -1,0 +1,15 @@
+{
+  // Type check of the Chrome extension's service worker (background.js and the scripts it imports), JavaScript as
+  // shipped: no build step, nothing emitted. test.ps1 and the Tests workflow run it (npm ci, then tsc -p).
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false,
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable", "WebWorker.ImportScripts"],
+    "types": ["chrome"],
+    "skipLibCheck": true
+  },
+  "files": ["types/chrome-devtools.d.ts", "extension/locator_kit.js", "extension/export_kit.js", "extension/bridge_link.js", "extension/background.js"]
+}
