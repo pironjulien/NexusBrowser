@@ -295,7 +295,11 @@ public sealed partial class RobustnessTests : IDisposable
         string ssh = Path.Join(TestEnvironment.Home, ".ssh");
         Directory.CreateDirectory(build);
         Directory.CreateDirectory(ssh);
-        File.WriteAllText(Path.Join(nexus, "mcp-token.txt"), "token");
+        // The token file is removed afterwards: left in the shared test profile, it made StdioRelayTests.Token, which
+        // expects no ~\.nexus\mcp-token.txt, fail whenever it ran after this test (CI of f8784de).
+        string token = Path.Join(nexus, "mcp-token.txt");
+        bool ownToken = !File.Exists(token);
+        if (ownToken) File.WriteAllText(token, "token");
         File.WriteAllText(Path.Join(ssh, "id_rsa"), "key");
         string toNexus = Path.Join(build, "j-" + Guid.NewGuid().ToString("N")[..8]);
         string toSsh = Path.Join(build, "j-" + Guid.NewGuid().ToString("N")[..8]);
@@ -308,7 +312,12 @@ public sealed partial class RobustnessTests : IDisposable
             Assert.NotNull(BridgeSecurity.UploadRefusal([Path.Join(build, "..", "mcp-token.txt")]));
             Assert.Null(BridgeSecurity.UploadRefusal([Path.Join(build, "x", "paquet.msixupload")]));
         }
-        finally { Directory.Delete(toNexus); Directory.Delete(toSsh); }
+        finally
+        {
+            Directory.Delete(toNexus);
+            Directory.Delete(toSsh);
+            if (ownToken) File.Delete(token);
+        }
     }
 
     // Bug found by review: the build exception only checked that the real build folder stayed under ~\.nexus, so a
@@ -319,7 +328,9 @@ public sealed partial class RobustnessTests : IDisposable
         string nexus = Path.Join(TestEnvironment.Home, ".nexus"), build = Path.Join(nexus, "build");
         string own = Path.Join(nexus, "nexus-browser"), aside = build + "-" + Guid.NewGuid().ToString("N")[..8];
         Directory.CreateDirectory(own);
-        File.WriteAllText(Path.Join(own, "bridge-token"), "token");
+        string token = Path.Join(own, "bridge-token");
+        bool ownToken = !File.Exists(token);
+        if (ownToken) File.WriteAllText(token, "token");
         bool moved = Directory.Exists(build);
         if (moved) Directory.Move(build, aside);
         Junction(build, own);
@@ -333,6 +344,7 @@ public sealed partial class RobustnessTests : IDisposable
         {
             Directory.Delete(build);
             if (moved) Directory.Move(aside, build);
+            if (ownToken) File.Delete(token);
         }
         Assert.Null(BridgeSecurity.UploadRefusal([Path.Join(build, "x", "paquet.msixupload")]));
     }
