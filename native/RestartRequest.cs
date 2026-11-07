@@ -31,7 +31,9 @@ public static partial class RestartRequest
     {
         try
         {
+#pragma warning disable IL3000 // Empty in the single-file release build on purpose: Environment.ProcessPath is used then.
             string location = Assembly.GetEntryAssembly()?.Location ?? "";
+#pragma warning restore IL3000
             string path = location.Length > 0 && File.Exists(location) ? location : Environment.ProcessPath ?? "";
             if (path.Length > 0 && File.Exists(path))
             {
