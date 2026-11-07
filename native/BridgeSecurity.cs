@@ -15,7 +15,7 @@ namespace NexusBrowser.Native;
 
 public static partial class BridgeSecurity
 {
-    public const string Version = "2.35.24";
+    public const string Version = "2.35.25";
     public const string TokenFileName = "bridge-token";
     public const string TokenHeader = "X-Nexus-Browser-Token";
     public const string AgentHeader = "X-Nexus-Browser-Agent";
@@ -557,12 +557,17 @@ public static partial class BridgeSecurity
         // ~\.nexus\build holds the build outputs of every Nexus product (a Store package is uploaded from there), not
         // secrets: only the ~\.nexus root is lifted for it, after every junction and short name is resolved, so a link
         // inside build back to ~\.nexus\mcp-token.txt, or a build folder that is itself a link elsewhere, stays refused.
+        // The real build folder must be exactly ~\.nexus\build: a build junction to ~\.nexus\nexus-browser or
+        // ~\.nexus\relay resolves under ~\.nexus too, and would otherwise lift a folder holding bridge-token.txt.
         string? nexusKey = null, buildKey = null;
         try
         {
-            nexusKey = CanonicalPath(Path.Join(HomeDir(), ".nexus"));
-            buildKey = CanonicalPath(Path.Join(HomeDir(), ".nexus", "build"));
-            if (!buildKey.StartsWith(nexusKey + @"\", StringComparison.Ordinal))
+            string nexusRaw = Path.Join(HomeDir(), ".nexus"), buildRaw = Path.Join(nexusRaw, "build");
+            nexusKey = CanonicalPath(nexusRaw);
+            buildKey = CanonicalPath(buildRaw);
+            bool buildIsLink = Directory.Exists(buildRaw) &&
+                               (File.GetAttributes(buildRaw) & FileAttributes.ReparsePoint) != 0;
+            if (buildIsLink || buildKey != nexusKey + @"\build")
                 buildKey = null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)

@@ -311,7 +311,33 @@ public sealed partial class RobustnessTests : IDisposable
         finally { Directory.Delete(toNexus); Directory.Delete(toSsh); }
     }
 
-    private static readonly string[] Runnable =[".exe", ".ps1", ".lnk", ".bat", ".cmd", ".js", ".hta", ".url"];
+    // Bug found by review: the build exception only checked that the real build folder stayed under ~\.nexus, so a
+    // build folder that was itself a junction to ~\.nexus\nexus-browser made bridge-token uploadable.
+    [Fact]
+    public void ANexusBuildFolderThatIsAJunctionToAnotherNexusFolderIsRefused()
+    {
+        string nexus = Path.Join(TestEnvironment.Home, ".nexus"), build = Path.Join(nexus, "build");
+        string own = Path.Join(nexus, "nexus-browser"), aside = build + "-" + Guid.NewGuid().ToString("N")[..8];
+        Directory.CreateDirectory(own);
+        File.WriteAllText(Path.Join(own, "bridge-token"), "token");
+        bool moved = Directory.Exists(build);
+        if (moved) Directory.Move(build, aside);
+        Junction(build, own);
+        try
+        {
+            Assert.NotNull(BridgeSecurity.UploadRefusal([Path.Join(build, "bridge-token")]));
+            Assert.NotNull(BridgeSecurity.UploadRefusal([Path.Join(own, "bridge-token")]));
+            Assert.NotNull(BridgeSecurity.UploadRefusal([Path.Join(build, "x", "paquet.msixupload")]));
+        }
+        finally
+        {
+            Directory.Delete(build);
+            if (moved) Directory.Move(aside, build);
+        }
+        Assert.Null(BridgeSecurity.UploadRefusal([Path.Join(build, "x", "paquet.msixupload")]));
+    }
+
+    private static readonly string[] Runnable = [".exe", ".ps1", ".lnk", ".bat", ".cmd", ".js", ".hta", ".url"];
 
     [Fact]
     public void ARunnableFileOrAProtectedFolderIsNeverWritten()
