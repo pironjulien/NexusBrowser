@@ -210,7 +210,18 @@ if ($reuseInstalled) {
 $next = Join-Path $root 'app.next'
 $previous = Join-Path $root 'app.previous'
 $failed = Join-Path $root 'app.failed'
-if (Test-Path -LiteralPath $failed) { throw "Previous recovery is incomplete; its safe controller is kept in $failed. No new update was started." }
+# app.failed is left only when a failed update could not finish restoring the previous version (its registration
+# stopped midway). Its controller only served that restore: this pass holds a freshly verified package whose own
+# installer registers everything again, under the same update lock. The interrupted restore is therefore taken over:
+# the previous version goes back to app if the second rename never happened, then the stale controller is removed.
+# Before 2.35.31 it blocked every later update until removed by hand.
+if (Test-Path -LiteralPath $failed) {
+    if (-not (Test-Path -LiteralPath $app) -and (Test-Path -LiteralPath (Join-Path $previous 'install.ps1'))) {
+        Rename-Item -LiteralPath $previous -NewName 'app'
+    }
+    Remove-Item -LiteralPath $failed -Recurse -Force
+    Write-Host "Interrupted recovery taken over: $failed removed, this verified package installs again."
+}
 foreach ($leftover in @($next)) {
     if (Test-Path -LiteralPath $leftover) { Remove-Item -LiteralPath $leftover -Recurse -Force }
 }

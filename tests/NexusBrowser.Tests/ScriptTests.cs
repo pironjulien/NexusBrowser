@@ -406,6 +406,75 @@ public sealed class ScriptTests : IDisposable
     [Theory]
     [InlineData(Shells.WindowsPowerShell)]
     [InlineData(Shells.Pwsh)]
+    public async Task RealRegistryReadsBackWhatItWritesAndItsOutOfPackageWorkerAnswersTheSame(string shell)
+    {
+        // Out of a package (CI, the maintenance, the sync started by WMI) the key is written by the .NET API in the calling
+        // process; under a packaged app (a Claude session) by the one-shot task: never reg.exe or cmd.exe (held more than
+        // 20 s on 07/11/2026). The worker mode, what that task runs, gives the same answers. Only a throwaway key is touched,
+        // removed through the same paths.
+        string key = @"HKCU\Software\NexusBrowser.Tests-" + Guid.NewGuid().ToString("N");
+        string script = Repo.File("scripts", "registre-reel.ps1");
+        string request = _dir["registry-request.json"];
+        string answer = _dir["registry-answer.json"];
+        File.WriteAllText(request, new JsonArray(
+            new JsonObject { ["action"] = "set", ["cle"] = key + @"\worker", ["valeur"] = "w" },
+            new JsonObject { ["action"] = "get", ["cle"] = key + @"\worker" },
+            new JsonObject { ["action"] = "get", ["cle"] = key + @"\none" }).ToJsonString());
+        string probe = _dir["registry-probe.ps1"];
+        File.WriteAllText(probe, $"""
+            . {Shells.Quote(script)}
+            "absent=[$($null -eq (Get-RegistreReel {Shells.Quote(key)}))]"
+            "set=[$(Set-RegistreReel {Shells.Quote(key + @"\host")} 'C:\x y\%TEMP%\m.json')]"
+            "get=[$(Get-RegistreReel {Shells.Quote(key + @"\host")})]"
+            "removed=[$(Remove-RegistreReel {Shells.Quote(key + @"\host")})]"
+            "again=[$(Remove-RegistreReel {Shells.Quote(key + @"\host")})]"
+            $null = Remove-RegistreReel {Shells.Quote(key)}
+            """);
+        try
+        {
+            var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
+            Assert.True(code == 0, stdout + stderr);
+            Assert.Equal(["absent=[True]", @"set=[C:\x y\%TEMP%\m.json]", @"get=[C:\x y\%TEMP%\m.json]", "removed=[True]", "again=[False]"], Shells.Lines(stdout));
+            var worker = await Shells.FileAsync(shell, script, ["-NexusRegistreRequete", request, "-NexusRegistreReponse", answer]);
+            Assert.True(worker.Code == 0, worker.Stdout + worker.Stderr);
+            var parsed = JsonNode.Parse(File.ReadAllText(answer))!;
+            Assert.True(parsed["ok"]!.GetValue<bool>());
+            Assert.Equal(new string?[] { "w", "w", null }, parsed["resultats"]!.AsArray().Select(n => n?.GetValue<string>()).ToArray());
+        }
+        finally
+        {
+            Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(key[5..], false);
+        }
+    }
+
+    [Theory]
+    [InlineData(Shells.WindowsPowerShell)]
+    [InlineData(Shells.Pwsh)]
+    public async Task AnInterruptedRecoveryIsTakenOverInsteadOfBlockingEveryUpdate(string shell)
+    {
+        // What a restore stopped midway leaves (07/11/2026): the failed controller in app.failed and, when the second
+        // rename never happened, the previous version still in app.previous. The next verified package takes over.
+        string zip = FakeRelease("after-interrupted-recovery");
+        string root = _dir["interrupted-install"];
+        Directory.CreateDirectory(Path.Join(root, "app.failed", "scripts"));
+        File.WriteAllText(Path.Join(root, "app.failed", "install.ps1"), "throw 'The stale controller must never run'");
+        Directory.CreateDirectory(Path.Join(root, "app.previous"));
+        File.WriteAllText(Path.Join(root, "app.previous", "install.ps1"), "throw 'The previous installer must never run'");
+        var (code, stdout, stderr) = await Shells.FileAsync(shell, Repo.File("get.ps1"), env: new Dictionary<string, string?>
+        {
+            ["NEXUS_BROWSER_SOURCE"] = zip,
+            ["NEXUS_BROWSER_ROOT"] = root,
+        }, timeoutSeconds: 90);
+        Assert.True(code == 0, stdout + stderr);
+        Assert.Contains("Interrupted recovery taken over", stdout);
+        Assert.Contains($"NexusBrowser {BridgeSecurity.Version} unpacked in", stdout);
+        // app.previous went back to app before the switch (the test folder then replaces app with the new package).
+        Assert.Equal(["app", "update.lock"], Directory.EnumerateFileSystemEntries(root).Select(Path.GetFileName).Order());
+    }
+
+    [Theory]
+    [InlineData(Shells.WindowsPowerShell)]
+    [InlineData(Shells.Pwsh)]
     public async Task AScannerBrieflyHoldingTheFreshEngineDoesNotFailTheSwitch(string shell)
     {
         // What an antivirus does to a freshly written executable: opens it for a moment (every sharing mode allowed),

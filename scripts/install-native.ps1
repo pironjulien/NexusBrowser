@@ -150,7 +150,7 @@ if (Get-ScheduledTask -TaskName 'NexusAGY Browser Bridge' -ErrorAction SilentlyC
     Write-Journal 'Old task "NexusAGY Browser Bridge" removed.'
 }
 if (Test-Path 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.nexusagy.bridge_auth') {
-    $null = Invoke-RegistreReel @('delete "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexusagy.bridge_auth" /f')
+    $null = Remove-RegistreReel 'HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexusagy.bridge_auth'
     Write-Journal 'Old native host com.nexusagy.bridge_auth removed from Chrome (HKCU key).'
 }
 $oldRoot = Join-Path $HOME '.nexusagy'

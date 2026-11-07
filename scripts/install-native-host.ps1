@@ -28,8 +28,8 @@ $manifestText = ([ordered]@{
 } | ConvertTo-Json -Depth 4) + "`n"
 
 if ($CheckOnly) {
-    $registered = Invoke-RegistreReel @("query `"$RegistryKey`" /ve")
-    if (-not $registered.Contains($manifestPath)) { throw "Hote natif $hostName non declare a Chrome : reexecuter install.ps1" }
+    $registered = Get-RegistreReel $RegistryKey
+    if ($registered -ne $manifestPath) { throw "Hote natif $hostName non declare a Chrome : reexecuter install.ps1" }
     # Compared by content: ConvertTo-Json formats differently under Windows PowerShell 5.1 and pwsh 7.
     $canonical = { param($text) $text | ConvertFrom-Json | ConvertTo-Json -Depth 4 -Compress }
     $aligned = (Test-Path -LiteralPath $manifestPath) -and
@@ -43,6 +43,6 @@ if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) { throw "Moteur natif abs
 [IO.Directory]::CreateDirectory($hostDirectory) | Out-Null
 [IO.File]::WriteAllText($manifestPath, $manifestText, $utf8)
 if (Test-Path -LiteralPath $oldLauncher) { Remove-Item -LiteralPath $oldLauncher -Force }
-$registered = Invoke-RegistreReel @("add `"$RegistryKey`" /ve /t REG_SZ /d `"$manifestPath`" /f", "query `"$RegistryKey`" /ve")
-if (-not $registered.Contains($manifestPath)) { throw "Hote natif $hostName : cle du registre non ecrite ($registered)" }
+$registered = Set-RegistreReel $RegistryKey $manifestPath
+if ($registered -ne $manifestPath) { throw "Hote natif $hostName : cle du registre non ecrite ($registered)" }
 Write-Host "Hote natif $hostName declare a Chrome ($manifestPath -> $Exe)."

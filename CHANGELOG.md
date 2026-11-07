@@ -5,7 +5,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.31] - 2026-11-07
+
 ### Fixed
+- The real-registry helper (`scripts/registre-reel.ps1`: the Chrome native host key) no longer runs `reg.exe` through
+  `cmd.exe`. Outside a packaged app (NexusSystem maintenance, a sync started by WMI, a terminal) it writes HKCU with the
+  .NET registry API in its own process; only a packaged caller still goes through a one-shot scheduled task, which now
+  runs this same script (`powershell.exe -File`, JSON answer, up to 90 s) and reports the task's real state on a
+  timeout. On 07/11/2026 a `cmd /c reg add|query` task was still starting after 20 s (result 0x41301, "running", with
+  no Defender, ASR, Smart App Control or AppLocker event): the update failed, then the restore failed the same way and
+  left `app.failed`. A shell of a packaged app that has no package identity of its own (the Claude app's) is detected
+  through its packaged ancestor. Functions: `Get-RegistreReel`, `Set-RegistreReel`, `Remove-RegistreReel` (the former
+  `Invoke-RegistreReel`, which took reg.exe command lines, is gone).
+- An interrupted recovery no longer blocks every later update. `app.failed`, left when a failed update could not finish
+  restoring the previous version, made the installer refuse all updates until removed by hand ("Previous recovery is
+  incomplete"); the next verified package now takes it over under the update lock: the previous version goes back to
+  `app` if needed, the stale controller is removed and the new package installs and registers everything again.
 - Tests: no test can show a Windows error box. The test process sets the error mode (no critical-error, crash or
   missing-file box) when it loads, and every process it starts inherits it; a test checks it in a child process.
 
@@ -2044,7 +2059,7 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.33.11...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.35.31...HEAD
 [2.33.11]: https://github.com/pironjulien/NexusBrowser/compare/v2.33.10...v2.33.11
 [2.33.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.32.0...v2.33.0
 [2.26.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.3
