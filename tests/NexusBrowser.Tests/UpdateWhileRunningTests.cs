@@ -53,8 +53,10 @@ public sealed class ReleaseEngine : IDisposable
 /// never written again, and removes an older folder only once no engine runs from it. Here the real release engine
 /// runs from such a folder, the next build is installed and the cleanup runs with the installer's own functions
 /// (scripts\runtime.ps1), and the engine must still answer; the in-place replacement is checked too, to show this
-/// test sees the failure when it happens.
+/// test sees the failure when it happens. The release publish loads the whole machine for a while: this class runs
+/// alone, after the parallel tests, so their timing budgets (daemon restart polls) are not eaten by it.
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public sealed class UpdateWhileRunningTests(ReleaseEngine release) : IClassFixture<ReleaseEngine>, IDisposable
 {
     private readonly TempDir _dir = new();
