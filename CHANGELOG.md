@@ -24,6 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   DevTools "Verbose") or, in code serialized into pages, say why it is harmless. The type check's findings are fixed
   (CDP results typed, `Object.assign` for flagged errors, explicit casts for YouTube's player API); no behaviour
   change.
+- CodeQL runs from `.github/workflows/codeql.yml` (actions pinned by commit SHA, read-only token plus
+  `security-events: write`) instead of the default setup: same languages (GitHub Actions, C#, JavaScript and
+  TypeScript) and default queries, now credited by OpenSSF Scorecard's SAST check.
 
 ### Fixed
 - Dependabot's NuGet updates: `Directory.Build.props` takes the user profile from .NET instead of `$(USERPROFILE)`,
