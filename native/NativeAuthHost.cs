@@ -32,10 +32,10 @@ public static class NativeAuthHost
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            throw new AuthException($"jeton du pont illisible ({ex.Message}) : lancer install.ps1");
+            throw new AuthException($"bridge token unreadable ({ex.Message}): run install.ps1");
         }
         if (token.Length < 43)
-            throw new AuthException("jeton du pont invalide");
+            throw new AuthException("invalid bridge token");
         return token;
     }
 
@@ -57,13 +57,13 @@ public static class NativeAuthHost
         {
             int n = stream.Read(lenBuf[readTotal..]);
             if (n == 0)
-                throw new AuthException("message natif incomplet");
+                throw new AuthException("incomplete native message");
             readTotal += n;
         }
 
         uint size = BinaryPrimitives.ReadUInt32LittleEndian(lenBuf);
         if (size > MaxMessageBytes)
-            throw new AuthException("message natif trop long");
+            throw new AuthException("native message too long");
 
         byte[] payload = new byte[size];
         int offset = 0;
@@ -71,7 +71,7 @@ public static class NativeAuthHost
         {
             int n = stream.Read(payload, offset, (int)size - offset);
             if (n == 0)
-                throw new AuthException("message natif incomplet");
+                throw new AuthException("incomplete native message");
             offset += n;
         }
 
@@ -81,7 +81,7 @@ public static class NativeAuthHost
         }
         catch (JsonException)
         {
-            throw new AuthException("message natif illisible");
+            throw new AuthException("unreadable native message");
         }
     }
 
@@ -101,7 +101,7 @@ public static class NativeAuthHost
         try
         {
             if (messageNode is not JsonObject message || TryGetString(message, "op") != "handshake")
-                throw new AuthException("opération inconnue");
+                throw new AuthException("unknown operation");
 
             string clientNonce = BridgeAuth.CheckNonce(TryGetString(message, "client_nonce"), "client_nonce");
             string serverNonce = BridgeAuth.CheckNonce(TryGetString(message, "server_nonce"), "server_nonce");
@@ -109,12 +109,12 @@ public static class NativeAuthHost
             string extensionId = BridgeAuth.CheckExtensionId(TryGetString(message, "extension_id"));
 
             if (extensionId != callerId)
-                throw new AuthException("identifiant d'extension différent de l'appelant annoncé par Chrome");
+                throw new AuthException("extension id differs from the caller Chrome announced");
 
             string token = ReadToken(BridgeSecurity.TokenPath(tokenFile));
             string expected = BridgeAuth.ServerProof(token, clientNonce, serverNonce, role, extensionId);
             if (!BridgeAuth.Same(TryGetString(message, "server_proof"), expected))
-                throw new AuthException("le serveur du port 9224 ne prouve pas qu'il connaît le jeton NexusBrowser : connexion refusée");
+                throw new AuthException("the port 9224 server does not prove it knows the NexusBrowser token: connection refused");
 
             return new JsonObject
             {

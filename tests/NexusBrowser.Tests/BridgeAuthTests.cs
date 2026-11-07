@@ -186,7 +186,7 @@ public sealed class NativeAuthHostTests : IDisposable
     public void UnknownOperationIsRefused()
     {
         var reply = Run(new JsonObject { ["op"] = "unsupported" });
-        Assert.True(JsonNode.DeepEquals(new JsonObject { ["ok"] = false, ["error"] = "opération inconnue" }, reply), reply.ToJsonString());
+        Assert.True(JsonNode.DeepEquals(new JsonObject { ["ok"] = false, ["error"] = "unknown operation" }, reply), reply.ToJsonString());
     }
 
     [Fact]

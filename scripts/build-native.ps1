@@ -1,5 +1,8 @@
 # Builds the engine into a candidate folder outside the repository and OneDrive (~\.nexus\build\nexus-browser), never
-# over a running installation. -Runtime win-x64|win-arm64: self-contained single file (the release build).
+# over a running installation. -Runtime win-x64|win-arm64: self-contained single file (the release build), not
+# compressed: every MCP session starts the engine (stdio relay), and unpacking a compressed bundle doubled each start
+# (--version, 07/11/2026: 95 ms compressed, 47 ms not; the release zip compresses it anyway). ReadyToRun was measured too
+# and left out: no gain on start (the .NET runtime packs are precompiled already), 13 MB more.
 param([string]$OutputDirectory, [string]$Runtime)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'runtime.ps1')
@@ -13,7 +16,7 @@ if (Test-Path -LiteralPath $OutputDirectory) { Remove-Item -LiteralPath $OutputD
 $arguments = @('publish', (Join-Path $repositoryRoot 'native\NexusBrowser.csproj'), '-c', 'Release', '-o', $OutputDirectory, '--nologo')
 if ($Runtime) {
     $arguments += @('-r', $Runtime, '--self-contained', 'true', '-p:PublishSingleFile=true',
-        '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:EnableCompressionInSingleFile=true', '-p:DebugType=none')
+        '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:DebugType=none')
 }
 & dotnet @arguments
 if ($LASTEXITCODE) { throw 'Native NexusBrowser build failed.' }

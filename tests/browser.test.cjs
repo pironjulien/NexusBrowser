@@ -11,6 +11,45 @@ const path = require('node:path');
 // Objets venus d'un autre contexte vm : comparés par valeur.
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
+// Words a reader sees in an HTML fragment, read by a small tokenizer instead of regex replacements: a tag (quoted
+// attribute values may hold ">") or a comment separates words, and the content of <script>, <style> and <svg> is
+// skipped up to its own closing tag, whatever its case or spacing ("</script >"). Malformed markup fails the test.
+function visibleWords(html) {
+    const lower = html.toLowerCase();
+    const skipped = new Set(['script', 'style', 'svg']);
+    let text = '';
+    let i = 0;
+    while (i < html.length) {
+        if (html[i] !== '<') { text += html[i++]; continue; }
+        text += ' ';
+        if (html.startsWith('<!--', i)) {
+            const end = html.indexOf('-->', i + 4);
+            assert.ok(end >= 0, 'unterminated comment');
+            i = end + 3;
+            continue;
+        }
+        let j = i + 1;
+        let quote = null;
+        while (j < html.length && (quote || html[j] !== '>')) {
+            if (quote) { if (html[j] === quote) quote = null; } else if (html[j] === '"' || html[j] === "'") quote = html[j];
+            j++;
+        }
+        assert.ok(j < html.length, 'unterminated tag');
+        const name = /^[a-z][a-z0-9-]*/.exec(lower.slice(i + 1, j))?.[0];
+        const selfClosing = html[j - 1] === '/';
+        i = j + 1;
+        if (name && skipped.has(name) && !selfClosing) {
+            let close = lower.indexOf(`</${name}`, i);
+            while (close >= 0 && /[a-z0-9-]/.test(lower[close + name.length + 2] ?? '')) close = lower.indexOf(`</${name}`, close + 1);
+            assert.ok(close >= 0, `unclosed <${name}>`);
+            const end = lower.indexOf('>', close);
+            assert.ok(end >= 0, `unterminated </${name}>`);
+            i = end + 1;
+        }
+    }
+    return text.split(/\s+/).filter(Boolean);
+}
+
 // chrome.i18n of the extension's catalogs (_locales/<lang>/messages.json), substitutions as Chrome does them: $NAME$
 // placeholders whose content is $1..$9, "$$" for a literal "$". An unknown key fails the test (Chrome returns "").
 function catalog(lang) {
@@ -5258,9 +5297,8 @@ test('catalogues de langue : anglais par défaut, mêmes clés et mêmes paramè
     assert.ok(en.extDescription.message.length <= 132 && fr.extDescription.message.length <= 132);
     // Aucun texte visible écrit en dur dans les pages : en dehors du nom du produit, chaque texte vient du catalogue.
     for (const file of ['popup.html', 'pair.html']) {
-        const body = fs.readFileSync(path.join(dir, file), 'utf8').split('<body>')[1].replace(/<svg[\s\S]*?<\/svg>/g, '');
-        const visible = body.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean);
-        assert.deepEqual(visible, ['NexusBrowser'], file);
+        const body = fs.readFileSync(path.join(dir, file), 'utf8').split('<body>')[1];
+        assert.deepEqual(visibleWords(body), ['NexusBrowser'], file);
     }
 });
 

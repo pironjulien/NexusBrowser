@@ -45,21 +45,21 @@ public static class BridgeAuth
     public static string CheckNonce(string? value, string name)
     {
         if (string.IsNullOrEmpty(value) || value.Length != 43 || !Base64UrlRegex.IsMatch(value))
-            throw new AuthException($"{name} invalide");
+            throw new AuthException($"invalid {name}");
         return value;
     }
 
     public static string CheckRole(string? value)
     {
         if (value is not ("service_worker" or "offscreen"))
-            throw new AuthException("rôle inconnu");
+            throw new AuthException("unknown role");
         return value;
     }
 
     public static string CheckExtensionId(string? value)
     {
         if (string.IsNullOrEmpty(value) || !ExtensionIdRegex.IsMatch(value))
-            throw new AuthException("identifiant d'extension invalide");
+            throw new AuthException("invalid extension id");
         return value;
     }
 
@@ -142,7 +142,7 @@ public static class BridgeAuth
                 !frame.TryGetPropertyValue("body", out JsonNode? bodyNode) ||
                 !frame.TryGetPropertyValue("mac", out JsonNode? macNode))
             {
-                throw new AuthException("message non signé");
+                throw new AuthException("unsigned message");
             }
 
             if (seqNode is not JsonValue seqVal ||
@@ -153,7 +153,7 @@ public static class BridgeAuth
                 !bodyVal.TryGetValue<string>(out string? body) ||
                 body is null)
             {
-                throw new AuthException("message signé mal formé");
+                throw new AuthException("malformed signed message");
             }
 
             string? mac = macNode is JsonValue macVal && macVal.GetValueKind() == JsonValueKind.String
@@ -163,11 +163,11 @@ public static class BridgeAuth
             lock (_recvLock)
             {
                 if (seq != _received + 1)
-                    throw new AuthException($"numéro d'ordre {seq} inattendu (attendu {_received + 1}) : rejeu ou perte");
+                    throw new AuthException($"unexpected sequence number {seq} (expected {_received + 1}): replay or loss");
 
                 string expectedMac = FrameMac(_key, _receiveDirection, seq, body);
                 if (!Same(mac, expectedMac))
-                    throw new AuthException("signature du message fausse");
+                    throw new AuthException("wrong message signature");
 
                 _received = seq;
                 return body;

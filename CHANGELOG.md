@@ -5,6 +5,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.32] - 2026-11-07
+
+### Changed
+- The engine starts twice as fast: the release single file is no longer compressed, since every MCP session starts it
+  (stdio relay) and unpacking the bundle doubled each start (`--version`: 95 ms compressed, 47 ms not). The release
+  zip compresses it anyway (download about the same size). ReadyToRun was measured as well and left out: no gain on
+  start, since the .NET runtime packs are precompiled already.
+- The engine's authentication, pairing and handshake errors are in English, like the rest of the engine (they were in
+  French). The extension still shows its own messages in Chrome's language.
+
+### Fixed
+- Release packages and installed versions no longer carry SkiaSharp's native debug symbols (`libSkiaSharp.pdb`,
+  96 MB beside the engine): package symbols are dropped from the publish, as the engine's own already were.
+- The extension's page test reads visible text with a small tokenizer instead of regex replacements (CodeQL
+  `js/bad-tag-filter` and `js/incomplete-multi-character-sanitization`); it also skips `</script >` and quoted `>`.
+
 ## [2.35.31] - 2026-11-07
 
 ### Fixed
@@ -2059,7 +2075,7 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.35.31...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.35.32...HEAD
 [2.33.11]: https://github.com/pironjulien/NexusBrowser/compare/v2.33.10...v2.33.11
 [2.33.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.32.0...v2.33.0
 [2.26.3]: https://github.com/pironjulien/NexusBrowser/releases/tag/v2.26.3

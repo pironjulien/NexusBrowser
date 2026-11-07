@@ -25,4 +25,11 @@
     <InternalsVisibleTo Include="NexusBrowser.Tests" />
     <PackageReference Include="Tomlyn" Version="2.10.1" />
   </ItemGroup>
+  <!-- The engine ships no debug symbols (DebugType=none), packages' native ones included: SkiaSharp's libSkiaSharp.pdb
+       (96 MB) stayed beside the single file, in every release package and installed version. -->
+  <Target Name="DropPackageSymbolsFromPublish" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
 </Project>

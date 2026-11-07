@@ -95,7 +95,7 @@ public sealed partial class NativeProcessTests : IDisposable
         Assert.True(reply.Length >= 4, $"{reply.Length} bytes");
         int length = (int)BinaryPrimitives.ReadUInt32LittleEndian(reply);
         Assert.Equal(length + 4, reply.Length);
-        Assert.True(JsonNode.DeepEquals(new JsonObject { ["ok"] = false, ["error"] = "opération inconnue" }, JsonNode.Parse(Encoding.UTF8.GetString(reply, 4, length))));
+        Assert.True(JsonNode.DeepEquals(new JsonObject { ["ok"] = false, ["error"] = "unknown operation" }, JsonNode.Parse(Encoding.UTF8.GetString(reply, 4, length))));
     }
 
     // ---------------------------------------------------------------------------------------------

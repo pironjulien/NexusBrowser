@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NexusBrowser",
-  "version": "2.35.31",
+  "version": "2.35.32",
   "minimum_chrome_version": "116",
   "description": "__MSG_extDescription__",
   "default_locale": "en",

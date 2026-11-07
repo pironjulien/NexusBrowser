@@ -545,7 +545,7 @@ public sealed class BridgeServer : IAsyncDisposable
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(HandshakeTimeoutSeconds));
             string? raw = await ReceiveWebSocketTextAsync(ws, MaxHandshakeBytes, timeoutCts.Token);
             if (string.IsNullOrEmpty(raw) || raw.Length > MaxHandshakeBytes)
-                throw new AuthException("message de poignée de main invalide");
+                throw new AuthException("invalid handshake message");
             JsonNode? node;
             try
             {
@@ -553,16 +553,16 @@ public sealed class BridgeServer : IAsyncDisposable
             }
             catch (JsonException)
             {
-                throw new AuthException("message de poignée de main illisible");
+                throw new AuthException("unreadable handshake message");
             }
             if (node is not JsonObject obj)
-                throw new AuthException("message de poignée de main invalide");
+                throw new AuthException("invalid handshake message");
             return obj;
         }
 
         var hello = await ReceiveHandshakeAsync();
         if (TryGetString(hello, "type") != "auth_hello" || TryGetString(hello, "protocol") != BridgeAuth.Protocol)
-            throw new AuthException("poignée de main attendue");
+            throw new AuthException("handshake expected");
 
         string clientNonce = BridgeAuth.CheckNonce(TryGetString(hello, "client_nonce"), "client_nonce");
         string extensionId = BridgeAuth.CheckExtensionId(TryGetString(hello, "extension_id"));
@@ -578,7 +578,7 @@ public sealed class BridgeServer : IAsyncDisposable
         else if (auth is "paired" or "pair")
         {
             if (origin is null || origin.TrimEnd('/') != $"chrome-extension://{extensionId}")
-                throw new AuthException("identifiant d'extension différent de l'origine de la connexion");
+                throw new AuthException("extension id differs from the connection origin");
 
             if (auth == "paired")
             {
@@ -588,14 +588,14 @@ public sealed class BridgeServer : IAsyncDisposable
             else
             {
                 if (TryGetString(hello, "role") != PairingStore.PairingRole)
-                    throw new AuthException("rôle d'appairage attendu");
+                    throw new AuthException("pairing role expected");
                 role = PairingStore.PairingRole;
                 token = _pairing.PendingSecret();
             }
         }
         else
         {
-            throw new AuthException("méthode d'authentification inconnue");
+            throw new AuthException("unknown authentication method");
         }
 
         string serverNonce = BridgeAuth.NewNonce();
@@ -615,7 +615,7 @@ public sealed class BridgeServer : IAsyncDisposable
         {
             if (auth == "pair")
                 _pairing.Failed();
-            throw new AuthException("preuve du client fausse");
+            throw new AuthException("wrong client proof");
         }
 
         byte[] sessKey = BridgeAuth.SessionKey(token, clientNonce, serverNonce, role, extensionId);
@@ -645,11 +645,11 @@ public sealed class BridgeServer : IAsyncDisposable
             if (result.MessageType == WebSocketMessageType.Close)
                 return null;
             if (result.MessageType != WebSocketMessageType.Text)
-                throw new AuthException("message de poignée de main invalide");
+                throw new AuthException("invalid handshake message");
 
             ms.Write(buffer, 0, result.Count);
             if (ms.Length > maxBytes)
-                throw new AuthException("message de poignée de main invalide");
+                throw new AuthException("invalid handshake message");
 
             if (result.EndOfMessage)
                 break;
