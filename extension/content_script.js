@@ -7,7 +7,10 @@
 try {
     if (window === window.top && typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
         chrome.runtime.sendMessage({ target: "background", ping: true }, () => {
-            if (chrome.runtime.lastError) {}
+            void chrome.runtime.lastError; // lu exprès : service worker endormi ou rechargé, rien à signaler dans la page
         });
     }
-} catch (_) {}
+} catch (_) {
+    // Contexte de l'extension invalidé (extension rechargée ou mise à jour) : script orphelin, il n'a plus rien à réveiller.
+    // Aucune trace dans la console de la page (voir ci-dessus).
+}

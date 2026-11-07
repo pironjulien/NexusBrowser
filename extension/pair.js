@@ -43,7 +43,10 @@ async function pair(secret) {
             link.close();
             try {
                 await chrome.runtime.sendMessage({ target: "background", bridgePaired: true });
-            } catch (_) {}
+            } catch (error) {
+                // Clé déjà enregistrée : le service worker la relit à son prochain démarrage, le message n'est qu'un raccourci.
+                console.debug(`[NexusBrowser] pairing notice to the service worker: ${error?.message || error}`);
+            }
             show("Extension appairée au pont NexusBrowser. Vous pouvez fermer cet onglet.", "ok");
         },
         onClose: (link) => {

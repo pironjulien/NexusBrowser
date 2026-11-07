@@ -16,6 +16,11 @@
     const NONCE_RE = /^[A-Za-z0-9_-]{43}$/;
     const encoder = new TextEncoder();
 
+    // Échec attendu, sans suite à donner (socket déjà fermée, écouteur de l'appelant en erreur) : tracé, jamais muet.
+    function swallowed(where, error) {
+        console.debug(`[NexusBrowser] ${where}: ${error?.message || error}`);
+    }
+
     function b64url(bytes) {
         let binary = "";
         for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -82,7 +87,7 @@
 
         _setState(state) {
             this.state = state;
-            try { this.onStateChange(this); } catch (_) {}
+            try { this.onStateChange(this); } catch (error) { swallowed(`state listener (${state})`, error); }
         }
 
         _open() {
@@ -184,7 +189,7 @@
                     const mac = await this._mac("c2s", seq, body);
                     if (this.ws.readyState === 1) this.ws.send(JSON.stringify({ seq, body, mac }));
                 })
-                .catch(() => {});
+                .catch((error) => swallowed("signed message not sent (link closed)", error));
             return true;
         }
 
@@ -196,12 +201,12 @@
             const shown = String(reason).replace(/[\r\n\u2028\u2029]+/g, " ");
             console.warn(`[NexusBrowser] Pont local refusé (${this.role}) : ${shown}`);
             // Code 4008 : un navigateur refuse 1008 à un client (seuls 1000 et 3000-4999), la socket restait ouverte.
-            try { this.ws.close(4008, "NexusBrowser authentication failed"); } catch (_) {}
+            try { this.ws.close(4008, "NexusBrowser authentication failed"); } catch (error) { swallowed("socket close after a refusal", error); }
             this._closed();
         }
 
         close() {
-            try { this.ws.close(); } catch (_) {}
+            try { this.ws.close(); } catch (error) { swallowed("socket close", error); }
             this._closed();
         }
 
@@ -212,7 +217,7 @@
             this.handshakeTimer = null;
             this.key = null;
             this._setState("closed");
-            try { this.onClose(this); } catch (_) {}
+            try { this.onClose(this); } catch (error) { swallowed("close listener", error); }
         }
 
         describe() {

@@ -5,6 +5,11 @@
  */
 const AGENTS = ["Claude", "Codex", "Antigravity"];
 
+// Échec attendu et sans effet sur l'affichage (valeur par défaut gardée), tracé dans la console de la fenêtre.
+function swallowed(where, error) {
+    console.debug(`[NexusBrowser] ${where}: ${error?.message || error}`);
+}
+
 function text(id, value) {
     document.getElementById(id).textContent = value;
 }
@@ -15,7 +20,7 @@ async function showBridge() {
     let status = null;
     try {
         status = await chrome.runtime.sendMessage({ target: "background", getStatus: true });
-    } catch (_) {}
+    } catch (error) { swallowed("bridge status (service worker asleep or reloading)", error); }
     const ok = !!(status && status.connected);
     state.className = `state ${ok ? "ok" : "off"}`;
     state.textContent = ok ? "Pont connecté" : "Pont en attente";
@@ -35,7 +40,7 @@ async function showAgents() {
             if (!counts.has(group.title)) continue;
             counts.set(group.title, counts.get(group.title) + tabs.filter(t => t.groupId === group.id).length);
         }
-    } catch (_) {}
+    } catch (error) { swallowed("agent tab groups", error); }
     const list = document.getElementById("agents");
     list.replaceChildren(...AGENTS.map(name => {
         const item = document.createElement("li");
@@ -55,7 +60,7 @@ async function showCompteur() {
     if (!caseGmail) return; // variante du Chrome Web Store sans compteur Gmail
     try {
         caseGmail.checked = !!(await chrome.storage.local.get("compteurGmail")).compteurGmail;
-    } catch (_) {}
+    } catch (error) { swallowed("Gmail counter setting", error); }
     caseGmail.addEventListener("change", () => chrome.storage.local.set({ compteurGmail: caseGmail.checked }));
 }
 

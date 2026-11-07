@@ -58,7 +58,7 @@ function agyExportKit() {
     function absolute(href, base) {
         const raw = String(href || "").trim();
         if (!raw) return "";
-        try { if (typeof URL === "function") return new URL(raw, base || undefined).href; } catch (_) {}
+        try { if (typeof URL === "function") return new URL(raw, base || undefined).href; } catch (_) { /* adresse non analysable : gardée telle quelle */ }
         return raw;
     }
     function setQueryParam(url, key, value) {
@@ -103,7 +103,7 @@ function agyExportKit() {
             const view = (el.ownerDocument && el.ownerDocument.defaultView) || (typeof window !== "undefined" ? window : null);
             const st = view && typeof view.getComputedStyle === "function" ? view.getComputedStyle(el) : null;
             if (st && (st.display === "none" || st.visibility === "hidden")) return true;
-        } catch (_) {}
+        } catch (_) { /* style illisible (élément détaché ou d'un autre document) : jugé visible, rien n'est perdu */ }
         return false;
     }
     // Mémo par export (score et bruit sont recalculés pour chaque ancêtre de chaque paragraphe sinon).
@@ -544,7 +544,7 @@ function agyExportKit() {
     function jsonLd(doc) {
         const out = [];
         let scripts = [];
-        try { scripts = Array.from(doc.querySelectorAll("script")); } catch (_) {}
+        try { scripts = Array.from(doc.querySelectorAll("script")); } catch (_) { /* document non interrogeable : aucun bloc JSON-LD */ }
         for (const s of scripts) {
             if (!/ld\+json/i.test(attr(s, "type") || "")) continue;
             try {
@@ -556,7 +556,7 @@ function agyExportKit() {
                     if (Array.isArray(item["@graph"])) stack.push(...item["@graph"]);
                     out.push(item);
                 }
-            } catch (_) {}
+            } catch (_) { /* bloc JSON-LD invalide sur la page : ignoré, les autres sont gardés */ }
         }
         return out;
     }
@@ -575,7 +575,7 @@ function agyExportKit() {
     function metadata(doc, mainRoot) {
         const metas = {};
         let list = [];
-        try { list = Array.from(doc.querySelectorAll("meta")); } catch (_) {}
+        try { list = Array.from(doc.querySelectorAll("meta")); } catch (_) { /* document non interrogeable : aucune méta */ }
         for (const m of list) {
             const key = String(attr(m, "property") || attr(m, "name") || attr(m, "itemprop") || attr(m, "http-equiv") || "").toLowerCase();
             const content = attr(m, "content");
@@ -588,7 +588,7 @@ function agyExportKit() {
             for (const l of Array.from(doc.querySelectorAll("link"))) {
                 if (String(attr(l, "rel") || "").toLowerCase() === "canonical" && attr(l, "href")) { canonical = attr(l, "href"); break; }
             }
-        } catch (_) {}
+        } catch (_) { /* liens non interrogeables : pas d'adresse canonique */ }
         const inRoot = mainRoot ? descendants(mainRoot) : [];
         const firstH1 = inRoot.find(e => tagOf(e) === "H1") || descendants(doc.documentElement || doc.body || mainRoot).find(e => tagOf(e) === "H1");
         let author = metas["author"] || metas["article:author"] || metas["parsely-author"] || metas["dc.creator"] || personName(article.author) || "";
@@ -757,7 +757,7 @@ function agyExportKit() {
     function filenameFrom(disposition) {
         const d = String(disposition || "");
         let m = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(d);
-        if (m) { try { return decodeURIComponent(m[1].trim().replace(/^"|"$/g, "")); } catch (_) {} }
+        if (m) { try { return decodeURIComponent(m[1].trim().replace(/^"|"$/g, "")); } catch (_) { /* encodage %XX invalide : repli sur filename= */ } }
         m = /filename\s*=\s*"([^"]*)"/.exec(d) || /filename\s*=\s*([^;]+)/.exec(d);
         return m ? m[1].trim() : null;
     }
@@ -969,11 +969,11 @@ function agyExportKit() {
             // YouTube's player element exposes its own API (getPlayerResponse, getOption, setOption, loadModule...).
             const player = /** @type {any} */ (typeof document !== "undefined" && document.getElementById ? document.getElementById("movie_player") : null);
             if (player && typeof player.getPlayerResponse === "function") candidates.push(player.getPlayerResponse());
-        } catch (_) {}
+        } catch (_) { /* lecteur YouTube absent ou en cours de chargement : source suivante */ }
         try {
             const page = /** @type {any} */ (typeof window !== "undefined" ? window : null);
             if (page && page.ytInitialPlayerResponse) candidates.push(page.ytInitialPlayerResponse);
-        } catch (_) {}
+        } catch (_) { /* variable de la page inaccessible : aucune réponse du lecteur de plus */ }
         return candidates.find(pr => pr && pr.videoDetails && pr.videoDetails.videoId === videoId) || null;
     }
     function trackUrl(baseUrl, fmt, track, tlang) {
@@ -1037,12 +1037,12 @@ function agyExportKit() {
             const player = /** @type {any} */ (typeof document !== "undefined" && document.getElementById ? document.getElementById("movie_player") : null);
             if (!entries.length && spec.enableCaptions !== false && player && typeof player.setOption === "function") {
                 let before = null;
-                try { before = typeof player.getOption === "function" ? player.getOption("captions", "track") : null; } catch (_) {}
+                try { before = typeof player.getOption === "function" ? player.getOption("captions", "track") : null; } catch (_) { /* piste en cours illisible : rien à rétablir après la lecture */ }
                 try {
                     if (typeof player.loadModule === "function") player.loadModule("captions");
                     player.setOption("captions", "track", { languageCode: track.languageCode, ...(track.kind ? { kind: track.kind } : {}) });
                     captionsToggled = true;
-                } catch (_) {}
+                } catch (_) { /* sous-titres non activables par le lecteur : les autres sources sont essayées ensuite */ }
                 const deadline = Date.now() + Math.min(6000, timeoutMs);
                 while (captionsToggled && !entries.length && Date.now() < deadline) {
                     await sleep(250);
@@ -1053,7 +1053,7 @@ function agyExportKit() {
                         if (before && before.languageCode) player.setOption("captions", "track", before);
                         else if (typeof player.unloadModule === "function") player.unloadModule("captions");
                     }
-                } catch (_) {}
+                } catch (_) { /* lecteur déjà déchargé ou remplacé : sa piste d'origine ne peut plus être rétablie */ }
             }
             if (entries.length) {
                 let signed = entries[entries.length - 1];

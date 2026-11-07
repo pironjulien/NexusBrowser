@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.23] - 2026-11-07
+
 ### Added
 - `NexusBrowser.exe --stdio-relay [--url <service>] [--product <name>]`: relays JSON-RPC lines from stdin to the shared
   local service (MCP Streamable HTTP, token `NEXUS_MCP_TOKEN` or `~\.nexus\mcp-token.txt`) and writes every reply,
@@ -16,28 +18,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `test.ps1` (so by the Tests and Release workflows), Dependabot follows them. Development only: nothing ships.
 
 ### Changed
-- Antigravity Marketplace plugin: `plugin/antigravity/scripts/start.cmd` runs the installed engine (the newest build
-  in `%LOCALAPPDATA%\NexusBrowser\versions`) with `--stdio-relay`, instead of `scripts/bridge.ps1`, which started
-  `powershell.exe` and compiled the same relay in C# (`Add-Type`) at every start. Same relay; without an installed
-  engine the launcher now ends at once with the install hint on stderr.
+- Antigravity Marketplace plugin: `plugin/antigravity/scripts/start.cmd` runs the installed engine with
+  `--stdio-relay`, instead of `scripts/bridge.ps1`, which started `powershell.exe` and compiled the same relay in C#
+  (`Add-Type`) at every start. The engine is the one `%LOCALAPPDATA%\NexusBrowser\current.json` names, as for the
+  installer's own scripts (`Get-CurrentExe`), never the newest folder of `versions` (a build not verified yet, or the
+  one a rollback left); its folder is built from the fingerprint, so a non-ASCII user profile works. Same relay;
+  without an installed engine the launcher ends at once with the install hint on stderr.
 - Extension service worker: the 94 empty `catch` blocks either trace the failure at debug level (`swallowed()`,
   DevTools "Verbose") or, in code serialized into pages, say why it is harmless. The type check's findings are fixed
   (CDP results typed, `Object.assign` for flagged errors, explicit casts for YouTube's player API); no behaviour
   change.
+- Chrome extension 2.35.23: the 32 empty `catch` blocks left in its other scripts are handled the same way: traced at
+  debug level in the extension's own pages and its link to the bridge (`popup.js`, `pair.js`, `bridge_link.js`, whose
+  signed-send failures are no longer silent either), explained in code run inside pages (`content_script.js`,
+  `export_kit.js`, `locator_kit.js`), which writes nothing to a page's console. No behaviour change. Not sent to the
+  Chrome Web Store yet.
 - CodeQL runs from `.github/workflows/codeql.yml` (actions pinned by commit SHA, read-only token plus
   `security-events: write`) instead of the default setup: same languages (GitHub Actions, C#, JavaScript and
   TypeScript) and default queries, now credited by OpenSSF Scorecard's SAST check.
 - SkiaSharp 4.154.0; `devtools-protocol` 0.0.1732152 (type check only).
-
-### Fixed
-- Dependabot's NuGet updates: `Directory.Build.props` takes the user profile from .NET instead of `$(USERPROFILE)`,
-  unset on Dependabot's Linux runner (restore denied at `/.nexus`), and joins paths with .NET.
-- `packages.lock.json` no longer shows as modified after every restore on Windows: checked out with CRLF, the line
-  ending NuGet writes (`.gitattributes`), still stored with LF.
-- MCP `initialize` answers with a protocol version the server supports (2024-11-05, 2025-03-26, 2025-06-18,
-  2025-11-25): an unknown requested version gets the latest supported one instead of being echoed back.
-
-### Changed
 - Code analysis enforced: .NET `latest-recommended` rules with warnings as errors (`Directory.Build.props`), the few
   rules turned off listed with their reason in `.editorconfig`. Fixed on the way: culture-invariant HTTP headers and
   frame MAC sequence numbers, ordinal suffix checks, an explicit `CancellationToken.None` where an accepted HTTP
@@ -47,6 +46,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   (`Microsoft.NET.Test.Sdk`, `xunit.runner.visualstudio`) are gone, xUnit runs on Microsoft.Testing.Platform only.
   `xunit.v3` 4.0.2, `FsCheck` 3.6.0.
 - Release workflow on NexusSystem's shared workflows v1.6.54 (pinned by commit SHA).
+
+### Fixed
+- Dependabot's NuGet updates: `Directory.Build.props` takes the user profile from .NET instead of `$(USERPROFILE)`,
+  unset on Dependabot's Linux runner (restore denied at `/.nexus`), and joins paths with .NET.
+- `packages.lock.json` no longer shows as modified after every restore on Windows: checked out with CRLF, the line
+  ending NuGet writes (`.gitattributes`), still stored with LF.
+- MCP `initialize` answers with a protocol version the server supports (2024-11-05, 2025-03-26, 2025-06-18,
+  2025-11-25): an unknown requested version gets the latest supported one instead of being echoed back.
 
 ## [2.35.22] - 2026-11-06
 

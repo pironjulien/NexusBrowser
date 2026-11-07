@@ -46,10 +46,10 @@ function agyLocatorKit(install) {
     function sensitiveField(el) {
         if (!el || typeof el !== "object") return false;
         let type = "";
-        try { type = String(el.type || attr(el, "type") || "").toLowerCase(); } catch (_) {}
+        try { type = String(el.type || attr(el, "type") || "").toLowerCase(); } catch (_) { /* élément détaché ou propriété piégée par la page : pas de type */ }
         if (type === "password") return true;
         let auto = "";
-        try { auto = String(attr(el, "autocomplete") || el.autocomplete || ""); } catch (_) {}
+        try { auto = String(attr(el, "autocomplete") || el.autocomplete || ""); } catch (_) { /* élément détaché ou propriété piégée par la page : pas d'autocomplete */ }
         if (auto.toLowerCase().split(/\s+/).some(t => SENSITIVE_AUTOCOMPLETE.has(t))) return true;
         const tag = tagOf(el);
         if (tag && tag !== "INPUT" && tag !== "TEXTAREA") return false;
@@ -82,7 +82,7 @@ function agyLocatorKit(install) {
         const raw = String(value === undefined || value === null ? "" : value);
         const m = /^\/(.+)\/([dgimsuy]*)$/.exec(raw);
         if (m) {
-            try { return { re: new RegExp(m[1], m[2].replace(/[gy]/g, "")) }; } catch (_) {}
+            try { return { re: new RegExp(m[1], m[2].replace(/[gy]/g, "")) }; } catch (_) { /* expression invalide : comparée comme texte */ }
         }
         return { text: norm(raw), exact: !!exact };
     }
@@ -251,7 +251,7 @@ function agyLocatorKit(install) {
         const out = [];
         try {
             if (el.labels && el.labels.length !== undefined) for (const l of Array.from(el.labels)) out.push(l);
-        } catch (_) {}
+        } catch (_) { /* labels illisibles (élément détaché) : recherche par for= ci-dessous */ }
         if (!out.length) {
             // Repli (labels absent) : <label for=id> du même arbre, puis <label> englobant.
             const id = attr(el, "id");
@@ -260,7 +260,7 @@ function agyLocatorKit(install) {
                     const root = el.getRootNode ? el.getRootNode() : el.ownerDocument;
                     const all = root && root.querySelectorAll ? Array.from(root.querySelectorAll("label")) : [];
                     for (const l of all) if (attr(l, "for") === id) out.push(l);
-                } catch (_) {}
+                } catch (_) { /* racine non interrogeable : pas de label par for= */ }
             }
             for (let n = up(el); n; n = up(n)) if (tagOf(n) === "LABEL") { if (!out.includes(n)) out.push(n); break; }
         }
@@ -359,13 +359,13 @@ function agyLocatorKit(install) {
             if (!root || !root.querySelectorAll || seen.has(root)) return;
             seen.add(root);
             let list = [];
-            try { list = Array.from(root.querySelectorAll("*")); } catch (_) {}
+            try { list = Array.from(root.querySelectorAll("*")); } catch (_) { /* racine non interrogeable (détachée ou d'un autre document) : aucun élément */ }
             for (const el of list) {
                 visit(el, frame);
                 if (el.shadowRoot) each(el.shadowRoot, frame);
                 if (tagOf(el) === "IFRAME" || tagOf(el) === "FRAME") {
                     let inner = null;
-                    try { inner = el.contentDocument; } catch (_) {}
+                    try { inner = el.contentDocument; } catch (_) { /* cadre d'une autre origine : document illisible, ignoré */ }
                     if (inner) each(inner, (frame ? frame + " > " : "") + frameLabel(el));
                 }
             }
@@ -377,7 +377,7 @@ function agyLocatorKit(install) {
         let d = el.ownerDocument;
         for (let i = 0; d && i < 32; i++) {
             let fe = null;
-            try { fe = d.defaultView && d.defaultView.frameElement; } catch (_) {}
+            try { fe = d.defaultView && d.defaultView.frameElement; } catch (_) { /* cadre parent d'une autre origine : chemin arrêté ici */ }
             if (!fe) break;
             parts.unshift(frameLabel(fe));
             d = fe.ownerDocument;
@@ -414,7 +414,7 @@ function agyLocatorKit(install) {
             if (el.shadowRoot) for (const c of Array.from(el.shadowRoot.children || [])) if (visit(c, frame)) childHit = true;
             if (tagOf(el) === "IFRAME" || tagOf(el) === "FRAME") {
                 let inner = null;
-                try { inner = el.contentDocument; } catch (_) {}
+                try { inner = el.contentDocument; } catch (_) { /* cadre d'une autre origine : document illisible, ignoré */ }
                 if (inner && inner.body) visit(inner.body, (frame ? frame + " > " : "") + frameLabel(el));
                 return false;
             }
@@ -533,7 +533,7 @@ function agyLocatorKit(install) {
         try {
             const r = el.getBoundingClientRect();
             box = { x: round(r.left !== undefined ? r.left : r.x), y: round(r.top !== undefined ? r.top : r.y), width: round(r.width), height: round(r.height) };
-        } catch (_) {}
+        } catch (_) { /* boîte non mesurable (élément détaché) : sans boîte */ }
         const role = m.role || roleOf(el);
         const name = m.name !== null && m.name !== undefined ? m.name : accessibleName(el);
         const out = {
@@ -580,6 +580,6 @@ function agyLocatorKit(install) {
         collect, query, describe, frameOfEl, walk, contentText, sensitiveField, sensitiveName, MASKED_VALUE };
     // install=true (repli chrome.scripting sans débogueur) : rangé dans la page, renvoie true (sérialisable).
     if (!install) return api;
-    try { (typeof window !== "undefined" ? window : globalThis).__nexusBrowserLocatorKit = api; } catch (_) {}
+    try { (typeof window !== "undefined" ? window : globalThis).__nexusBrowserLocatorKit = api; } catch (_) { /* fenêtre figée par la page : kit non rangé, l'appelant le voit absent (null) */ }
     return true;
 }

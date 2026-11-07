@@ -226,21 +226,43 @@ public sealed class StdioRelayProcessTests : IDisposable
 
     private static string Comspec => Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe";
 
-    [Fact]
-    public async Task LauncherRunsTheNewestInstalledEngineWhichRelaysStdioToTheService()
+    // current.json as install-native.ps1 writes it (ConvertTo-Json of a hashtable): Windows PowerShell puts two spaces
+    // after the colon, pwsh one; the key order is not fixed.
+    private static void WriteCurrentJson(string root, string fingerprint, bool windowsPowerShell)
     {
-        // Installed layout: versions\<build>\NexusBrowser.exe. The test build is linked in as the newest build; an older
-        // build without the engine and a newer folder still being copied (.tmp-<pid>) are skipped.
-        string versions = Directory.CreateDirectory(_dir[Path.Join("local", "NexusBrowser", "versions")]).FullName;
-        Directory.CreateDirectory(Path.Join(versions, "0000000000000000"));
+        string exe = Path.Join(root, "versions", fingerprint[..16], "NexusBrowser.exe").Replace(@"\", @"\\", StringComparison.Ordinal);
+        string json = windowsPowerShell
+            ? $"{{\r\n    \"exe\":  \"{exe}\",\r\n    \"fingerprint\":  \"{fingerprint}\",\r\n    \"version\":  \"9.9.9\"\r\n}}"
+            : $"{{\n  \"version\": \"9.9.9\",\n  \"fingerprint\": \"{fingerprint}\",\n  \"exe\": \"{exe}\"\n}}";
+        File.WriteAllText(Path.Join(root, "current.json"), json);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LauncherRunsTheEngineCurrentJsonNamesWhichRelaysStdioToTheService(bool windowsPowerShell)
+    {
+        // Installed layout: versions\<build>\NexusBrowser.exe, the build in use named by current.json (the test build,
+        // linked in). A newer build folder (not verified yet, or the one a rollback left) and a folder still being copied
+        // (.tmp-<pid>) are never run; the profile path has a non-ASCII character.
+        string local = _dir[$"lócal-{windowsPowerShell}"];
+        string root = Path.Join(local, "NexusBrowser");
+        string versions = Directory.CreateDirectory(Path.Join(root, "versions")).FullName;
         string junction = Path.Join(versions, "abcdef0123456789");
         var link = await ChildProcess.RunAsync(Comspec, ["/d", "/c", "mklink", "/J", junction, AppContext.BaseDirectory]);
         Assert.True(link.Code == 0, link.Stdout + link.Stderr);
-        try { await RelayThroughLauncherAsync(versions); }
+        try
+        {
+            WriteCurrentJson(root, "abcdef0123456789" + new string('0', 48), windowsPowerShell);
+            Directory.CreateDirectory(Path.Join(versions, "ffffffffffffffff"));
+            File.WriteAllText(Path.Join(versions, "ffffffffffffffff", "NexusBrowser.exe"), "newer build, not the one in use");
+            Directory.SetLastWriteTimeUtc(Path.Join(versions, "ffffffffffffffff"), DateTime.UtcNow.AddHours(1));
+            await RelayThroughLauncherAsync(local, versions);
+        }
         finally { Directory.Delete(junction); } // the link only, never the test build behind it
     }
 
-    private static async Task RelayThroughLauncherAsync(string versions)
+    private static async Task RelayThroughLauncherAsync(string local, string versions)
     {
         using var service = new TinyService();
         Directory.CreateDirectory(Path.Join(versions, "fedcba9876543210.tmp-42"));
@@ -248,7 +270,7 @@ public sealed class StdioRelayProcessTests : IDisposable
 
         var (code, stdout, stderr) = await ChildProcess.RunAsync(Comspec,
             ["/d", "/c", Launcher, "--stdio-relay", "--url", $"http://127.0.0.1:{service.Port}/mcp?agent=antigravity", "--product", "NexusBrowser"],
-            Env(Path.GetDirectoryName(Path.GetDirectoryName(versions))!), stdin: "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
+            Env(local), stdin: "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
             timeoutSeconds: 60);
 
         Assert.True(code == 0, $"exit {code}; stderr={stderr}");
@@ -261,11 +283,20 @@ public sealed class StdioRelayProcessTests : IDisposable
         Assert.Contains(requests, r => r.StartsWith("DELETE /mcp?agent=antigravity", StringComparison.Ordinal) && r.Contains("Mcp-Session-Id: proc-1", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task LauncherWithoutAnInstalledEngineSaysHowToInstallIt()
+    [Theory]
+    [InlineData("none")]
+    [InlineData("missing build")]
+    public async Task LauncherWithoutTheEngineCurrentJsonNamesSaysHowToInstallIt(string current)
     {
-        Directory.CreateDirectory(_dir[Path.Join("empty", "NexusBrowser", "versions", "0123456789abcdef.tmp-7")]);
-        var (code, stdout, stderr) = await ChildProcess.RunAsync(Comspec, ["/d", "/c", Launcher, "--stdio-relay"], Env(_dir["empty"]), stdin: "");
+        // Build folders on disk without current.json naming one of them (none, or a build since removed): nothing is run,
+        // not even the newest folder, and the install hint is given.
+        string local = _dir[$"empty-{current}"];
+        string root = Path.Join(local, "NexusBrowser");
+        Directory.CreateDirectory(Path.Join(root, "versions", "0123456789abcdef.tmp-7"));
+        Directory.CreateDirectory(Path.Join(root, "versions", "fedcba9876543210"));
+        File.WriteAllText(Path.Join(root, "versions", "fedcba9876543210", "NexusBrowser.exe"), "build not named by current.json");
+        if (current == "missing build") WriteCurrentJson(root, "0011223344556677" + new string('0', 48), windowsPowerShell: true);
+        var (code, stdout, stderr) = await ChildProcess.RunAsync(Comspec, ["/d", "/c", Launcher, "--stdio-relay"], Env(local), stdin: "");
         Assert.Equal(1, code);
         Assert.Equal("", stdout);
         Assert.StartsWith("NexusBrowser is not installed on this PC. Ask Antigravity to install it (see the nexus-browser skill)", stderr, StringComparison.Ordinal);
