@@ -213,7 +213,10 @@ public sealed partial class EngineProcessesTests : IDisposable
 
         string output = _dir["medium.json"];
         int code = MediumIntegrity.Run($"\"{NativeExe.Path}\" --engine-processes --bridge-port {bridgePort} --daemon-port {daemonPort}", output);
-        string text = File.ReadAllText(output);
+        // Read with write sharing: a process started meanwhile by a parallel test may still hold an inherited handle.
+        string text;
+        using (var reader = new StreamReader(new FileStream(output, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)))
+            text = reader.ReadToEnd();
         Assert.True(code == 0, text);
         var entry = Entry(JsonNode.Parse(text)!.AsObject(), bridge.Process.Id) ?? throw new Xunit.Sdk.XunitException($"elevated bridge not listed: {text}");
         Assert.Equal("bridge", (string?)entry["role"]);
@@ -302,7 +305,10 @@ public sealed partial class EngineProcessesTests : IDisposable
                 nint handle = output.SafeFileHandle.DangerousGetHandle();
                 var startup = new StartupInfo { cb = Marshal.SizeOf<StartupInfo>(), dwFlags = (int)StartfUseStdHandles, hStdOutput = handle, hStdError = handle };
                 char[] buffer = (commandLine + '\0').ToCharArray();
-                if (!CreateProcessAsUser(token, null, ref buffer[0], 0, 0, true, CreateNoWindow, 0, null, ref startup, out var info)) throw new Win32Exception();
+                bool started = CreateProcessAsUser(token, null, ref buffer[0], 0, 0, true, CreateNoWindow, 0, null, ref startup, out var info);
+                int error = Marshal.GetLastPInvokeError();
+                SetHandleInformation(output.SafeFileHandle, HandleFlagInherit, 0);  // inherited by this child only, as far as possible
+                if (!started) throw new Win32Exception(error);
                 try
                 {
                     if (WaitForSingleObject(info.hProcess, 60_000) != 0) throw new TimeoutException("medium-integrity reader did not exit");
