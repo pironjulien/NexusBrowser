@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.24] - 2026-11-07
+
+### Fixed
+- `get.ps1` no longer fails with "being used by another process" when a scanner briefly opens the freshly copied
+  engine while `app.next` is switched to `app` (seen with NexusAGYmail in NexusSystem's pack job on a fresh Windows
+  runner). A switch held by such an external, transient scan (sharing, lock or access violation while `app.next` is
+  still there and `app` is not) is waited out for at most 10 s; any other error still fails, and an update that cannot
+  switch puts the previous version back in `app` before reporting the error.
+
 ## [2.35.23] - 2026-11-07
 
 ### Added

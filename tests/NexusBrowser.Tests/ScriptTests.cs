@@ -403,6 +403,62 @@ public sealed class ScriptTests : IDisposable
         Assert.Equal(["app", "update.lock"], Directory.EnumerateFileSystemEntries(root).Select(Path.GetFileName).Order());
     }
 
+    [Theory]
+    [InlineData(Shells.WindowsPowerShell)]
+    [InlineData(Shells.Pwsh)]
+    public async Task AScannerBrieflyHoldingTheFreshEngineDoesNotFailTheSwitch(string shell)
+    {
+        // What an antivirus does to a freshly written executable: opens it for a moment (every sharing mode allowed),
+        // which blocks renaming its folder. get.ps1 waits that hold out on app.next -> app instead of failing ("being
+        // used by another process", seen with NexusAGYmail in NexusSystem's pack job on a fresh Windows runner).
+        string zip = FakeRelease("scanned-release");
+        string root = _dir["scanned-install"];
+        Directory.CreateDirectory(root);
+        string? held = null;
+        bool stagedWhileHeld = false;
+        using var released = new ManualResetEventSlim();
+        using var watcher = new FileSystemWatcher(root, "NexusBrowser.exe") { IncludeSubdirectories = true };
+        var scanner = new Thread(() =>
+        {
+            string path = "";
+            var deadline = DateTime.UtcNow.AddSeconds(90);
+            while (path.Length == 0 && DateTime.UtcNow < deadline)
+            {
+                var change = watcher.WaitForChanged(WatcherChangeTypes.Created, 5_000);
+                if (!change.TimedOut && change.Name is { } name && name.StartsWith("app.next", StringComparison.OrdinalIgnoreCase))
+                    path = Path.Join(root, name);
+            }
+            for (int i = 0; i < 400 && held is null && path.Length > 0; i++)
+            {
+                try
+                {
+                    using var scan = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    held = path;
+                    Thread.Sleep(2_000);
+                    stagedWhileHeld = File.Exists(path);
+                }
+                catch (IOException) { Thread.Sleep(5); }  // still being copied
+            }
+            released.Set();
+        }) { IsBackground = true };
+        watcher.EnableRaisingEvents = true;
+        scanner.Start();
+
+        var (code, stdout, stderr) = await Shells.FileAsync(shell, Repo.File("get.ps1"), env: new Dictionary<string, string?>
+        {
+            ["NEXUS_BROWSER_SOURCE"] = zip,
+            ["NEXUS_BROWSER_ROOT"] = root,
+        }, timeoutSeconds: 90);
+        Assert.True(released.Wait(90_000, TestContext.Current.CancellationToken));
+        Assert.True(code == 0, stdout + stderr);
+        Assert.NotNull(held);
+        Assert.Contains("app.next", held, StringComparison.OrdinalIgnoreCase);
+        Assert.True(stagedWhileHeld, "the hold must have overlapped app.next");
+        Assert.Contains($"NexusBrowser {BridgeSecurity.Version} unpacked in", stdout);
+        Assert.True(File.Exists(Path.Join(root, "app", "engine", "NexusBrowser.exe")));
+        Assert.False(Directory.Exists(Path.Join(root, "app.next")));
+    }
+
     [Fact]
     public async Task WindowsPowerShellInstallerRepairsInheritedCoreModulePrecedence()
     {

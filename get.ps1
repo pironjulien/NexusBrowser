@@ -121,6 +121,26 @@ function Get-CachedPayloadFingerprint([string]$Path) {
     finally { $sha.Dispose() }
 }
 
+function Move-StagedFolder([string]$From, [string]$To) {
+    # A folder cannot be renamed while any file inside it is open, whoever holds it. This installer never runs or keeps
+    # open anything in app.next, but antivirus and indexing services open freshly written executables for a moment to
+    # scan them, which makes the rename fail with "being used by another process" (seen with NexusAGYmail on a fresh
+    # GitHub Windows runner). Only that external, transient hold (sharing, lock or access violation while app.next is
+    # still there and app is not) is waited out, at most 10 s; any other error, or a longer hold, fails.
+    $transient = 0x80070020, 0x80070021, 0x80070005  # ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION, ERROR_ACCESS_DENIED
+    for ($attempt = 1; ; $attempt++) {
+        try { [IO.Directory]::Move($From, $To); return }
+        catch {
+            $failure = $_.Exception
+            while ($failure.InnerException -and $failure -is [Management.Automation.MethodInvocationException]) { $failure = $failure.InnerException }
+            $held = ($failure -is [IO.IOException] -or $failure -is [UnauthorizedAccessException]) -and
+                ($transient -contains $failure.HResult) -and (Test-Path -LiteralPath $From) -and -not (Test-Path -LiteralPath $To)
+            if (-not $held -or $attempt -ge 40) { throw "Cannot move $From to $($To): $($failure.Message)" }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+}
+
 $download = Join-Path $root 'download'
 if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Recurse -Force }
 New-Item -ItemType Directory -Force $download | Out-Null
@@ -201,7 +221,7 @@ Remove-Item -LiteralPath $download -Recurse -Force
 
 if ($sandbox) {
     if (Test-Path -LiteralPath $app) { Remove-Item -LiteralPath $app -Recurse -Force }
-    Rename-Item -LiteralPath $next -NewName 'app'
+    Move-StagedFolder $next $app
     $engine = Join-Path $app 'engine\NexusBrowser.exe'
     $answer = (& $engine --version | Out-String).Trim()
     $expectedVersion = (Get-Content (Join-Path $app 'VERSION') -Raw).Trim()
@@ -227,7 +247,14 @@ if ($hadApp) {
         throw "The folder $app is in use ($($_.Exception.Message)): nothing was changed. Close what uses it and try again."
     }
 }
-Rename-Item -LiteralPath $next -NewName 'app'
+try {
+    Move-StagedFolder $next $app
+} catch {
+    # The previous version goes back in place: a failed switch changes nothing.
+    if ($hadApp -and -not (Test-Path -LiteralPath $app)) { Rename-Item -LiteralPath $previous -NewName 'app' }
+    Remove-Item -LiteralPath $next -Recurse -Force -ErrorAction SilentlyContinue
+    throw
+}
 
 $installArgs = @('-SkipTests')
 if ($UpdateOnly) { $installArgs += '-UpdateOnly' } else { $installArgs += '-Register' }
