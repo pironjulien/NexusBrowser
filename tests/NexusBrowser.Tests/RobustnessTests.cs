@@ -349,6 +349,38 @@ public sealed partial class RobustnessTests : IDisposable
         Assert.Null(BridgeSecurity.UploadRefusal([Path.Join(build, "x", "paquet.msixupload")]));
     }
 
+    // Bug found by review: a hard link keeps a real path of its own, so a hard link placed in ~\.nexus\build to
+    // ~\.nexus\mcp-token.txt resolved under build and was uploadable. A build file with several names is refused.
+    [Fact]
+    public void AHardLinkInTheNexusBuildFolderToASecretIsRefused()
+    {
+        string nexus = Path.Join(TestEnvironment.Home, ".nexus"), build = Path.Join(nexus, "build");
+        Directory.CreateDirectory(build);
+        string token = Path.Join(nexus, "mcp-token.txt");
+        bool ownToken = !File.Exists(token);
+        if (ownToken) File.WriteAllText(token, "token");
+        string link = Path.Join(build, "h-" + Guid.NewGuid().ToString("N")[..8] + ".txt");
+        string plain = Path.Join(build, "p-" + Guid.NewGuid().ToString("N")[..8] + ".msixupload");
+        File.WriteAllText(plain, "package");
+        try
+        {
+            if (!CreateHardLink(link, token, IntPtr.Zero))
+                throw new IOException($"CreateHardLink failed ({Marshal.GetLastWin32Error()})");
+            Assert.NotNull(BridgeSecurity.UploadRefusal([link]));
+            Assert.Throws<UnauthorizedAccessException>(() => BridgeSecurity.PrepareUploadFiles(new JsonArray(link)));
+            Assert.True(BridgeSecurity.UploadRefusal([plain]) is null, BridgeSecurity.UploadRefusal([plain]));
+        }
+        finally
+        {
+            File.Delete(link);
+            File.Delete(plain);
+            if (ownToken) File.Delete(token);
+        }
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateHardLink(string link, string existing, IntPtr security);
+
     private static readonly string[] Runnable = [".exe", ".ps1", ".lnk", ".bat", ".cmd", ".js", ".hta", ".url"];
 
     [Fact]

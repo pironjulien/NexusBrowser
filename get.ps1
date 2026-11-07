@@ -221,6 +221,16 @@ Remove-Item -LiteralPath $download -Recurse -Force
 
 if ($sandbox) {
     if (Test-Path -LiteralPath $app) { Remove-Item -LiteralPath $app -Recurse -Force }
+    # Tests only (test folder): NEXUS_BROWSER_STAGED_SIGNAL names a file written once app.next is complete; the switch
+    # then waits, at most 60 s, until the test removes it, so a simulated scanner holds app.next before the rename for
+    # certain instead of racing it (a file watcher missed app.next once in 90 s).
+    if ($env:NEXUS_BROWSER_STAGED_SIGNAL) {
+        $signal = $env:NEXUS_BROWSER_STAGED_SIGNAL
+        [IO.File]::WriteAllText($signal, $next)
+        $until = [DateTime]::UtcNow.AddSeconds(60)
+        while ((Test-Path -LiteralPath $signal) -and [DateTime]::UtcNow -lt $until) { Start-Sleep -Milliseconds 20 }
+        if (Test-Path -LiteralPath $signal) { throw "NEXUS_BROWSER_STAGED_SIGNAL: $signal was not taken within 60 s." }
+    }
     Move-StagedFolder $next $app
     $engine = Join-Path $app 'engine\NexusBrowser.exe'
     $answer = (& $engine --version | Out-String).Trim()

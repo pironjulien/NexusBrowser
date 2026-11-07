@@ -471,6 +471,30 @@ public static partial class BridgeSecurity
         return path.StartsWith(@"\\?\", StringComparison.Ordinal) ? path[4..] : path;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ByHandleFileInformation
+    {
+        public uint FileAttributes;
+        public uint CreationLow, CreationHigh, AccessLow, AccessHigh, WriteLow, WriteHigh;  // FILETIME: 4-byte aligned
+        public uint VolumeSerialNumber, FileSizeHigh, FileSizeLow, NumberOfLinks, FileIndexHigh, FileIndexLow;
+    }
+
+    [LibraryImport("kernel32.dll", EntryPoint = "GetFileInformationByHandle", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle handle, out ByHandleFileInformation info);
+
+    // How many names the file has on its volume (NTFS hard links); null when Windows cannot open it (a missing file).
+    private static uint? LinkCount(string existing)
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return null;
+        const uint FILE_SHARE_ALL = 7, OPEN_EXISTING = 3, FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+        using var handle = CreateFile(existing, 0, FILE_SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero);
+        if (handle.IsInvalid || !GetFileInformationByHandle(handle, out var info))
+            return null;
+        return info.NumberOfLinks;
+    }
+
     private static string ResolveRealPath(string fullPath)
     {
         try
@@ -558,7 +582,9 @@ public static partial class BridgeSecurity
         // secrets: only the ~\.nexus root is lifted for it, after every junction and short name is resolved, so a link
         // inside build back to ~\.nexus\mcp-token.txt, or a build folder that is itself a link elsewhere, stays refused.
         // The real build folder must be exactly ~\.nexus\build: a build junction to ~\.nexus\nexus-browser or
-        // ~\.nexus\relay resolves under ~\.nexus too, and would otherwise lift a folder holding bridge-token.txt.
+        // ~\.nexus\relay resolves under ~\.nexus too, and would otherwise lift a folder holding bridge-token.
+        // A hard link has a real path of its own, so resolving names cannot see it: a file of ~\.nexus\build with more than
+        // one name may be ~\.nexus\mcp-token.txt or bridge-token under another name, and is refused.
         string? nexusKey = null, buildKey = null;
         try
         {
@@ -592,7 +618,12 @@ public static partial class BridgeSecurity
                 if (key == rootKey || key.StartsWith(rootKey + @"\", StringComparison.Ordinal))
                 {
                     if (buildKey is not null && rootKey == nexusKey && key.StartsWith(buildKey + @"\", StringComparison.Ordinal))
+                    {
+                        if (LinkCount(key) is > 1)
+                            return $"Upload refused: {item} is a hard link (a file with several names) under {rawRoot}, " +
+                                   "so it may be a secret of that folder under another name.";
                         continue;
+                    }
                     return $"Upload refused: {item} is in a secrets folder ({rawRoot}). " +
                            "No token, key, Chrome profile or agent configuration is ever sent to a web page.";
                 }

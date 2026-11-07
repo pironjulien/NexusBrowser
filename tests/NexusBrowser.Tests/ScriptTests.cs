@@ -414,42 +414,48 @@ public sealed class ScriptTests : IDisposable
         string zip = FakeRelease("scanned-release");
         string root = _dir["scanned-install"];
         Directory.CreateDirectory(root);
+        // get.ps1 writes the signal file once app.next is complete and waits for its removal before the rename: the hold
+        // is taken before the switch for certain (a FileSystemWatcher racing the copy missed app.next once in 90 s).
+        string signal = Path.Join(_dir["scanned-signal"], "staged.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(signal)!);
+        string path = Path.Join(root, "app.next", "engine", "NexusBrowser.exe");
         string? held = null;
         bool stagedWhileHeld = false;
+        Exception? failure = null;
         using var released = new ManualResetEventSlim();
-        using var watcher = new FileSystemWatcher(root, "NexusBrowser.exe") { IncludeSubdirectories = true };
         var scanner = new Thread(() =>
         {
-            string path = "";
-            var deadline = DateTime.UtcNow.AddSeconds(90);
-            while (path.Length == 0 && DateTime.UtcNow < deadline)
+            try
             {
-                var change = watcher.WaitForChanged(WatcherChangeTypes.Created, 5_000);
-                if (!change.TimedOut && change.Name is { } name && name.StartsWith("app.next", StringComparison.OrdinalIgnoreCase))
-                    path = Path.Join(root, name);
-            }
-            for (int i = 0; i < 400 && held is null && path.Length > 0; i++)
-            {
-                try
+                var deadline = DateTime.UtcNow.AddSeconds(90);
+                while (!File.Exists(signal) && DateTime.UtcNow < deadline)
+                    Thread.Sleep(10);
+                if (!File.Exists(signal))
+                    return;
+                using var scan = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                held = path;
+                // The script may still be closing the signal file it just wrote: removing it is retried briefly.
+                for (int i = 0; File.Exists(signal); i++)
                 {
-                    using var scan = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                    held = path;
-                    Thread.Sleep(2_000);
-                    stagedWhileHeld = File.Exists(path);
+                    try { File.Delete(signal); }
+                    catch (IOException) when (i < 200) { Thread.Sleep(10); }
                 }
-                catch (IOException) { Thread.Sleep(5); }  // still being copied
+                Thread.Sleep(2_000);
+                stagedWhileHeld = File.Exists(path);
             }
-            released.Set();
+            catch (Exception ex) { failure = ex; }
+            finally { released.Set(); }
         }) { IsBackground = true };
-        watcher.EnableRaisingEvents = true;
         scanner.Start();
 
         var (code, stdout, stderr) = await Shells.FileAsync(shell, Repo.File("get.ps1"), env: new Dictionary<string, string?>
         {
             ["NEXUS_BROWSER_SOURCE"] = zip,
             ["NEXUS_BROWSER_ROOT"] = root,
+            ["NEXUS_BROWSER_STAGED_SIGNAL"] = signal,
         }, timeoutSeconds: 90);
         Assert.True(released.Wait(90_000, TestContext.Current.CancellationToken));
+        Assert.Null(failure);
         Assert.True(code == 0, stdout + stderr);
         Assert.NotNull(held);
         Assert.Contains("app.next", held, StringComparison.OrdinalIgnoreCase);

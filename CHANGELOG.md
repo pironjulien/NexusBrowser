@@ -16,6 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The `~\.nexus\build` exception applies only when the real folder is exactly `~\.nexus\build` and `build` is not
   itself a junction or other reparse point: a `build` junction to `~\.nexus\nexus-browser` or `~\.nexus\relay`
   resolved under `~\.nexus` too and made the bridge token uploadable.
+- A file of `~\.nexus\build` with more than one name on the disk (NTFS hard link) is refused: a hard link keeps a real
+  path of its own under `build`, so one made to `~\.nexus\mcp-token.txt` or the bridge token passed the exception.
+- `get.ps1`, test folder only (`NEXUS_BROWSER_ROOT`): `NEXUS_BROWSER_STAGED_SIGNAL` names a file written once
+  `app.next` is complete, and the switch waits for its removal, so the test of a scanner holding the fresh engine no
+  longer races the copy with a file watcher (it missed `app.next` once in 90 s).
 
 ## [2.35.24] - 2026-11-07
 
