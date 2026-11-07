@@ -1,5 +1,5 @@
-# État de NexusBrowser sur ce PC : tâche du pont, hôte natif, résidus de l'ancien pont, doublon Antigravity, ancienne
-# extension signalée ; -Browser : pont joint et extension chargée à jour (version et fonctions annoncées par ping).
+# State of NexusBrowser on this PC: bridge task, native host, leftovers of the old bridge, Antigravity duplicate, legacy
+# extension reported; -Browser: bridge reached and loaded extension up to date (version and features announced by ping).
 param([switch]$Browser)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'scripts\runtime.ps1')
@@ -34,16 +34,16 @@ try {
     if (Get-ScheduledTask -TaskName 'NexusAGY Browser Bridge' -ErrorAction SilentlyContinue) {
         throw 'Ancienne tâche « NexusAGY Browser Bridge » encore là (mêmes ports) : relancer install.ps1'
     }
-    & (Join-Path $PSScriptRoot 'scripts\installer-hote-natif.ps1') -CheckOnly -Exe $nativeExe
+    & (Join-Path $PSScriptRoot 'scripts\install-native-host.ps1') -CheckOnly -Exe $nativeExe
     foreach ($old in 'bridge-token', 'native-host\com.nexusagy.bridge_auth.json', 'native-host\nexusagy_bridge_auth.cmd') {
         $path = Join-Path $HOME ".nexusagy\$old"
         if (Test-Path -LiteralPath $path) { throw "Résidu de l'ancien pont encore présent ($path) : relancer install.ps1" }
     }
     # Antigravity : nexus-browser déclaré par son plugin seulement (sinon deux serveurs, outils en double).
-    & (Join-Path $PSScriptRoot 'scripts\doublon-antigravity.ps1') -ConfigPath (Join-Path $HOME '.gemini\config\mcp_config.json') -CheckOnly
+    & (Join-Path $PSScriptRoot 'scripts\antigravity-duplicate.ps1') -ConfigPath (Join-Path $HOME '.gemini\config\mcp_config.json') -CheckOnly
     if ($LASTEXITCODE) { throw 'Doublon nexus-browser chez Antigravity : relancer install.ps1 (Antigravity fermé)' }
     # Ancienne extension « Antigravity Browser Bridge » chargée dans Chrome (profil lu, jamais modifié) : signalée.
-    foreach ($line in @(& (Join-Path $PSScriptRoot 'scripts\ancienne-extension.ps1'))) {
+    foreach ($line in @(& (Join-Path $PSScriptRoot 'scripts\legacy-extension.ps1'))) {
         Write-Warning "Ancienne extension encore chargée ($line) : la retirer dans chrome://extensions (mêmes ports que le pont)."
     }
     if ($Browser) {

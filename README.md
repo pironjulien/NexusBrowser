@@ -394,7 +394,8 @@ Questions or concerns: open an issue on this repository, or see [SECURITY.md](SE
   only adds the accord, and tools of a cross-origin iframe are listed only when that frame exposes them to the top
   page (`exposedTo`), as the spec requires. Chrome's CDP `WebMCP` domain (used by Chrome DevTools MCP) is not used: it
   needs Chrome started with `--enable-features=DevToolsWebMCPSupport`.
-- Code comments are in French.
+- The extension's interface is in English, or in French when Chrome runs in French (`extension/_locales`). Script
+  headers are in English; older code comments are still partly in French and are translated as the code changes.
 
 ## 🧪 Development
 

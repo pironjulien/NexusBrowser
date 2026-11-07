@@ -11,6 +11,30 @@ const path = require('node:path');
 // Objets venus d'un autre contexte vm : comparés par valeur.
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
+// chrome.i18n of the extension's catalogs (_locales/<lang>/messages.json), substitutions as Chrome does them: $NAME$
+// placeholders whose content is $1..$9, "$$" for a literal "$". An unknown key fails the test (Chrome returns "").
+function catalog(lang) {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, `../extension/_locales/${lang}/messages.json`), 'utf8'));
+}
+function chromeI18n(lang = 'en') {
+    const messages = catalog(lang);
+    return {
+        getMessage(key, substitutions = []) {
+            const entry = messages[key];
+            if (!entry) throw new Error(`chrome.i18n: no message "${key}" in _locales/${lang}`);
+            const subs = [].concat(substitutions).map(String);
+            const placeholders = Object.fromEntries(Object.entries(entry.placeholders || {}).map(([name, p]) => [name.toLowerCase(), p.content]));
+            return entry.message.replace(/\$([A-Za-z0-9_@]+)\$|\$\$/g, (whole, name) => {
+                if (!name) return '$';
+                const content = placeholders[name.toLowerCase()];
+                if (content === undefined) throw new Error(`chrome.i18n: placeholder ${whole} undeclared in "${key}"`);
+                return content.replace(/\$([1-9])/g, (_, n) => subs[Number(n) - 1] ?? '');
+            });
+        },
+        getUILanguage: () => lang
+    };
+}
+
 function pathOf(node) {
     const out = [];
     for (let n = node, i = 0; n && i < 1000; n = n.parentNode || n.parentElement || n.host || null, i++) out.push(n);
@@ -280,6 +304,7 @@ function harness(pageOverrides = {}, chromeOverrides = {}) {
         management: chromeOverrides.management,
         runtime: {onStartup: {addListener(fn) { onStartup = fn; }}, onInstalled: event, onMessage: messageEvent, ...(chromeOverrides.runtime || {})},
         offscreen: {hasDocument: async () => true}, alarms: {create() {}, onAlarm: event},
+        i18n: chromeI18n('en'),
         tabGroups: {
             query: async () => [],
             update: async (id, p) => ({ id, ...p }),
@@ -5098,6 +5123,38 @@ test('aucun panneau latéral : ni permission sidePanel, ni page, ni raccourci ; 
     }
 });
 
+// Page of the extension run in a vm with its scripts (i18n.js first, as the HTML loads them): the elements the HTML
+// declares (id, data-i18n, data-i18n-aria-label), read from the file itself, and chrome.i18n of the given catalog.
+function extensionPage(file, scripts, lang, chromeApi) {
+    const dir = path.join(__dirname, '../extension');
+    const html = fs.readFileSync(path.join(dir, file), 'utf8');
+    const elements = {};
+    const element = (id) => (elements[id] ||= {id, hidden: false, textContent: '', className: '', children: [], checked: false,
+        value: '', dataset: {}, attributes: {}, listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; },
+        setAttribute(name, value) { this.attributes[name] = value; },
+        replaceChildren(...c) { this.children = c; }, append(...c) { this.children.push(...c); }});
+    const declared = [];
+    for (const tag of html.match(/<[a-z0-9]+\s[^>]*>/gi) || []) {
+        const attr = (name) => (tag.match(new RegExp(`\\s${name}="([^"]*)"`)) || [])[1];
+        const key = attr('data-i18n'), aria = attr('data-i18n-aria-label');
+        if (!key && !aria && !attr('id')) continue;
+        const el = element(attr('id') || `anon${declared.length}`);
+        if (key) el.dataset.i18n = key;
+        if (aria) el.dataset.i18nAriaLabel = aria;
+        declared.push(el);
+    }
+    const documentElement = {lang: (html.match(/<html lang="([^"]+)"/) || [])[1]};
+    const ctx = vm.createContext({
+        document: {documentElement, getElementById: element, createElement: () => element(`n${Object.keys(elements).length}`),
+            querySelectorAll: (selector) => declared.filter((el) => selector === '[data-i18n]' ? el.dataset.i18n : el.dataset.i18nAriaLabel)},
+        chrome: {i18n: chromeI18n(lang), ...chromeApi},
+        console, TextEncoder, TextDecoder, crypto: globalThis.crypto, setTimeout, clearTimeout,
+        location: {hash: '', pathname: `/${file}`}, history: {replaceState() {}}
+    });
+    for (const script of scripts) vm.runInContext(fs.readFileSync(path.join(dir, script), 'utf8'), ctx);
+    return {html, elements, documentElement};
+}
+
 test("fenêtre de l'icône : lecture seule (état du pont, groupes des agents) sauf la case du compteur Gmail, aucun script inline", async () => {
     const dir = path.join(__dirname, '../extension');
     const html = fs.readFileSync(path.join(dir, 'popup.html'), 'utf8');
@@ -5105,36 +5162,106 @@ test("fenêtre de l'icône : lecture seule (état du pont, groupes des agents) s
     // Scripts externes seulement : chaque balise <script> (toute casse) porte un src, aucun attribut on*= ni style=.
     const scriptTags = html.toLowerCase().split('<script').slice(1).map((rest) => rest.slice(0, rest.indexOf('>') + 1));
     assert.ok(scriptTags.length > 0 && scriptTags.every((tag) => /\ssrc=/.test(tag)), scriptTags.join(' '));
+    assert.deepEqual(scriptTags, [' src="i18n.js">', ' src="popup.js">']);
     assert.ok(!/on[a-z]+=|style=/i.test(html));
     assert.ok(!/executeAction|panelStop|innerHTML|fetch\(|WebSocket|debugger|scripting|tabs\.(update|remove|create)/.test(js));
-    const sent = [];
-    const elements = {};
-    const saved = [];
-    const element = (id) => (elements[id] ||= {id, hidden: false, textContent: '', className: '', children: [], checked: false,
-        listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; },
-        replaceChildren(...c) { this.children = c; }, append(...c) { this.children.push(...c); }});
-    const ctx = vm.createContext({
-        document: {getElementById: element, createElement: () => element(`n${Object.keys(elements).length}`)},
-        chrome: {
+    for (const [lang, expected] of [
+        ['en', {bridge: 'Bridge connected', counts: [['Claude', '2 tabs'], ['Codex', '1 tab'], ['Antigravity', 'none']],
+            stop: 'Stop everything for 2 min:', hotkey: 'Ctrl+Alt+Shift+Esc', agents: "Agents' tabs"}],
+        ['fr', {bridge: 'Pont connecté', counts: [['Claude', '2 onglets'], ['Codex', '1 onglet'], ['Antigravity', 'aucun']],
+            stop: 'Tout arrêter 2 min :', hotkey: 'Ctrl+Alt+Maj+Échap', agents: 'Onglets des agents'}]]) {
+        const sent = [];
+        const saved = [];
+        const {elements, documentElement} = extensionPage('popup.html', ['i18n.js', 'popup.js'], lang, {
             runtime: {getManifest: () => ({version: '9.9.9'}), sendMessage: async (m) => { sent.push(m); return {connected: true}; }},
-            tabGroups: {query: async () => [{id: 5, title: 'Claude'}, {id: 6, title: 'Perso'}]},
-            tabs: {query: async () => [{groupId: 5}, {groupId: 5}, {groupId: 6}, {groupId: -1}]},
+            tabGroups: {query: async () => [{id: 5, title: 'Claude'}, {id: 6, title: 'Perso'}, {id: 7, title: 'Codex'}]},
+            tabs: {query: async () => [{groupId: 5}, {groupId: 5}, {groupId: 6}, {groupId: 7}, {groupId: -1}]},
             storage: {local: {get: async () => ({compteurGmail: true}), set: async (v) => { saved.push(v); }}}
-        }
-    });
-    vm.runInContext(js, ctx);
-    await settle();
-    // Seul réglage : la case du compteur Gmail, relue puis enregistrée.
-    assert.equal(elements['compteur-gmail'].checked, true);
-    elements['compteur-gmail'].checked = false;
-    elements['compteur-gmail'].listeners.change();
-    assert.deepEqual(plain(saved), [{compteurGmail: false}]);
-    assert.deepEqual(plain(sent), [{target: 'background', getStatus: true}]);
-    assert.equal(elements.version.textContent, 'v9.9.9');
-    assert.equal(elements.bridge.textContent, 'Pont connecté');
-    assert.equal(elements.bridge.className, 'state ok');
-    assert.deepEqual(elements.agents.children.map(li => li.children.map(c => c.textContent)),
-        [['Claude', '2 onglets'], ['Codex', 'aucun'], ['Antigravity', 'aucun']]);
+        });
+        await settle();
+        assert.equal(documentElement.lang, lang);
+        // Seul réglage : la case du compteur Gmail, relue puis enregistrée.
+        assert.equal(elements['compteur-gmail'].checked, true);
+        elements['compteur-gmail'].checked = false;
+        elements['compteur-gmail'].listeners.change();
+        assert.deepEqual(plain(saved), [{compteurGmail: false}]);
+        assert.deepEqual(plain(sent), [{target: 'background', getStatus: true}]);
+        assert.equal(elements.version.textContent, 'v9.9.9');
+        assert.equal(elements.bridge.textContent, expected.bridge);
+        assert.equal(elements.bridge.className, 'state ok');
+        assert.equal(elements.agents.attributes['aria-label'], expected.agents);
+        const texts = Object.values(elements).map((el) => el.textContent);
+        assert.ok(texts.includes(expected.stop) && texts.includes(expected.hotkey), texts.join(' | '));
+        assert.deepEqual(elements.agents.children.map(li => li.children.map(c => c.textContent)), expected.counts);
+    }
+});
+
+test("pont en attente : la fenêtre de l'icône dit pourquoi, dans la langue de Chrome", async () => {
+    for (const [lang, waiting, starts] of [['en', 'Bridge waiting', "It starts with an agent's first command."],
+        ['fr', 'Pont en attente', "Il démarre à la première commande d'un agent."]]) {
+        const {elements} = extensionPage('popup.html', ['i18n.js', 'popup.js'], lang, {
+            runtime: {getManifest: () => ({version: '9.9.9'}), sendMessage: async () => ({connected: false})},
+            tabGroups: {query: async () => []}, tabs: {query: async () => []},
+            storage: {local: {get: async () => ({}), set: async () => {}}}
+        });
+        await settle();
+        assert.equal(elements.bridge.textContent, waiting);
+        assert.equal(elements.bridge.className, 'state off');
+        assert.equal(elements['bridge-detail'].textContent, starts);
+        assert.equal(elements['bridge-detail'].hidden, false);
+        assert.equal(elements.pair.hidden, false);
+    }
+});
+
+test("page d'appairage : textes de la langue de Chrome, code invalide refusé sans connexion au pont", async () => {
+    for (const [lang, heading, invalid] of [['en', 'Pair the extension with the local bridge', /^Invalid code: 43 characters/],
+        ['fr', "Appairer l'extension au pont local", /^Code invalide : 43 caractères/]]) {
+        const page = extensionPage('pair.html', ['i18n.js', 'bridge_link.js', 'pair.js'], lang, {runtime: {id: EXT_ID}});
+        const el = page.elements;
+        assert.equal(page.documentElement.lang, lang);
+        assert.equal(el.state.textContent, heading);
+        assert.ok(el.detail.textContent.length > 40, el.detail.textContent);
+        assert.ok(el.code.attributes['aria-label']);
+        el.code.value = 'trop-court';
+        el.form.listeners.submit({preventDefault() {}});
+        await settle();
+        assert.match(el.detail.textContent, invalid);
+        assert.equal(el.state.className, 'state off');
+    }
+});
+
+test('catalogues de langue : anglais par défaut, mêmes clés et mêmes paramètres en français, chaque clé citée existe', () => {
+    const dir = path.join(__dirname, '../extension');
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.default_locale, 'en');
+    assert.deepEqual(fs.readdirSync(path.join(dir, '_locales')).sort(), ['en', 'fr']);
+    const en = catalog('en'), fr = catalog('fr');
+    assert.deepEqual(Object.keys(fr).sort(), Object.keys(en).sort());
+    const tokens = (message) => (message.match(/\$[A-Za-z0-9_@]+\$/g) || []).map((t) => t.toLowerCase()).sort();
+    for (const key of Object.keys(en)) {
+        assert.ok(/^[A-Za-z0-9_@]+$/.test(key), key);
+        assert.deepEqual(tokens(fr[key].message), tokens(en[key].message), key);
+        assert.deepEqual(plain(fr[key].placeholders || {}), plain(en[key].placeholders || {}), key);
+        assert.ok(fr[key].message.trim() && en[key].message.trim(), key);
+    }
+    assert.equal(en.locale.message, 'en');
+    assert.equal(fr.locale.message, 'fr');
+    // Toute clé citée par le manifeste (__MSG_x__), une page (data-i18n...) ou un script (getMessage("x")) existe.
+    const cited = new Set();
+    for (const m of JSON.stringify(manifest).matchAll(/__MSG_([A-Za-z0-9_@]+)__/g)) cited.add(m[1]);
+    for (const file of fs.readdirSync(dir).filter((f) => /\.(html|js)$/.test(f) && f !== 'i18n.js')) {
+        const text = fs.readFileSync(path.join(dir, file), 'utf8');
+        for (const m of text.matchAll(/data-i18n(?:-aria-label)?="([^"]+)"|getMessage\("([^"]+)"/g)) cited.add(m[1] || m[2]);
+    }
+    assert.ok(cited.size > 20, [...cited].join(' '));
+    for (const key of cited) assert.ok(en[key], `clé ${key} absente du catalogue`);
+    assert.ok(en.extDescription.message.length <= 132 && fr.extDescription.message.length <= 132);
+    // Aucun texte visible écrit en dur dans les pages : en dehors du nom du produit, chaque texte vient du catalogue.
+    for (const file of ['popup.html', 'pair.html']) {
+        const body = fs.readFileSync(path.join(dir, file), 'utf8').split('<body>')[1].replace(/<svg[\s\S]*?<\/svg>/g, '');
+        const visible = body.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean);
+        assert.deepEqual(visible, ['NexusBrowser'], file);
+    }
 });
 
 test("logo de travail : il tourne sur l'icône de la barre d'outils pendant une commande, jamais dans une page", async () => {

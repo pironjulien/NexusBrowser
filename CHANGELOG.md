@@ -5,11 +5,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.29] - 2026-11-07
+
+### Changed
+- The extension speaks the user's language: English by default, French when Chrome runs in French. The toolbar popup
+  and the pairing page took their text from French written in the pages; they now read Chrome's catalogs
+  (`extension/_locales/en` and `fr`, `default_locale` `en`, `chrome.i18n` through `extension/i18n.js`), and their
+  `lang` follows the catalog Chrome picked. The manifest description comes from the catalog too, so the Chrome Web
+  Store shows the French summary to French users. The pairing guidance the service worker reports when the bridge
+  cannot be proven (extension not paired, native host unreachable) is localized the same way; the bridge link's
+  protocol diagnostics are now English.
+- Scripts named and documented in English: `legacy-extension.ps1` (was `ancienne-extension.ps1`),
+  `antigravity-duplicate.ps1` (was `doublon-antigravity.ps1`), `install-native-host.ps1` (was
+  `installer-hote-natif.ps1`), and English headers for every script. `guide-extension.ps1` and `registre-reel.ps1`
+  keep their names: NexusSystem and NexusPoste run them by path.
+
 ### Fixed
 - `POST /api/update` hands the update to NexusSystem's native maintenance (the `NexusSystem Update` task,
   NexusMaintenance.exe) whenever NexusSystem maintenance is installed. The bridge only looked for the PowerShell
   worker of NexusSystem 1.6.54 and earlier, which the native engine removes on public installs, so those installs
   fell back to this product's standalone Windows PowerShell updater.
+
+### Added
+- Tests: popup and pairing page rendered in English and in French from the catalogs, both catalogs with the same keys
+  and placeholders, every key the manifest, a page or a script cites present, no visible text written in a page; every
+  script header in English.
 
 ## [2.35.28] - 2026-11-07
 

@@ -1,0 +1,35 @@
+{
+  "locale": { "message": "en", "description": "Language of this catalog, set as the lang attribute of the extension pages." },
+  "extDescription": { "message": "Chrome bridge shared by Antigravity, Claude and Codex (NexusBrowser): each agent in its own background tabs.", "description": "Manifest description and Chrome Web Store summary (132 characters at most)." },
+
+  "popupBridgeReading": { "message": "Reading the bridge…" },
+  "popupBridgeConnected": { "message": "Bridge connected" },
+  "popupBridgeWaiting": { "message": "Bridge waiting" },
+  "popupBridgeStarts": { "message": "It starts with an agent's first command." },
+  "popupPairLink": { "message": "Pair with a code" },
+  "popupAgentsLabel": { "message": "Agents' tabs" },
+  "popupTabsNone": { "message": "none" },
+  "popupTabsOne": { "message": "1 tab" },
+  "popupTabsMany": { "message": "$COUNT$ tabs", "placeholders": { "count": { "content": "$1", "example": "3" } } },
+  "popupGmailCounter": { "message": "Unread Gmail count for the keypad" },
+  "popupGmailCounterNote": { "message": "(the number only, kept on this PC)" },
+  "popupStopAll": { "message": "Stop everything for 2 min:" },
+  "popupStopKeys": { "message": "Ctrl+Alt+Shift+Esc" },
+
+  "pairTitle": { "message": "Pair NexusBrowser" },
+  "pairHeading": { "message": "Pair the extension with the local bridge" },
+  "pairIntro": { "message": "Paste the pairing code given by the NexusBrowser app (valid for 5 minutes, once). It only works on this PC and never leaves your computer." },
+  "pairCodeLabel": { "message": "Pairing code" },
+  "pairButton": { "message": "Pair" },
+  "pairInvalidCode": { "message": "Invalid code: 43 characters expected (letters, digits, - and _)." },
+  "pairInProgress": { "message": "Pairing…" },
+  "pairKeyNotSaved": { "message": "Pairing accepted by the bridge but the key was not saved ($ERROR$): try again.", "placeholders": { "error": { "content": "$1" } } },
+  "pairDone": { "message": "Extension paired with the NexusBrowser bridge. You can close this tab." },
+  "pairRefused": { "message": "Pairing refused: $REASON$.", "placeholders": { "reason": { "content": "$1" } } },
+  "pairRefusedDefault": { "message": "connection closed by the bridge (code expired, already used or wrong)" },
+
+  "authNotPaired": { "message": "extension not paired: open pairing from the NexusBrowser app" },
+  "authNoNativeMessaging": { "message": "native messaging unavailable (nativeMessaging permission)" },
+  "authNativeHostUnreachable": { "message": "native host $HOST$ unreachable ($ERROR$): run NexusBrowser's install.ps1", "placeholders": { "host": { "content": "$1", "example": "com.nexus.browser" }, "error": { "content": "$2" } } },
+  "authNoReply": { "message": "no reply" }
+}

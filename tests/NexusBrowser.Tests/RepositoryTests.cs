@@ -111,6 +111,25 @@ public sealed class RepositoryTests
             Path.GetFileName(f) is "pyproject.toml" or "uv.lock" or "requirements.txt" or ".python-version");
     }
 
+    /// <summary>
+    /// The public repository is English: every PowerShell script opens with an English header (its first comment
+    /// lines). French function words or accented letters there mean a header left untranslated. registre-reel.ps1 keeps
+    /// its French name: NexusInfra's NexusPoste dot-sources it by that path (its header says so).
+    /// </summary>
+    [Fact]
+    public void ScriptHeadersAreInEnglish()
+    {
+        var scripts = RepositoryFiles().Where(f => f.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase)).ToList();
+        Assert.Contains("scripts/legacy-extension.ps1", scripts);
+        var french = new Regex(@"(?i)(\s|^)(le|la|les|des|du|une|est|pas|sans|avec|puis|pour|dans|sur|ou|et)(\s|$)|[àâçéèêëîïôûùœ]");
+        foreach (string script in scripts)
+        {
+            var header = File.ReadLines(Repo.File(script.Split('/'))).Take(12)
+                .Select(l => l.Trim()).Where(l => l.StartsWith('#')).Select(l => l.TrimStart('#').Trim());
+            foreach (string line in header) Assert.False(french.IsMatch(line), $"{script}: {line}");
+        }
+    }
+
     [Fact]
     public void NoScriptOrConfigurationRunsPython()
     {
@@ -169,7 +188,11 @@ public sealed class RepositoryTests
         var justified = Regex.Matches(listing, @"^\| `([a-zA-Z]+)` \|", RegexOptions.Multiline).Select(m => m.Groups[1].Value).ToHashSet();
         var permissions = manifest["permissions"]!.AsArray().Select(p => (string)p!).ToHashSet();
         Assert.Equal(permissions.Order(), justified.Order());
-        string description = (string)manifest["description"]!;
+        // The description is the default catalog's message (default_locale "en"), the summary the store lists in English.
+        Assert.Equal("en", (string)manifest["default_locale"]!);
+        var key = Regex.Match((string)manifest["description"]!, "^__MSG_([A-Za-z0-9_@]+)__$");
+        Assert.True(key.Success, (string)manifest["description"]!);
+        string description = (string)Json("extension", "_locales", "en", "messages.json")[key.Groups[1].Value]!["message"]!;
         Assert.True(description.Length <= 132, $"{description.Length} characters");
         Assert.Contains((string)manifest["name"]!, listing);
         static string Squash(string text) => Regex.Replace(text, @"\s+", " ");

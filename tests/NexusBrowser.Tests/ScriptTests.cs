@@ -498,13 +498,13 @@ public sealed class ScriptTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------------------------
-    // doublon-antigravity.ps1 and ancienne-extension.ps1 (run on disposable files)
+    // antigravity-duplicate.ps1 and legacy-extension.ps1 (run on disposable files)
     // ---------------------------------------------------------------------------------------------
 
     [Fact]
     public async Task AntigravityDuplicateIsRemovedKeepingOtherServers()
     {
-        string script = Repo.File("scripts", "doublon-antigravity.ps1");
+        string script = Repo.File("scripts", "antigravity-duplicate.ps1");
         string config = _dir["mcp_config.json"];
         var original = new JsonObject
         {
@@ -557,7 +557,7 @@ public sealed class ScriptTests : IDisposable
         File.WriteAllText(Path.Join(userData, "Default", "Preferences"), "{not json"); // unreadable: skipped
         var before = Directory.EnumerateFiles(userData, "*", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
 
-        var (code, stdout, stderr) = await Shells.FileAsync(Shells.Pwsh, Repo.File("scripts", "ancienne-extension.ps1"), ["-UserData", userData]);
+        var (code, stdout, stderr) = await Shells.FileAsync(Shells.Pwsh, Repo.File("scripts", "legacy-extension.ps1"), ["-UserData", userData]);
         Assert.True(code == 0, stderr);
         Assert.Equal(
         [
@@ -566,7 +566,7 @@ public sealed class ScriptTests : IDisposable
         ], Shells.Lines(stdout).Order(StringComparer.Ordinal));
         foreach (var (file, bytes) in before) Assert.Equal(bytes, File.ReadAllBytes(file)); // read only
 
-        var none = await Shells.FileAsync(Shells.Pwsh, Repo.File("scripts", "ancienne-extension.ps1"), ["-UserData", _dir["absent"]]);
+        var none = await Shells.FileAsync(Shells.Pwsh, Repo.File("scripts", "legacy-extension.ps1"), ["-UserData", _dir["absent"]]);
         Assert.Equal(0, none.Code);
         Assert.Empty(Shells.Lines(none.Stdout));
     }

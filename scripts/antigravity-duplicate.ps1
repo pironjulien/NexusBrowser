@@ -1,8 +1,8 @@
-# Antigravity : nexus-browser declare UNE seule fois, par son plugin (~\.gemini\config\plugins\nexus-browser).
-# Une entree nexus-browser en plus dans ~\.gemini\config\mcp_config.json lance un second serveur : outils en double
-# (nexus-browser_nexus-browser), tokens perdus. Ce script retire cette seule entree (les autres serveurs et reglages
-# restent tels quels), apres une sauvegarde hors OneDrive, par ecriture atomique (fichier temporaire puis remplacement).
-#  -CheckOnly : n'ecrit rien ; code 1 et message si le doublon est present (verify.ps1).
+# Antigravity: nexus-browser is declared ONCE, by its plugin (~\.gemini\config\plugins\nexus-browser).
+# One more nexus-browser entry in ~\.gemini\config\mcp_config.json starts a second server: duplicate tools
+# (nexus-browser_nexus-browser), wasted tokens. This script removes that entry only (other servers and settings are
+# kept as they are), after a backup outside OneDrive, by an atomic write (temporary file, then replace).
+#  -CheckOnly: writes nothing; exit code 1 and a message when the duplicate is there (verify.ps1).
 param(
     [Parameter(Mandatory)][string]$ConfigPath,
     [string]$BackupDir,

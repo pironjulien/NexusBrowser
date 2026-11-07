@@ -1,29 +1,30 @@
-# Registre HKCU reel, meme lance depuis une application empaquetee (MSIX, comme l'application Claude) : ses ecritures
-# HKCU\Software y sont redirigees vers un registre prive que Chrome ne lit jamais. reg.exe est donc lance par une
-# tache planifiee d'un instant (hors du paquet), sa sortie relue puis la tache retiree. Hors paquet, meme resultat.
+# Real HKCU registry, even when run from a packaged app (MSIX, like the Claude app): its HKCU\Software writes are
+# redirected there to a private registry Chrome never reads. reg.exe is therefore run by a one-shot scheduled task
+# (outside the package), its output read back, then the task removed. Outside a package, same result. The file and
+# function names are a contract: NexusInfra's NexusPoste dot-sources this path and calls Invoke-RegistreReel.
 # Usage : . registre-reel.ps1 ; Invoke-RegistreReel @('query "HKCU\..." /ve', 'add "HKCU\..." /ve /d "..." /f')
 function Invoke-RegistreReel([string[]]$Commandes) {
     $nom = "NexusBrowser-registre-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-    # Hors de %AppData% / %LocalAppData% (virtualises eux aussi pour une application empaquetee).
+    # Outside %AppData% / %LocalAppData% (virtualized as well for a packaged app).
     $dossier = Join-Path $HOME ".nexus"
     [IO.Directory]::CreateDirectory($dossier) | Out-Null
     $sortie = Join-Path $dossier "$nom.txt"
     $script = Join-Path $dossier "$nom.cmd"
-    # Les commandes reg vont dans un fichier .cmd, pas sur la ligne de commande de la tache : Microsoft Defender juge
-    # "conhost --headless cmd /c reg add ...\Run" malveillant (Trojan:Win32/Commando.A!ml, au hasard d'un appel sur
-    # dix environ) et bloque alors le lancement (0x80070005), sans aucune sortie.
-    # Dans un fichier .cmd, doubler les '%' pour qu'ils ne soient pas interpretes comme variables ou arguments cmd (%1, etc.).
+    # The reg commands go in a .cmd file, not on the task's command line: Microsoft Defender flags
+    # "conhost --headless cmd /c reg add ...\Run" as malicious (Trojan:Win32/Commando.A!ml, about one call in ten at
+    # random) and then blocks the start (0x80070005), with no output at all.
+    # In a .cmd file, '%' is doubled so that it is not read as a cmd variable or argument (%1, etc.).
     $lignes = @("@echo off", "chcp 65001 >nul", "(") + ($Commandes | ForEach-Object { "reg $($_.Replace('%', '%%'))" }) + @(") > `"$sortie`" 2>&1")
     [IO.File]::WriteAllText($script, ($lignes -join "`r`n") + "`r`n", [Text.UTF8Encoding]::new($false))
-    # conhost --headless : aucune fenetre de console visible pendant l'instant de la tache.
+    # conhost --headless: no console window shown during the task's instant.
     $action = New-ScheduledTaskAction -Execute "conhost.exe" -Argument "--headless cmd.exe /d /c `"$script`""
     $reglages = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden
     Register-ScheduledTask -TaskName $nom -Action $action -Settings $reglages -Force | Out-Null
     try {
         Start-ScheduledTask -TaskName $nom
         $fin = (Get-Date).AddSeconds(20)
-        # Juste apres Start-ScheduledTask, l'etat peut encore etre "Ready" : attendre que la tache ait cree le fichier
-        # de sortie (ou rendu un resultat d'echec : 0x41303 = pas encore lancee), puis qu'elle ait fini d'y ecrire.
+        # Right after Start-ScheduledTask, the state can still be "Ready": wait until the task has created the output file
+        # (or returned a failure result: 0x41303 = not started yet), then until it has finished writing to it.
         do {
             Start-Sleep -Milliseconds 200
             $echec = (Get-ScheduledTaskInfo -TaskName $nom).LastTaskResult

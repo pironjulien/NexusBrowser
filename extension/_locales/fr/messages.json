@@ -1,0 +1,35 @@
+{
+  "locale": { "message": "fr", "description": "Language of this catalog, set as the lang attribute of the extension pages." },
+  "extDescription": { "message": "Pont Chrome partagé par Antigravity, Claude et Codex (NexusBrowser) : chaque agent dans ses onglets d'arrière-plan.", "description": "Manifest description and Chrome Web Store summary (132 characters at most)." },
+
+  "popupBridgeReading": { "message": "Lecture du pont…" },
+  "popupBridgeConnected": { "message": "Pont connecté" },
+  "popupBridgeWaiting": { "message": "Pont en attente" },
+  "popupBridgeStarts": { "message": "Il démarre à la première commande d'un agent." },
+  "popupPairLink": { "message": "Appairer avec un code" },
+  "popupAgentsLabel": { "message": "Onglets des agents" },
+  "popupTabsNone": { "message": "aucun" },
+  "popupTabsOne": { "message": "1 onglet" },
+  "popupTabsMany": { "message": "$COUNT$ onglets", "placeholders": { "count": { "content": "$1", "example": "3" } } },
+  "popupGmailCounter": { "message": "Mails non lus de Gmail pour le pad" },
+  "popupGmailCounterNote": { "message": "(seul le nombre, en local)" },
+  "popupStopAll": { "message": "Tout arrêter 2 min :" },
+  "popupStopKeys": { "message": "Ctrl+Alt+Maj+Échap" },
+
+  "pairTitle": { "message": "Appairer NexusBrowser" },
+  "pairHeading": { "message": "Appairer l'extension au pont local" },
+  "pairIntro": { "message": "Collez le code d'appairage donné par l'application NexusBrowser (valable 5 minutes, une seule fois). Il ne sert qu'à ce PC et ne quitte pas votre ordinateur." },
+  "pairCodeLabel": { "message": "Code d'appairage" },
+  "pairButton": { "message": "Appairer" },
+  "pairInvalidCode": { "message": "Code invalide : 43 caractères (lettres, chiffres, - et _) attendus." },
+  "pairInProgress": { "message": "Appairage en cours…" },
+  "pairKeyNotSaved": { "message": "Appairage accepté par le pont mais clé non enregistrée ($ERROR$) : recommencer.", "placeholders": { "error": { "content": "$1" } } },
+  "pairDone": { "message": "Extension appairée au pont NexusBrowser. Vous pouvez fermer cet onglet." },
+  "pairRefused": { "message": "Appairage refusé : $REASON$.", "placeholders": { "reason": { "content": "$1" } } },
+  "pairRefusedDefault": { "message": "connexion fermée par le pont (code expiré, déjà utilisé ou faux)" },
+
+  "authNotPaired": { "message": "extension non appairée : ouvrir l'appairage depuis l'application NexusBrowser" },
+  "authNoNativeMessaging": { "message": "messagerie native indisponible (permission nativeMessaging)" },
+  "authNativeHostUnreachable": { "message": "hôte natif $HOST$ injoignable ($ERROR$) : lancer install.ps1 de NexusBrowser", "placeholders": { "host": { "content": "$1", "example": "com.nexus.browser" }, "error": { "content": "$2" } } },
+  "authNoReply": { "message": "aucune réponse" }
+}

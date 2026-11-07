@@ -366,7 +366,7 @@ async function bridgeAuthMethod() {
 async function proveBridge(args) {
     if (args.auth !== "paired") return proveWithNativeHost(args);
     const key = await globalThis.AgyPairing.load().catch(() => null);
-    if (!key) return { ok: false, error: "extension non appairée : ouvrir l'appairage depuis l'application NexusBrowser" };
+    if (!key) return { ok: false, error: chrome.i18n.getMessage("authNotPaired") };
     return globalThis.AgyPairing.prove(key, args);
 }
 
@@ -374,7 +374,7 @@ async function proveBridge(args) {
 function proveWithNativeHost(args) {
     return new Promise((resolve) => {
         if (!chrome.runtime?.sendNativeMessage) {
-            resolve({ ok: false, error: "messagerie native indisponible (permission nativeMessaging)" });
+            resolve({ ok: false, error: chrome.i18n.getMessage("authNoNativeMessaging") });
             return;
         }
         try {
@@ -383,13 +383,13 @@ function proveWithNativeHost(args) {
                 if (error || !reply) {
                     // Hôte absent de Chrome : la prochaine connexion passe par la clé d'appairage, si elle existe.
                     if (/not found|introuvable/i.test(error?.message || "")) nativeHostMissing = true;
-                    resolve({ ok: false, error: `hôte natif ${NATIVE_AUTH_HOST} injoignable (${error?.message || "aucune réponse"}) : lancer install.ps1 de NexusBrowser` });
+                    resolve({ ok: false, error: chrome.i18n.getMessage("authNativeHostUnreachable", [NATIVE_AUTH_HOST, error?.message || chrome.i18n.getMessage("authNoReply")]) });
                 } else {
                     resolve(reply);
                 }
             });
         } catch (error) {
-            resolve({ ok: false, error: `hôte natif ${NATIVE_AUTH_HOST} injoignable (${error.message || error})` });
+            resolve({ ok: false, error: chrome.i18n.getMessage("authNativeHostUnreachable", [NATIVE_AUTH_HOST, String(error.message || error)]) });
         }
     });
 }

@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Appairer NexusBrowser</title>
+    <title data-i18n="pairTitle">NexusBrowser</title>
     <link rel="stylesheet" href="popup.css">
     <style>
         body { width: auto; max-width: 34rem; margin: 3rem auto; padding: 0 1rem; }
@@ -16,14 +16,14 @@
         <span class="brand">NexusBrowser</span>
     </header>
     <main>
-        <h1 id="state" class="state">Appairer l'extension au pont local</h1>
-        <p id="detail" class="detail">Collez le code d'appairage donné par l'application NexusBrowser (valable 5 minutes,
-            une seule fois). Il ne sert qu'à ce PC et ne quitte pas votre ordinateur.</p>
+        <h1 id="state" class="state" data-i18n="pairHeading"></h1>
+        <p id="detail" class="detail" data-i18n="pairIntro"></p>
         <form id="form">
-            <input id="code" autocomplete="off" spellcheck="false" aria-label="Code d'appairage" maxlength="43">
-            <button type="submit">Appairer</button>
+            <input id="code" autocomplete="off" spellcheck="false" data-i18n-aria-label="pairCodeLabel" maxlength="43">
+            <button type="submit" data-i18n="pairButton"></button>
         </form>
     </main>
+    <script src="i18n.js"></script>
     <script src="bridge_link.js"></script>
     <script src="pair.js"></script>
 </body>

@@ -93,7 +93,7 @@
         _open() {
             this.clientNonce = newNonce();
             this._setState("handshake");
-            this.handshakeTimer = setTimeout(() => this.fail("poignée de main trop lente"), HANDSHAKE_TIMEOUT_MS);
+            this.handshakeTimer = setTimeout(() => this.fail("handshake too slow"), HANDSHAKE_TIMEOUT_MS);
             this.ws.send(JSON.stringify({
                 type: "auth_hello",
                 protocol: PROTOCOL,
@@ -113,12 +113,12 @@
         async _receive(raw) {
             if (this.closed) return;
             let message;
-            try { message = JSON.parse(raw); } catch (_) { return this.fail("message illisible du serveur"); }
-            if (!message || typeof message !== "object" || Array.isArray(message)) return this.fail("message invalide du serveur");
+            try { message = JSON.parse(raw); } catch (_) { return this.fail("unreadable message from the server"); }
+            if (!message || typeof message !== "object" || Array.isArray(message)) return this.fail("invalid message from the server");
 
             if (this.state === "handshake") {
                 if (message.type !== "auth_challenge" || !NONCE_RE.test(message.server_nonce || "") || typeof message.server_proof !== "string") {
-                    return this.fail("le serveur n'a pas ouvert la poignée de main NexusBrowser : aucune commande acceptée");
+                    return this.fail("the server did not open the NexusBrowser handshake: no command accepted");
                 }
                 let proof;
                 try {
@@ -136,7 +136,7 @@
                 }
                 if (this.closed) return;
                 if (!proof || proof.ok !== true || typeof proof.client_proof !== "string" || typeof proof.session_key !== "string") {
-                    return this.fail((proof && proof.error) || "serveur non authentifié");
+                    return this.fail((proof && proof.error) || "server not authenticated");
                 }
                 this.key = await crypto.subtle.importKey("raw", fromB64url(proof.session_key), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
                 this._setState("proven");
@@ -144,22 +144,22 @@
                 return;
             }
 
-            if (this.state !== "proven" && this.state !== "ready") return this.fail("message hors poignée de main");
+            if (this.state !== "proven" && this.state !== "ready") return this.fail("message outside the handshake");
             const keys = Object.keys(message).sort().join(",");
             if (keys !== "body,mac,seq" || !Number.isInteger(message.seq) || typeof message.body !== "string" || typeof message.mac !== "string") {
-                return this.fail("message non signé du serveur : refusé");
+                return this.fail("unsigned message from the server: refused");
             }
             if (message.seq !== this.received + 1) {
-                return this.fail(`numéro d'ordre ${message.seq} inattendu (attendu ${this.received + 1}) : rejeu ou perte`);
+                return this.fail(`unexpected sequence number ${message.seq} (expected ${this.received + 1}): replay or loss`);
             }
             const ok = await crypto.subtle.verify("HMAC", this.key, fromB64url(message.mac), encoder.encode([PROTOCOL, "s2c", String(message.seq), message.body].join("\n")));
-            if (!ok) return this.fail("signature fausse : message refusé");
+            if (!ok) return this.fail("wrong signature: message refused");
             this.received = message.seq;
             let body;
-            try { body = JSON.parse(message.body); } catch (_) { return this.fail("message signé illisible"); }
+            try { body = JSON.parse(message.body); } catch (_) { return this.fail("unreadable signed message"); }
 
             if (this.state === "proven") {
-                if (!body || body.type !== "auth_ok") return this.fail("auth_ok attendu");
+                if (!body || body.type !== "auth_ok") return this.fail("auth_ok expected");
                 clearTimeout(this.handshakeTimer);
                 this.handshakeTimer = null;
                 this.error = null;
@@ -270,7 +270,7 @@
             const expected = await crypto.subtle.verify("HMAC", key, fromB64url(String(args.server_proof || "")),
                 encoder.encode([PROTOCOL, "server", ...parts].join("\n")));
             if (!expected) {
-                return { ok: false, error: "le serveur du port 9224 ne prouve pas qu'il connaît la clé d'appairage : connexion refusée" };
+                return { ok: false, error: "the server on port 9224 does not prove it knows the pairing key: connection refused" };
             }
             return {
                 ok: true,

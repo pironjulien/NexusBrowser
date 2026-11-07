@@ -1,6 +1,6 @@
-# Ancienne extension " Antigravity Browser Bridge " (pont de NexusAGY) encore chargee dans un profil Chrome ?
-# Lecture SEULE des preferences du profil (Secure Preferences, Preferences : extensions.settings), jamais modifiees.
-# Ecrit une ligne par extension trouvee (" profil : nom (id) ") ; rien si aucune. Chrome n'est pas lance.
+# Is the legacy "Antigravity Browser Bridge" extension (NexusAGY's bridge) still loaded in a Chrome profile?
+# READ-ONLY look at the profile's preferences (Secure Preferences, Preferences: extensions.settings), never changed.
+# Writes one line per extension found ("profile : name (id)"); nothing when there is none. Chrome is not started.
 param([string]$UserData = (Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data'))
 $ErrorActionPreference = 'Stop'
 $names = @('Antigravity Browser Bridge')
@@ -21,7 +21,7 @@ foreach ($prof in $profs) {
             if ($entry -isnot [Collections.IDictionary]) { continue }
             $name = if ($entry['manifest'] -is [Collections.IDictionary]) { $entry['manifest']['name'] } else { $null }
             if (-not $name -and $entry['path']) {
-                # Extension non empaquetee : nom lu dans son manifeste (lecture seule).
+                # Unpacked extension: name read from its manifest (read only).
                 $manifest = Join-Path ([string]$entry['path']) 'manifest.json'
                 if (Test-Path -LiteralPath $manifest -PathType Leaf) {
                     try { $name = ([IO.File]::ReadAllText($manifest) | ConvertFrom-Json).name } catch {}

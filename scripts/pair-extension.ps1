@@ -1,10 +1,10 @@
 param([string]$ExtensionId = '', [switch]$Print)
-# Appairage de l'extension au pont local, sans hote natif (native\BridgePairing.cs) : pour une installation ou
-# l'hote natif com.nexus.browser_auth ne peut pas etre declare a Chrome (application du Microsoft Store, cle HKCU
-# virtualisee). Demande au pont une offre (secret de 256 bits, usage unique, 5 minutes) avec le jeton du pont, puis
-# ouvre chrome-extension://<id>/pair.html#<secret> dans Chrome : la page appaire l'extension et efface le secret de
-# son adresse. -Print : affiche le secret au lieu d'ouvrir Chrome (a coller dans la page "Appairer avec un code" de
-# la fenetre de l'icone). Messages en anglais (installation publique). Avec l'hote natif installe, inutile.
+# Pairing of the extension with the local bridge, without a native host (native\BridgePairing.cs): for an installation
+# where the native host com.nexus.browser_auth cannot be declared to Chrome (Microsoft Store app, virtualized HKCU
+# key). Asks the bridge for an offer (256-bit secret, single use, 5 minutes) with the bridge token, then opens
+# chrome-extension://<id>/pair.html#<secret> in Chrome: the page pairs the extension and clears the secret from its
+# address. -Print: shows the secret instead of opening Chrome (to paste in the popup's "Pair with a code" page).
+# Not needed once the native host is installed.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
@@ -22,7 +22,7 @@ if ($Print) {
     return
 }
 
-# Extension du Chrome Web Store une fois publiee (store_public), sinon l'extension non empaquetee (identifiant fixe).
+# The Chrome Web Store extension once published (store_public), otherwise the unpacked extension (fixed ID).
 if (-not $ExtensionId) {
     $config = Get-Content (Join-Path $root 'native\resources\bridge_config.json') -Raw | ConvertFrom-Json
     $ExtensionId = if ($config.store_public) { $config.store_id } else { ([string]$config.allowed_origins[0]) -replace '^chrome-extension://([a-p]{32})/?$', '$1' }

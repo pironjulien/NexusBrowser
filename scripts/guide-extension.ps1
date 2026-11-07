@@ -1,8 +1,8 @@
 param([int]$WaitSeconds = 300)
-# Guide du seul geste manuel de l'installation publique (install.ps1 -Register) : charger l'extension dans Chrome.
-# Chrome n'installe une extension hors Chrome Web Store que par "Charger l'extension non empaquetee" (mode
-# developpeur) : le dossier est copie dans le presse-papiers, chrome://extensions ouvert, puis on attend que
-# l'extension rejoigne le pont (WaitSeconds, 0 = sans attendre). Messages en anglais (installation publique).
+# Guide for the only manual step of the public installation (install.ps1 -Register): loading the extension in Chrome.
+# Chrome installs an extension from outside the Chrome Web Store only by "Load unpacked" (developer mode): the
+# folder is copied to the clipboard, chrome://extensions opened, then the script waits for the extension to join the
+# bridge (WaitSeconds, 0 = no wait). Its name is a contract: NexusSystem's app and get-nexus.ps1 run it by this path.
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'runtime.ps1')
 $extension = Join-Path $repositoryRoot 'extension'
@@ -19,8 +19,8 @@ if (-not $chrome) {
     return
 }
 
-# Extension deja reliee au pont (mise a jour, ou reinstallation par une IA) : rien a ajouter, sinon Chrome se
-# retrouve avec deux copies (Web Store et non empaquetee). Codes : 0 a jour, 1 en retard, 3 occupee, 2 absente.
+# Extension already linked to the bridge (update, or reinstallation by an AI): nothing to add, otherwise Chrome ends
+# up with two copies (Web Store and unpacked). Codes: 0 up to date, 1 behind, 3 busy, 2 missing.
 $exe = Get-CurrentExe
 if ($exe -and (Invoke-Native $exe @('--refresh-extension', '--wait-ready', '3') 30).Code -in 0, 1, 3) {
     Write-Host ''
@@ -28,11 +28,11 @@ if ($exe -and (Invoke-Native $exe @('--refresh-extension', '--wait-ready', '3') 
     return
 }
 
-# Publiee sur le Chrome Web Store (store_public de bridge_config.json) : "Ajouter a Chrome", sans mode developpeur.
+# Published on the Chrome Web Store (store_public of bridge_config.json): "Add to Chrome", no developer mode.
 $config = Get-Content (Join-Path $repositoryRoot 'native\resources\bridge_config.json') -Raw | ConvertFrom-Json
 $storeId = if ($config.store_public) { $config.store_id } else { $null }
-# Le Store sert la version que Google a validee, souvent en retard de plusieurs versions pendant la relecture : s'il
-# a moins que cette installation, on garde l'extension non empaquetee (sinon deux copies d'ages differents).
+# The store serves the version Google approved, often several versions behind during review: when it has less than
+# this installation, the unpacked extension is kept (otherwise two copies of different ages).
 if ($storeId) {
     $local = [version](Get-Content (Join-Path $extension 'manifest.json') -Raw | ConvertFrom-Json).version
     try {

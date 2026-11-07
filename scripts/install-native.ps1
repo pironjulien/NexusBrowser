@@ -84,7 +84,7 @@ if (-not $SkipLaunch -and (Test-Path -LiteralPath $tokenFile)) {
 }
 
 [IO.File]::WriteAllText($currentFile, (@{ exe = $exe; version = $version; fingerprint = $fingerprint } | ConvertTo-Json), $utf8)
-& (Join-Path $PSScriptRoot 'installer-hote-natif.ps1') -Exe $exe -ConfigurationRoot $sourceRoot
+& (Join-Path $PSScriptRoot 'install-native-host.ps1') -Exe $exe -ConfigurationRoot $sourceRoot
 
 # --- 3. Bridge task, started on demand (no trigger).
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -270,7 +270,7 @@ if ($Register -and -not $UpdateOnly -and $supervised -and $token -and (Test-Path
     }
     $pluginOn = (Test-Path $agyApp) -and ((Get-Content $agyApp -Raw | ConvertFrom-Json).plugins.'nexus-browser'.enabled -eq $true)
     if ($pluginOn) {
-        & (Join-Path $PSScriptRoot 'doublon-antigravity.ps1') -ConfigPath $agyConfig -BackupDir (Join-Path $localRoot 'backups') |
+        & (Join-Path $PSScriptRoot 'antigravity-duplicate.ps1') -ConfigPath $agyConfig -BackupDir (Join-Path $localRoot 'backups') |
             ForEach-Object { Write-Journal $_ }
         if ($LASTEXITCODE) { throw 'Removing the nexus-browser duplicate from mcp_config.json (Antigravity) failed.' }
     } else {

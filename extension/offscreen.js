@@ -58,7 +58,7 @@ function openLink(auth) {
             role: "offscreen",
             extensionId: chrome.runtime.id,
             auth,
-            prove: async (args) => (await toBackground({ bridgeProve: args })) || { ok: false, error: "service worker injoignable" },
+            prove: async (args) => (await toBackground({ bridgeProve: args })) || { ok: false, error: "service worker unreachable" },
             onRequest: async (request) => {
                 const response = await toBackground({ request });
                 return response && (response.data !== undefined || response.error)

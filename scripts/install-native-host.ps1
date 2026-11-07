@@ -1,13 +1,13 @@
 param([Parameter(Mandatory = $true)][string]$Exe, [switch]$CheckOnly, [string]$ConfigurationRoot,
     [string]$RegistryKey = "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.nexus.browser_auth")
-# Hote natif com.nexus.browser_auth : l'extension Chrome fait calculer au moteur (NexusBrowser.exe, lance par Chrome)
-# les preuves d'authentification du pont local (HMAC du jeton ~/.nexus/nexus-browser/bridge-token) ; le jeton n'est
-# jamais livre a Chrome. Declare pour l'utilisateur courant seulement (HKCU), pour les identifiants d'extension de
-# native\resources\bridge_config.json. Manifeste hors OneDrive. Fichier en ASCII (Windows PowerShell 5.1).
+# Native host com.nexus.browser_auth: the Chrome extension has the engine (NexusBrowser.exe, started by Chrome)
+# compute the local bridge's authentication proofs (HMAC of the ~/.nexus/nexus-browser/bridge-token token); the token
+# is never handed to Chrome. Declared for the current user only (HKCU), for the extension IDs of
+# native\resources\bridge_config.json. Manifest outside OneDrive. ASCII file (Windows PowerShell 5.1).
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "runtime.ps1")
-# Cle ecrite et relue dans le registre reel (registre-reel.ps1) : depuis l'application Claude (MSIX), une ecriture
-# directe partait dans son registre prive et Chrome ne trouvait pas l'hote natif ("native messaging host not found").
+# Key written and read back in the real registry (registre-reel.ps1): from the Claude app (MSIX), a direct write went
+# to its private registry and Chrome did not find the native host ("native messaging host not found").
 . (Join-Path $PSScriptRoot "registre-reel.ps1")
 $hostName = "com.nexus.browser_auth"
 $hostDirectory = Join-Path $localRoot "native-host"
@@ -30,7 +30,7 @@ $manifestText = ([ordered]@{
 if ($CheckOnly) {
     $registered = Invoke-RegistreReel @("query `"$RegistryKey`" /ve")
     if (-not $registered.Contains($manifestPath)) { throw "Hote natif $hostName non declare a Chrome : reexecuter install.ps1" }
-    # Compare par le contenu : ConvertTo-Json ne met pas en forme pareil sous Windows PowerShell 5.1 et sous pwsh 7.
+    # Compared by content: ConvertTo-Json formats differently under Windows PowerShell 5.1 and pwsh 7.
     $canonical = { param($text) $text | ConvertFrom-Json | ConvertTo-Json -Depth 4 -Compress }
     $aligned = (Test-Path -LiteralPath $manifestPath) -and
         ((& $canonical ([IO.File]::ReadAllText($manifestPath, $utf8))) -ceq (& $canonical $manifestText))
