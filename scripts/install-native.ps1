@@ -94,8 +94,12 @@ $action = New-ScheduledTaskAction -Execute $exe -Argument $bridgeArguments -Work
 $settings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
 if ($keepBridgeDisabled) { $settings.Enabled = $false }
-$oldBridges = @(Get-EngineProcesses '--bridge(\s|$)' | Where-Object { $_.ExecutablePath -ne $exe })
-$bridgeDeferred = $false
+# Images read by QueryFullProcessImageNameW (Split-EngineProcesses): an engine of this build started as administrator
+# is not taken for an older one; a bridge that cannot be read is never stopped (deferred).
+$bridges = Split-EngineProcesses (Get-EngineProcesses '--bridge(\s|$)') $exe
+$oldBridges = @($bridges.Others)
+$bridgeDeferred = [bool]@($bridges.Unknown).Count
+foreach ($unread in @($bridges.Unknown)) { Write-Journal "Bridge $($unread.ProcessId): engine image unreadable, kept until its next natural exit." }
 if ($oldBridges.Count -and -not $busy -and -not $SkipLaunch -and -not $keepBridgeDisabled) {
     foreach ($oldBridge in $oldBridges) {
         $shutdown = Invoke-Native $controlExe @('--shutdown-bridge', '--expected-pid', "$($oldBridge.ProcessId)", '--wait-seconds', '10', '--token-file', $tokenFile) 20
@@ -164,7 +168,9 @@ $keepSupervisorDisabled = $supervisorTask -and $supervisorTask.State -eq 'Disabl
 $mcpTokenFile = if ($env:OneDrive) { Join-Path $env:OneDrive 'Documents\NexusSecure\agents\nexus-mcp-token.txt' }
 $token = $null
 if ($supervised -and $mcpTokenFile -and (Test-Path -LiteralPath $mcpTokenFile)) { $token = (Get-Content -LiteralPath $mcpTokenFile -Raw).Trim() }
-$daemonExes = @(Get-EngineProcesses "--http\s+$port" | Where-Object { $_.ExecutablePath -ne $exe })
+$daemons = Split-EngineProcesses (Get-EngineProcesses "--http\s+$port") $exe
+$daemonExes = @($daemons.Others)
+foreach ($unread in @($daemons.Unknown)) { Write-Journal "Daemon $($unread.ProcessId): engine image unreadable, kept until its natural exit." }
 if ($token) {
     # exe: the supervisor's key. python (same value): read by supervisors built before the exe key; to drop once every
     # workstation runs a NexusPoste that reads exe (an older one ignores a spec without it: daemon not started).
@@ -312,8 +318,9 @@ if (-not $SkipLaunch) {
         do {
             try {
                 $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 2
-                $owner = Get-CimInstance Win32_Process -Filter "ProcessId = $($health.pid)"
-                $confirmed = $health.status -eq 'ok' -and $health.service -eq 'nexus-browser' -and $health.version -eq $version -and $owner.ExecutablePath -eq $exe
+                $owner = Read-ProcessImage ([int]$health.pid)  # $null (unreadable) or "" (exited): not confirmed
+                $confirmed = $health.status -eq 'ok' -and $health.service -eq 'nexus-browser' -and $health.version -eq $version -and
+                    $owner -and [IO.Path]::GetFullPath($owner) -ieq [IO.Path]::GetFullPath($exe)
             } catch { $confirmed = $false }
             if (-not $confirmed) { Start-Sleep -Milliseconds 500 }
         } while (-not $confirmed -and [DateTime]::UtcNow -lt $deadline)
@@ -334,10 +341,14 @@ $legacyDir = Split-Path $legacyExe
 if ((Test-Path -LiteralPath $legacyDir) -and (Remove-FolderIfUnused $legacyDir $engineImages)) {
     Write-Journal "Legacy engine folder removed: $legacyDir"
 }
+# A folder renamed aside whose deletion did not finish (a file still open) goes on a later pass, checked the same way.
+foreach ($gone in @(Remove-FolderLeftovers $legacyDir $engineImages)) { Write-Journal "Legacy engine leftover removed: $gone" }
 $oldVenv = Join-Path $localRoot 'venv'
-if ((Test-Path -LiteralPath $oldVenv) -and (Remove-FolderIfUnused $oldVenv (Get-ProcessImages 'python', 'pythonw'))) {
+$pythonImages = Get-ProcessImages 'python', 'pythonw'
+if ((Test-Path -LiteralPath $oldVenv) -and (Remove-FolderIfUnused $oldVenv $pythonImages)) {
     Write-Journal "Former Python environment removed: $oldVenv"
 }
+foreach ($gone in @(Remove-FolderLeftovers $oldVenv $pythonImages)) { Write-Journal "Former Python environment leftover removed: $gone" }
 if ($Register -and $pack) { Write-Host $registration.Output }  # the NEXUS_PACK_RESULT line stays the last
 elseif ($bridgeDeferred) { Write-Host "NexusBrowser $version prepared; the running bridge is kept until its next natural exit." }
 else { Write-Host "NexusBrowser $version installed." }

@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.35.27] - 2026-11-07
+
+### Fixed
+- An update could stop or restart a current bridge or daemon started as administrator, taking it for an older build:
+  the installer compared WMI's `ExecutablePath`, empty for an elevated process. Running bridges and daemons, and the
+  daemon confirmed after the update, are now read by `QueryFullProcessImageNameW` (the helper of the build cleanup);
+  one that cannot be read is never stopped and its upgrade is deferred.
+- A legacy engine folder or former Python environment renamed aside (`<folder>.<PID>.removing`) whose deletion did
+  not finish stayed forever: later updates now remove it, with the same check of use (process images, held
+  `engine.lock`, unreadable processes).
+- Tests: the held `engine.lock` check is now exercised where Windows does not refuse anyway (a leftover deleted
+  directly), and the unreadable case replaces the reading function itself.
+
 ## [2.35.26] - 2026-11-07
 
 ### Fixed

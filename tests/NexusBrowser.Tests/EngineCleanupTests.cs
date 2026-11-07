@@ -72,6 +72,87 @@ public sealed class EngineCleanupTests : IDisposable
     }
 
     [Fact]
+    public async Task ALeftoverWhoseEngineLockIsHeldStaysWhole()
+    {
+        // No rename here: a leftover set aside is deleted directly, so only Test-FolderInUse's lock check keeps it whole
+        // (without it, every file but the held lock would go).
+        string versions = _dir["versions"];
+        string keep = Build(versions, "bbbbbbbbbbbbbbbb");
+        string leftover = Build(versions, "aaaaaaaaaaaaaaaa.42.removing");
+        string legacy = Build(_dir["root"], "native.43.removing");
+        string lockedProbe = $"[string](Test-FolderInUse {Shells.Quote(leftover)} {NoProcess})";
+        using (new FileStream(Path.Join(leftover, "engine.lock"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (new FileStream(Path.Join(legacy, "engine.lock"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            string[] lines = await RuntimeAsync(
+                $"Remove-UnusedEngineBuilds {Shells.Quote(versions)} {Shells.Quote(keep)} {NoProcess}\n" +
+                $"$null = Remove-FolderLeftovers {Shells.Quote(Path.Join(_dir["root"], "native"))} {NoProcess}\n" + lockedProbe);
+            Assert.Equal(["True"], lines);
+            Assert.True(File.Exists(Path.Join(leftover, "NexusBrowser.exe")));
+            Assert.True(File.Exists(Path.Join(legacy, "NexusBrowser.exe")));
+        }
+        Assert.Equal(["False"], await RuntimeAsync(lockedProbe));
+    }
+
+    [Fact]
+    public async Task LeftoversOfAnUnfinishedRemovalGoOnALaterPass()
+    {
+        // install-native.ps1 renames the legacy engine folder and the former venv aside before deleting them; what a
+        // still-open file kept is removed on a later pass, the folder itself having gone.
+        string root = _dir["root"];
+        string legacy = Build(root, "native.1234.removing");
+        string venv = Path.Join(root, "venv.77.removing");
+        Directory.CreateDirectory(Path.Join(venv, "Scripts"));
+        File.WriteAllText(Path.Join(venv, "Scripts", "python.exe"), "python");
+        string other = Build(root, "native-other.5.removing"), unrelated = Build(root, "native.removing");
+        string native = Shells.Quote(Path.Join(root, "native")), venvRoot = Shells.Quote(Path.Join(root, "venv"));
+
+        // While a candidate process cannot be read, nothing goes.
+        await RuntimeAsync($"$null = Remove-FolderLeftovers {native} ([pscustomobject]@{{ Paths = @(); Unknown = $true }})");
+        Assert.True(Directory.Exists(legacy));
+
+        string[] lines = await RuntimeAsync($"Remove-FolderLeftovers {native} {NoProcess}\nRemove-FolderLeftovers {venvRoot} {NoProcess}");
+        Assert.Equal([legacy, venv], lines);
+        Assert.False(Directory.Exists(legacy));
+        Assert.False(Directory.Exists(venv));
+        Assert.True(Directory.Exists(other));
+        Assert.True(Directory.Exists(unrelated));
+
+        string install = File.ReadAllText(Repo.File("scripts", "install-native.ps1"));
+        Assert.Contains("Remove-FolderLeftovers $legacyDir $engineImages", install);
+        Assert.Contains("Remove-FolderLeftovers $oldVenv $pythonImages", install);
+    }
+
+    [Fact]
+    public async Task AnEngineOfThisBuildIsNotTakenForAnOlderOneWhateverWmiSays()
+    {
+        // WMI's ExecutablePath is empty for an elevated process: the image is read by QueryFullProcessImageNameW.
+        string self = "[pscustomobject]@{ ProcessId = $PID; ExecutablePath = ''; CommandLine = '--bridge' }";
+        string[] lines = await RuntimeAsync(
+            $"$s = Split-EngineProcesses @({self}) ([Environment]::ProcessPath);\"$(@($s.Others).Count) $(@($s.Unknown).Count)\"\n" +
+            $"$s = Split-EngineProcesses @({self}) ([Environment]::ProcessPath.ToUpperInvariant()); \"$(@($s.Others).Count)\"\n" +
+            $"$s = Split-EngineProcesses @({self}) 'C:\\elsewhere\\NexusBrowser.exe'; \"$(@($s.Others).Count) $($s.Others[0].ProcessId -eq $PID)\"");
+        Assert.Equal(["0 0", "0", "1 True"], lines);
+
+        string install = File.ReadAllText(Repo.File("scripts", "install-native.ps1"));
+        Assert.DoesNotContain("ExecutablePath", install);
+        Assert.Contains("Split-EngineProcesses (Get-EngineProcesses '--bridge(\\s|$)') $exe", install);
+        Assert.Contains("Split-EngineProcesses (Get-EngineProcesses \"--http\\s+$port\") $exe", install);
+    }
+
+    [Fact]
+    public async Task AnEngineWhoseImageCannotBeReadIsNeverTouched()
+    {
+        // The reading function itself is replaced: every process runs but cannot be read.
+        string self = "[pscustomobject]@{ ProcessId = $PID; ExecutablePath = '' }";
+        string[] lines = await RuntimeAsync(
+            "function Read-ProcessImage([int]$Id) { $null }\n" +
+            $"$s = Split-EngineProcesses @({self}) 'C:\\elsewhere\\NexusBrowser.exe'; \"$(@($s.Others).Count) $(@($s.Unknown).Count)\"\n" +
+            "[string](Get-ProcessImages 'pwsh').Unknown");
+        Assert.Equal(["0 1", "True"], lines);
+    }
+
+    [Fact]
     public async Task ProcessImagesAreReadByQueryFullProcessImageName()
     {
         // The script's own PowerShell is among the pwsh processes, found by its image path.

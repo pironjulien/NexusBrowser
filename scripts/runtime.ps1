@@ -150,10 +150,27 @@ public static class NexusBrowserProcessImage {
 }
 '@
 }
+# Image path of one process: "" once it has exited, $null while it runs but cannot be read.
+function Read-ProcessImage([int]$Id) { [NexusBrowserProcessImage]::Read($Id) }
+
+# Engine processes (Get-EngineProcesses) split by the image Read-ProcessImage reads: WMI's ExecutablePath is empty for
+# an elevated process, which made a current engine started as administrator look like an older build. Others: another
+# build (shut down or restarted by the installer); Unknown: running but unreadable, never touched (the caller defers).
+function Split-EngineProcesses($Processes, [string]$Exe) {
+    $target = [IO.Path]::GetFullPath($Exe)
+    $others = New-Object Collections.Generic.List[object]; $unknown = New-Object Collections.Generic.List[object]
+    foreach ($process in @($Processes)) {
+        $image = Read-ProcessImage ([int]$process.ProcessId)
+        if ($null -eq $image) { $unknown.Add($process) }
+        elseif ($image -and -not [string]::Equals([IO.Path]::GetFullPath($image), $target, [StringComparison]::OrdinalIgnoreCase)) { $others.Add($process) }
+    }
+    [pscustomobject]@{ Others = $others.ToArray(); Unknown = $unknown.ToArray() }
+}
+
 function Get-ProcessImages([string[]]$Name) {
     $paths = New-Object Collections.Generic.List[string]; $unknown = $false
     foreach ($process in @(Get-Process -Name $Name -ErrorAction SilentlyContinue)) {
-        $path = [NexusBrowserProcessImage]::Read($process.Id)
+        $path = Read-ProcessImage $process.Id
         if ($null -eq $path) { $unknown = $true } elseif ($path) { $paths.Add($path) }
     }
     [pscustomobject]@{ Paths = $paths.ToArray(); Unknown = $unknown }
@@ -180,6 +197,19 @@ function Remove-FolderIfUnused([string]$Folder, $Images) {
     try { [IO.Directory]::Move($Folder, $aside) } catch { return $false }
     Remove-Item -LiteralPath $aside -Recurse -Force -ErrorAction SilentlyContinue  # anything left goes next time
     return -not (Test-Path -LiteralPath $aside)
+}
+
+# Removes what earlier passes of Remove-FolderIfUnused left renamed aside (<Folder>.<PID>.removing), with the same check
+# of use (Test-FolderInUse). Returns the leftovers removed.
+function Remove-FolderLeftovers([string]$Folder, $Images) {
+    $parent = Split-Path -Parent $Folder.TrimEnd('\')
+    if (-not (Test-Path -LiteralPath $parent)) { return }
+    $pattern = '^' + [regex]::Escape((Split-Path -Leaf $Folder.TrimEnd('\'))) + '\.\d+\.removing$'
+    foreach ($dir in @(Get-ChildItem -LiteralPath $parent -Directory | Where-Object { $_.Name -match $pattern })) {
+        if (Test-FolderInUse $dir.FullName $Images) { continue }
+        Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $dir.FullName)) { $dir.FullName }
+    }
 }
 
 # Removes the build folders of <VersionsRoot> other than $Keep that no engine uses (Test-FolderInUse): an engine still
