@@ -128,7 +128,11 @@ public sealed class EngineCleanupTests : IDisposable
         { UseShellExecute = false, CreateNoWindow = true })!;
         try
         {
-            string image = child.MainModule!.FileName;
+            // Its image is readable once the process is initialized (a loaded PC can take a moment).
+            string? image = null;
+            for (var until = DateTime.UtcNow.AddSeconds(30); image is null && DateTime.UtcNow < until; Thread.Sleep(50))
+                image = EngineProcesses.Read(child.Id).Image;
+            Assert.EndsWith("pwsh.exe", image, StringComparison.OrdinalIgnoreCase);
             Assert.Contains(image, ProcessImages.Read("pwsh").Paths, StringComparer.OrdinalIgnoreCase);
         }
         finally { child.Kill(); child.WaitForExit(); }

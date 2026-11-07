@@ -101,6 +101,24 @@ function Get-ExpectedHash([string]$Sums, [string]$Name) {
     return $expected
 }
 
+# Build provenance (Sigstore, signed by NexusSystem's shared release workflow) when the GitHub CLI is installed and
+# signed in; a failed check refuses the package. gh writes to stderr when it is not signed in: under Windows
+# PowerShell 5.1 with ErrorActionPreference Stop, a redirected stderr line of a native command is a terminating error,
+# so gh runs with Continue here.
+function Confirm-Provenance([string]$File) {
+    $gh = Get-Command gh.exe -ErrorAction SilentlyContinue
+    if (-not $gh) { return }
+    $preference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $gh.Source auth status *> $null
+        if ($LASTEXITCODE -ne 0) { Write-Host 'Build provenance not checked (GitHub CLI not signed in); SHA-256 checked.'; return }
+        & $gh.Source attestation verify $File --repo $repository --signer-repo pironjulien/NexusSystem *> $null
+        $verified = $LASTEXITCODE -eq 0
+    } finally { $ErrorActionPreference = $preference }
+    if (-not $verified) { throw "Build provenance of $(Split-Path -Leaf $File) not verified (gh attestation verify): installation refused." }
+    Write-Host 'Build provenance verified.'
+}
 # Runs the engine (a Windows program: PowerShell would not wait for it) without a window, shows its output as it
 # comes, returns its exit code. Its standard input is closed at once.
 function Invoke-Engine([string]$Exe, [string[]]$Arguments) {
@@ -164,16 +182,7 @@ try {
             if ($sha -ne (Get-ExpectedHash $sums $zipName)) { throw "SHA-256 mismatch for $($zipName): the download is not the published package." }
             Write-Host 'Package checked against SHA256SUMS.txt.'
         } elseif (-not $env:NEXUS_BROWSER_SOURCE) { throw 'SHA256SUMS.txt missing from the release: installation refused.' }
-        # Build provenance (Sigstore, signed by NexusSystem's shared release workflow) when the GitHub CLI is signed in.
-        $gh = Get-Command gh.exe -ErrorAction SilentlyContinue
-        if (-not $env:NEXUS_BROWSER_SOURCE -and $gh) {
-            & $gh.Source auth status *> $null
-            if ($LASTEXITCODE -eq 0) {
-                & $gh.Source attestation verify $zip --repo $repository --signer-repo pironjulien/NexusSystem *> $null
-                if ($LASTEXITCODE) { throw "Build provenance of $zipName not verified (gh attestation verify): installation refused." }
-                Write-Host 'Build provenance verified.'
-            }
-        }
+        if (-not $env:NEXUS_BROWSER_SOURCE) { Confirm-Provenance $zip }
         $package = Join-Path $work 'package'
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         [IO.Compression.ZipFile]::ExtractToDirectory($zip, $package)

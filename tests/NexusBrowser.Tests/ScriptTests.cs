@@ -148,7 +148,8 @@ public sealed class ScriptTests : IDisposable
     public void GetVerifiesSha256SumsAndProvenanceBeforeUnpacking()
     {
         int compare = Get.IndexOf("if ($sha -ne (Get-ExpectedHash $sums $zipName)) { throw", StringComparison.Ordinal);
-        int provenance = Get.IndexOf("attestation verify $zip --repo $repository --signer-repo pironjulien/NexusSystem", StringComparison.Ordinal);
+        int provenance = Get.IndexOf("Confirm-Provenance $zip", StringComparison.Ordinal);
+        Assert.Contains("attestation verify $File --repo $repository --signer-repo pironjulien/NexusSystem", Get);
         int extract = Get.IndexOf("[IO.Compression.ZipFile]::ExtractToDirectory($zip", StringComparison.Ordinal);
         int start = Get.IndexOf("$code = Invoke-Engine $engine $arguments", StringComparison.Ordinal);
         Assert.True(compare > 0 && provenance > compare && extract > provenance && start > extract, $"compare={compare} provenance={provenance} extract={extract} start={start}");
@@ -165,7 +166,7 @@ public sealed class ScriptTests : IDisposable
         Assert.Contains("@('--install', '--reuse-installed', '--update-only')", Get);
         foreach (string step in new[] { "ScheduledTask", "HKCU", "robocopy", "install.ps1", "Rename-Item", "SetEnvironmentVariable", "registre-reel" })
             Assert.DoesNotContain(step, Get.Replace("A clone installs with its own install.ps1", "", StringComparison.Ordinal), StringComparison.Ordinal);
-        Assert.True(Get.Split('\n').Count(l => l.Trim().Length > 0 && !l.TrimStart().StartsWith('#')) < 160, "get.ps1 grew past a starter");
+        Assert.True(Get.Split('\n').Count(l => l.Trim().Length > 0 && !l.TrimStart().StartsWith('#')) < 180, "get.ps1 grew past a starter");
     }
 
     [Fact]
@@ -210,6 +211,32 @@ public sealed class ScriptTests : IDisposable
         ], Shells.Lines(stdout));
     }
 
+    /// <summary>The GitHub CLI installed but not signed in (a fresh runner, most PCs) writes to stderr: under Windows
+    /// PowerShell 5.1 with ErrorActionPreference Stop a redirected native stderr line is a terminating error, which made
+    /// get.ps1 2.36.0 fail in NexusSystem's pack. Not signed in means "provenance not checked", never a failure.</summary>
+    [Theory]
+    [InlineData(Shells.WindowsPowerShell)]
+    [InlineData(Shells.Pwsh)]
+    public async Task AGitHubCliNotSignedInSkipsTheProvenanceCheckWithoutFailing(string shell)
+    {
+        // A stand-in gh.exe that, like gh without sign-in, writes to stderr and exits 1 (where.exe finds no "auth").
+        string bin = _dir["fake-gh"];
+        Directory.CreateDirectory(bin);
+        File.Copy(Path.Join(Environment.SystemDirectory, "where.exe"), Path.Join(bin, "gh.exe"));
+        string probe = _dir["provenance.ps1"];
+        File.WriteAllText(probe,
+            "$ErrorActionPreference = 'Stop'\n$t = $null; $e = $null\n" +
+            $"$ast = [System.Management.Automation.Language.Parser]::ParseFile({Shells.Quote(Repo.File("get.ps1"))}, [ref]$t, [ref]$e)\n" +
+            "$f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Confirm-Provenance' }, $true)[0]\n" +
+            "$fn = Join-Path (Split-Path $PSCommandPath) 'confirm-provenance.ps1'; [IO.File]::WriteAllText($fn, $f.Extent.Text); . $fn\n" +
+            "$repository = 'pironjulien/NexusBrowser'\n" +
+            $"$env:PATH = {Shells.Quote(bin)} + ';' + $env:PATH\n" +
+            "Confirm-Provenance 'C:\\none\\NexusBrowser-win-x64.zip'\n'after'\n",
+            Encoding.ASCII);
+        var (code, stdout, stderr) = await Shells.FileAsync(shell, probe);
+        Assert.True(code == 0, stdout + stderr);
+        Assert.Equal(["Build provenance not checked (GitHub CLI not signed in); SHA-256 checked.", "after"], Shells.Lines(stdout));
+    }
     /// <summary>The engine starts its tasks by the names the installer registers; the former names (with a space)
     /// survive only in the migration table, the history and the CI fixture that recreates an older install.</summary>
     [Fact]

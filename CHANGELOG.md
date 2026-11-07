@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.36.1] - 2026-11-08
+
+### Fixed
+- `get.ps1` no longer fails under Windows PowerShell 5.1 when the GitHub CLI is installed but not signed in (a fresh
+  GitHub runner, most PCs): gh's "not logged in" line on stderr was a terminating error there (NexusSystem's pack).
+  The provenance check is then skipped and said, as intended; a failed check of a signed-in CLI still refuses the package.
+
 ## [2.36.0] - 2026-11-08
 
 ### Changed
@@ -2097,7 +2104,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.0...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.1...HEAD
+[2.36.1]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.0...v2.36.1
 [2.36.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.35.32...v2.36.0
 [2.33.11]: https://github.com/pironjulien/NexusBrowser/compare/v2.33.10...v2.33.11
 [2.33.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.32.0...v2.33.0
