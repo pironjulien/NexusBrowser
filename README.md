@@ -11,6 +11,7 @@ tabs, while you keep browsing in yours.
 
 [![Tests](https://github.com/pironjulien/NexusBrowser/actions/workflows/tests.yml/badge.svg)](https://github.com/pironjulien/NexusBrowser/actions/workflows/tests.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/pironjulien/NexusBrowser/badge)](https://scorecard.dev/viewer/?uri=github.com/pironjulien/NexusBrowser)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16434/badge)](https://www.bestpractices.dev/projects/16434)
 [![release](https://img.shields.io/github/v/release/pironjulien/NexusBrowser?style=flat-square&label=release)](https://github.com/pironjulien/NexusBrowser/releases/latest)
 [![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square)](#-quick-start)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4?style=flat-square&logo=googlechrome&logoColor=white)](extension/manifest.json)
