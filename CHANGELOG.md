@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - CodeQL runs from `.github/workflows/codeql.yml` (actions pinned by commit SHA, read-only token plus
   `security-events: write`) instead of the default setup: same languages (GitHub Actions, C#, JavaScript and
   TypeScript) and default queries, now credited by OpenSSF Scorecard's SAST check.
+- SkiaSharp 4.154.0; `devtools-protocol` 0.0.1732152 (type check only).
 
 ### Fixed
 - Dependabot's NuGet updates: `Directory.Build.props` takes the user profile from .NET instead of `$(USERPROFILE)`,

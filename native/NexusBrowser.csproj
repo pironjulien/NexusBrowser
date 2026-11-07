@@ -12,7 +12,7 @@
     <RootNamespace>NexusBrowser</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="SkiaSharp" Version="4.153.2" />
+    <PackageReference Include="SkiaSharp" Version="4.154.0" />
     <None Include="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="tools.json" LogicalName="tools.json" />
     <EmbeddedResource Include="resources\garde-fous.json" LogicalName="garde-fous.json" />
