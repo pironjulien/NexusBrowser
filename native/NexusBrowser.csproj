@@ -23,7 +23,7 @@
     <EmbeddedResource Include="..\extension\background.js" LogicalName="extension-background.js" />
     <EmbeddedResource Include="..\VERSION" LogicalName="VERSION" />
     <InternalsVisibleTo Include="NexusBrowser.Tests" />
-    <PackageReference Include="Tomlyn" Version="2.10.1" />
+    <PackageReference Include="Tomlyn" Version="2.10.2" />
   </ItemGroup>
   <!-- The engine ships no debug symbols (DebugType=none), packages' native ones included: SkiaSharp's libSkiaSharp.pdb
        (96 MB) stayed beside the single file, in every release package and installed version. -->

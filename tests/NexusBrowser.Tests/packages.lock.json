@@ -96,8 +96,8 @@
       },
       "Tomlyn": {
         "type": "Transitive",
-        "resolved": "2.10.1",
-        "contentHash": "ykjOY3IpYmC4SpPcAZRTl/w2jTmhPMDydHq8xcV7tTBAQ22nKBsOkPqauIrZlMjHm03cmKfV23UOPscKp+J4Og=="
+        "resolved": "2.10.2",
+        "contentHash": "phQ8NSO4T9BDJu5hwmWcBA0rj2u1MgwY5YtmRqf4GOkPfo2Gc1POTpspUY09XvbT6Sr1y/X1Aeq1NLUARMLFlQ=="
       },
       "xunit.analyzers": {
         "type": "Transitive",
@@ -171,7 +171,7 @@
         "type": "Project",
         "dependencies": {
           "SkiaSharp": "[4.154.0, )",
-          "Tomlyn": "[2.10.1, )"
+          "Tomlyn": "[2.10.2, )"
         }
       }
     }
