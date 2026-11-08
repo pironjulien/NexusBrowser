@@ -88,9 +88,10 @@ Windows 10 or 11 and Google Chrome. No admin rights, nothing else to install fir
 published to PyPI; earlier packages stay available.
 
 > [!IMPORTANT]
-> **One manual step: load the extension.** Chrome opens `chrome://extensions` and the extension folder is copied to
-> the clipboard: turn on **Developer mode** (top right), click **Load unpacked**, paste the folder (`Ctrl+V`) and click
-> **Select Folder**. Outside the Chrome Web Store, Chrome installs an extension this way only. The installer waits and
+> **One manual step: add the extension.** Chrome opens the extension's Chrome Web Store page: click **Add to Chrome**,
+> then **Add extension**. While the store still serves an older version than the one installed, Chrome opens
+> `chrome://extensions` instead and the extension folder is copied to the clipboard: turn on **Developer mode** (top
+> right), click **Load unpacked**, paste the folder (`Ctrl+V`) and click **Select Folder**. The installer waits and
 > says when the extension is connected.
 
 Then restart your AI app and ask it, for example: *"Open https://example.com in a background tab and give me the page
@@ -354,8 +355,8 @@ its model provider under its own privacy policy.
   may send them to its model provider under its own privacy policy.
 - **What it stores**, under `~/.nexus/nexus-browser/`: the bridge token, `bridge.log`
   (connection and emergency-stop events, rotated at 1 MB, three backups), `install.log`, screenshots (at most 50,
-  each kept under 24 hours) and the exports you ask for. The extension keeps tab ownership in Chrome's session
-  storage, cleared when Chrome closes.
+  each kept under 24 hours) and the exports you ask for. The extension keeps tab ownership in Chrome's local
+  storage, cleared when Chrome starts.
 - **Gmail unread counter (off by default)**: a box in the toolbar popup, for the
   [NexusKeypad](https://github.com/pironjulien/NexusKeypad) pad. When ticked, the extension reads
   Gmail's official unread feed once a minute in your own session (like a "Gmail checker" extension) and the bridge

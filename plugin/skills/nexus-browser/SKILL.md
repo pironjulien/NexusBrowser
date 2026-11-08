@@ -109,8 +109,8 @@ The user's emergency stop (`~/.nexus/stop`, written by Ctrl+Alt+Shift+Esc when N
 When the tools do not answer at all, the NexusBrowser daemon is not installed or not running; without the
 extension, every call answers with an error giving the one-time install (Windows, Chrome 116+). The user installs it
 with the NexusSystem app, or downloads the get.ps1 file of NexusBrowser's latest release, checks its SHA-256 and
-runs it with -File, then loads the extension in
-`chrome://extensions` as the installer shows (https://github.com/pironjulien/NexusBrowser#install).
+runs it with -File, then adds the extension to Chrome (Chrome Web Store page, or `chrome://extensions` while the
+store serves an older version) as the installer shows (https://github.com/pironjulien/NexusBrowser#-quick-start).
 
 ## Extension older than the installation?
 When the installer or the NexusSystem app reports `unpacked-extension-loaded-from-another-folder`, Chrome loads the

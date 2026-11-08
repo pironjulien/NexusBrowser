@@ -14,14 +14,14 @@ Sheets, Slides and YouTube transcripts, and follows downloads, while you keep br
 Windows 10 or 11 and Google Chrome 116+. The plugin talks to the NexusBrowser service installed on the PC (local
 bridge on `127.0.0.1`, authenticated by the local token of `%USERPROFILE%\.nexus\mcp-token.txt`) and its Chrome
 extension. If they are missing, ask Antigravity to install NexusBrowser (its skill gives the steps), or follow
-[installation](https://github.com/pironjulien/NexusBrowser#install): no administrator rights.
+[installation](https://github.com/pironjulien/NexusBrowser#-quick-start): no administrator rights.
 
 ## Privacy
 
 Everything runs on your PC: no account, no telemetry, no remote server. Pages are loaded by your own Chrome with
 your own sessions. Tool results go to Antigravity, which may send them to Google under its own privacy policy;
 NexusBrowser sends nothing to the author or to any third party. Details:
-[privacy](https://github.com/pironjulien/NexusBrowser#privacy).
+[privacy](https://github.com/pironjulien/NexusBrowser#-privacy).
 
 ## Links
 

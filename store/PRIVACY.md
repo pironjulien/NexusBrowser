@@ -35,8 +35,8 @@ as if you browsed them.
 
 On your PC only:
 
-- in Chrome's session storage, which agent session owns which tab (cleared when Chrome closes), and in its local
-  storage, whether the Gmail counter is on;
+- in Chrome's local storage, which agent session owns which tab (cleared when Chrome starts) and whether the Gmail
+  counter is on;
 - under `~/.nexus/nexus-browser/`: the bridge token, a bridge log (connection and emergency-stop events, rotated at
   1 MB), the install log, screenshots (at most 50, each kept under 24 hours), the exports you ask for and, when the
   Gmail counter is on, the unread number;
@@ -47,7 +47,7 @@ On your PC only:
 ## Removing it
 
 Remove the extension from Chrome, then follow "Removing it" in the
-[README](https://github.com/pironjulien/NexusBrowser#privacy): scheduled task, native host key and the folders above.
+[README](https://github.com/pironjulien/NexusBrowser#-privacy): scheduled task, native host key and the folders above.
 
 ## Contact
 

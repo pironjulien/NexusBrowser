@@ -21,11 +21,12 @@ pwsh -NoProfile -File scripts/store-package.ps1 -OutDir dist
   store signs the package with its own key). The store gives the extension **its own ID**, different from the
   unpacked one (`blcgddmjdkobmgakjffjpgiicjlflgjf`): `fjapmaccbgdfneoccclmlpgknbbfkaco`, already in
   `native/resources/bridge_config.json` (`store_id` and `allowed_origins`, a test checks both), so `install.ps1` declares
-  the native host for both IDs and the bridge accepts both. Once the extension is published, set `store_public` to
-  `true` and release: the installer's last step becomes "Add to Chrome" on the store page instead of developer mode.
+  the native host for both IDs and the bridge accepts both. The extension is published (`store_public` is `true`):
+  the installer's last step is "Add to Chrome" on the store page, developer mode only while the store serves an older
+  version.
   Keep only one of the two installed in a Chrome profile (both would connect to the same bridge).
-- `store/assets/`: two screenshots 1280x800 and the small promo tile 440x280 (PNG); the 128x128 icon is
-  `extension/icons/icon128.png`.
+- `store/assets/`: three screenshots 1280x800, the small promo tile 440x280 and the marquee 1400x560 (PNG); the
+  128x128 icon is `extension/icons/icon128.png`.
 
 ## Listing
 
@@ -47,7 +48,7 @@ Get started on Windows 10/11:
 2. Use NexusSystem to install NexusBrowser for your AI apps, then add this Chrome extension.
 
 The extension requires the local NexusBrowser companion. The companion provides the browser bridge and MCP connection on your PC; installing the extension alone does not connect an AI. No separate Python or Node.js runtime is required.
-Verified manual installation and updates: https://github.com/pironjulien/NexusBrowser#install
+Verified manual installation and updates: https://github.com/pironjulien/NexusBrowser#-quick-start
 
 In its own tabs, an agent can:
 - open pages, click and type with trusted input, fill forms, choose options and select files;
@@ -84,7 +85,7 @@ Let the user's local AI agents drive Chrome in their own background tabs, throug
 | `scripting` | Runs the extension's own packaged scripts (element locator, page map, Markdown export) in the agent's tab, in an isolated world. |
 | `downloads` | Reports and waits for a download started by the agent's tab, and erases only that entry when the agent asks. |
 | `offscreen` | Keeps the connection to the local bridge alive while the service worker sleeps (an offscreen document holds the WebSocket to 127.0.0.1). |
-| `storage` | Remembers which agent session owns which tab (session storage, cleared when Chrome closes) and the popup's one setting, the optional Gmail unread counter (local storage). |
+| `storage` | Remembers which agent session owns which tab (local storage, cleared when Chrome starts) and the popup's one setting, the optional Gmail unread counter (local storage). |
 | `alarms` | A once-a-minute check that the connection to the local bridge is still up, without keeping the service worker awake. |
 | Host permission `<all_urls>` and the content script | The agent may be asked to work on any site the user names. The content script only wakes the extension's service worker when a page loads: it reads nothing, receives no message and adds nothing to any page. |
 

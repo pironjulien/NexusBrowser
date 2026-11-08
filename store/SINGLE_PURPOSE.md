@@ -19,7 +19,7 @@ the user turns it on, Gmail's own unread feed.
 - The local bridge serves the agents **and** the user's agent keypad (Logitech MX Creative Keypad "AI Agents"
   pad), which shows what the agents are doing and whether something waits for the user. The unread count is one of
   the signals that keypad shows next to the agents' state: it reaches the same local bridge, never anything else.
-- **Off by default.** The popup has one setting, "Gmail unread messages for the pad", unticked on install. Until
+- **Off by default.** The popup has one setting, "Unread Gmail count for the keypad", unticked on install. Until
   the user ticks it, the extension never contacts `mail.google.com`.
 - **Minimal data.** It reads Gmail's official Atom feed (`/mail/feed/atom`) with the browser's own session, keeps
   only the `<fullcount>` number, and sends that number to `127.0.0.1`. No sender, subject, body or address is read
