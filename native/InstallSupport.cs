@@ -141,7 +141,7 @@ internal static class EngineBuilds
     }
 
     /// <summary>Same value as the engine's RestartRequest.CodeFingerprint: its main assembly (framework-dependent build)
-    /// or the single-file executable (release build).</summary>
+    /// or the executable compiled ahead of time (Native AOT release build).</summary>
     public static string Fingerprint(string folder)
     {
         string dll = Path.Join(folder, "NexusBrowser.dll");
@@ -377,51 +377,6 @@ internal static class TaskXml
 
     public static bool HasTrigger(string? xml) =>
         xml is not null && Parse(xml).Root?.Element(Ns + "Triggers")?.HasElements == true;
-}
-
-/// <summary>The Task Scheduler's own COM API (Schedule.Service), root folder: no schtasks.exe, no PowerShell.</summary>
-internal sealed class WindowsTaskStore : ITaskStore
-{
-    private const int TaskCreateOrUpdate = 6, LogonInteractiveToken = 3;
-
-    private static dynamic Folder()
-    {
-        var type = Type.GetTypeFromProgID("Schedule.Service", throwOnError: true)!;
-        dynamic service = Activator.CreateInstance(type)!;
-        service.Connect();
-        return service.GetFolder("\\");
-    }
-
-    /// <summary>No such task (or folder): the COM binder raises it as a FileNotFoundException, others as COMException.</summary>
-    private static bool Missing(Exception e) => e.HResult is unchecked((int)0x80070002) or unchecked((int)0x80070003);
-
-    private static dynamic? Find(string name)
-    {
-        try { return Folder().GetTask(name); }
-        catch (Exception e) when (Missing(e)) { return null; }
-    }
-
-    public string? Xml(string name) => Find(name) is { } task ? (string)task.Xml : null;
-
-    public string State(string name)
-    {
-        if (Find(name) is not { } task) return "Absent";
-        return (int)task.State switch { 1 => "Disabled", 2 => "Queued", 3 => "Ready", 4 => "Running", _ => "Unknown" };
-    }
-
-    public void Register(string name, string xml) =>
-        Folder().RegisterTask(name, xml, TaskCreateOrUpdate, null, null, LogonInteractiveToken, null);
-
-    public void Delete(string name)
-    {
-        try { Folder().DeleteTask(name, 0); }
-        catch (Exception e) when (Missing(e)) { /* already gone */ }
-    }
-
-    public void Run(string name)
-    {
-        if (Find(name) is { } task) task.Run(null);
-    }
 }
 
 /// <summary>Real HKCU (default value of a key): get, set (returns the value read back), remove (true when it existed).</summary>

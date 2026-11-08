@@ -1,5 +1,5 @@
 # Release package of one architecture: NexusBrowser-<rid>.zip, what get.ps1 unpacks into %LOCALAPPDATA%\NexusBrowser\app.
-# engine\ (self-contained single-file NexusBrowser.exe, no .NET needed), extension\, the installer and its scripts, the
+# engine\ (NexusBrowser.exe compiled ahead of time with libSkiaSharp.dll, no .NET needed), extension\, the installer and its scripts, the
 # Antigravity plugin and the skill, native\resources\bridge_config.json (extension IDs). No sources, no tests.
 # -Mcpb: also the Claude Desktop extension nexus-browser-<rid>.mcpb (server type binary: this engine, --mcp), packed by the
 # official mcpb CLI (Node). Used by the release workflow and the Install CI; outputs outside the repository.
@@ -36,7 +36,7 @@ if ($Mcpb) {
     $manifest = Get-Content (Join-Path $bundle 'manifest.json') -Raw | ConvertFrom-Json
     if ($manifest.version -ne $version) { throw "mcpb/manifest.json is $($manifest.version), VERSION is $version." }
     New-Item -ItemType Directory -Force (Join-Path $bundle 'server') | Out-Null
-    Copy-Item -LiteralPath (Join-Path $stage 'engine\NexusBrowser.exe') -Destination (Join-Path $bundle 'server')
+    Copy-Item -LiteralPath (Join-Path $stage 'engine\NexusBrowser.exe'), (Join-Path $stage 'engine\libSkiaSharp.dll') -Destination (Join-Path $bundle 'server')
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'native\THIRD-PARTY-NOTICES.txt') -Destination (Join-Path $bundle 'server')
     $out = Join-Path ([IO.Path]::GetFullPath($OutDir)) "nexus-browser-$Runtime.mcpb"
     & npx --yes '@anthropic-ai/mcpb@2.1.2' pack $bundle $out

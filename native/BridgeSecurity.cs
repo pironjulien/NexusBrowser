@@ -15,7 +15,7 @@ namespace NexusBrowser.Native;
 
 public static partial class BridgeSecurity
 {
-    public const string Version = "2.36.2";
+    public const string Version = "2.37.0";
     public const string TokenFileName = "bridge-token";
     public const string TokenHeader = "X-Nexus-Browser-Token";
     public const string AgentHeader = "X-Nexus-Browser-Agent";
@@ -705,8 +705,8 @@ public static partial class BridgeSecurity
             string real = FinalPath(full) ?? full;
             if (UploadRefusal([real]) is { } refusal)
                 throw new UnauthorizedAccessException(refusal);
-            files.Add(real);
-            sizes.Add(new FileInfo(real).Length);
+            files.Add((JsonNode)real);
+            sizes.Add((JsonNode)new FileInfo(real).Length);
         }
         return (files, sizes);
     }

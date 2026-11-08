@@ -909,7 +909,7 @@ public sealed class BridgeServer : IAsyncDisposable
         {
             var goneArr = new JsonArray();
             foreach (var g in gone)
-                goneArr.Add(g);
+                goneArr.Add((JsonNode)g);
             payload["gone"] = goneArr;
         }
 

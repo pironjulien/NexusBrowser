@@ -5,6 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.37.0] - 2026-11-08
+
+### Changed
+- Releases ship the engine compiled ahead of time (Native AOT) for x64 and Arm64 instead of a self-contained .NET
+  single file: no JIT at start-up and a much smaller resident daemon. Measured on the same PC, the shared HTTP daemon
+  (`--http`) started on its own and left idle 5 minutes after one session: working set 41.5 MB → 16.4 MB, private bytes
+  12.6 MB → 7.2 MB; start to the first `tools/list` answer 101 ms → 30 ms (median of 11); engine on disk 84.3 MB →
+  23.4 MB (`NexusBrowser.exe` 11.1 MB, with SkiaSharp's native `libSkiaSharp.dll` beside it instead of unpacked into
+  `%TEMP%` at run time). Same tools, same installation folders and update path.
+- The Task Scheduler (installer tasks) and the Explorer launch broker (user applications) are called through
+  source-generated COM interop instead of the C# `dynamic` binder; JSON uses source generation only. The trimming,
+  single-file and AOT analyzers run in every build with warnings as errors, and the AOT compiler and trimmer
+  (`Microsoft.DotNet.ILCompiler`, `Microsoft.NET.ILLink.Tasks`) are pinned in `packages.lock.json`.
+
 ## [2.36.2] - 2026-11-08
 
 ### Added

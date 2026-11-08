@@ -7,10 +7,25 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>NexusBrowser</AssemblyName>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-    <!-- Release builds (self-contained, single file); declared so packages.lock.json stays the same for every build. -->
+    <!-- Both release architectures in the restore graph, so packages.lock.json covers the release publishes. -->
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <RootNamespace>NexusBrowser</RootNamespace>
+    <!-- Native AOT: release packages carry NexusBrowser.exe compiled ahead of time per architecture (no .NET to install,
+         no JIT at start-up, a smaller resident daemon). The trimming, single-file and AOT analyzers run in every build
+         and, with warnings as errors, no reflection-based JSON, `dynamic` COM or runtime-marshalled call can come back;
+         reflection-based JSON is off in every build of the engine, so the tests run it the way the release does. -->
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <!-- The two packages below are pinned on purpose (see there): their "delete explicit reference" notice is answered. -->
+    <SuppressGenerateILCompilerExplicitPackageReferenceWarning>true</SuppressGenerateILCompilerExplicitPackageReferenceWarning>
+    <SuppressILLinkExplicitPackageReferenceWarning>true</SuppressILLinkExplicitPackageReferenceWarning>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- The AOT compiler and the trimmer, pinned like any package (packages.lock.json, Dependabot): left implicit, their
+         version would follow the .NET SDK of the machine and break the locked restore whenever the CI's SDK moves. -->
+    <PackageReference Include="Microsoft.DotNet.ILCompiler" Version="10.0.14" />
+    <PackageReference Include="Microsoft.NET.ILLink.Tasks" Version="10.0.14" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="SkiaSharp" Version="4.154.0" />
     <None Include="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />

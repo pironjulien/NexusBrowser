@@ -12,6 +12,10 @@ namespace NexusBrowser.Native;
 [TomlSerializable(typeof(TomlTable))]
 internal partial class BrowserTomlContext : TomlSerializerContext { }
 
+// Source-generated JSON (Native AOT): a JSON string literal, which is also a TOML basic string.
+[System.Text.Json.Serialization.JsonSerializable(typeof(string))]
+internal partial class BrowserJsonContext : System.Text.Json.Serialization.JsonSerializerContext { }
+
 /// <summary>
 /// Declares the nexus-browser MCP server to the AI clients found on this PC (--register, public install by get.ps1).
 /// Claude Code (CLI or ~/.claude.json), Claude Desktop and Codex (~/.codex/config.toml): one stdio entry each, this
@@ -207,7 +211,7 @@ public static partial class ClientRegistration
     [GeneratedRegex(@"^[ \t]*\[(?<name>[^\]\r\n]+)\][ \t]*(?:#[^\r\n]*)?\r?$", RegexOptions.Multiline)]
     private static partial Regex TomlTable();
 
-    private static string TomlString(string text) => JsonSerializer.Serialize(text); // a JSON string is a TOML basic string
+    private static string TomlString(string text) => JsonSerializer.Serialize(text, BrowserJsonContext.Default.String); // a JSON string is a TOML basic string
 
     /// <summary>Our own tables ([mcp_servers.nexus-browser] and its subtables), each up to the next table.</summary>
     public static (string Without, string? Ours) CutTomlTables(string text)
@@ -272,7 +276,7 @@ public static partial class ClientRegistration
         if (!command.Success) return false;
         try
         {
-            string path = JsonSerializer.Deserialize<string>(command.Groups[1].Value)!;
+            string path = JsonSerializer.Deserialize(command.Groups[1].Value, BrowserJsonContext.Default.String)!;
             string relative = Path.GetRelativePath(Path.Join(localAppData, "NexusBrowser"), Path.GetFullPath(path)).Replace('\\', '/');
             bool installed = Regex.IsMatch(relative, @"^versions/[0-9a-f]{16}/NexusBrowser\.exe$", RegexOptions.IgnoreCase) ||
                 relative.Equals("app/engine/NexusBrowser.exe", StringComparison.OrdinalIgnoreCase) ||

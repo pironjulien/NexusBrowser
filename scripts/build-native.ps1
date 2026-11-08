@@ -1,8 +1,8 @@
 # Builds the engine into a candidate folder outside the repository and OneDrive (~\.nexus\build\nexus-browser), never
-# over a running installation. -Runtime win-x64|win-arm64: self-contained single file (the release build), not
-# compressed: every MCP session starts the engine (stdio relay), and unpacking a compressed bundle doubled each start
-# (--version, 07/11/2026: 95 ms compressed, 47 ms not; the release zip compresses it anyway). ReadyToRun was measured too
-# and left out: no gain on start (the .NET runtime packs are precompiled already), 13 MB more.
+# over a running installation. -Runtime win-x64|win-arm64: Native AOT (the release build, PublishAot in
+# native\NexusBrowser.csproj): NexusBrowser.exe compiled ahead of time, no .NET to install and no JIT at start-up, with
+# SkiaSharp's native libSkiaSharp.dll beside it (a native library cannot be linked into the executable). Without
+# -Runtime: the framework-dependent development build (no C++ linker needed).
 param([string]$OutputDirectory, [string]$Runtime)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'runtime.ps1')
@@ -15,12 +15,21 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw '.NET 10 SD
 if (Test-Path -LiteralPath $OutputDirectory) { Remove-Item -LiteralPath $OutputDirectory -Recurse -Force }
 $arguments = @('publish', (Join-Path $repositoryRoot 'native\NexusBrowser.csproj'), '-c', 'Release', '-o', $OutputDirectory, '--nologo')
 if ($Runtime) {
-    $arguments += @('-r', $Runtime, '--self-contained', 'true', '-p:PublishSingleFile=true',
-        '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:DebugType=none')
+    $arguments += @('-r', $Runtime, '-p:DebugType=none')
+    # Native AOT finds the C++ linker through vswhere, which is not on PATH outside a developer prompt.
+    $installer = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
+    if ((Test-Path -LiteralPath $installer) -and ($env:PATH -split ';') -notcontains $installer) { $env:PATH = "$env:PATH;$installer" }
+} else {
+    $arguments += '-p:PublishAot=false'
 }
 & dotnet @arguments
 if ($LASTEXITCODE) { throw 'Native NexusBrowser build failed.' }
 $candidate = Join-Path $OutputDirectory 'NexusBrowser.exe'
+if ($Runtime) {
+    # Compiled ahead of time: no managed assembly beside the executable, Skia's native library next to it.
+    if (Get-ChildItem -LiteralPath $OutputDirectory -Filter *.dll | Where-Object Name -ne 'libSkiaSharp.dll') { throw "$Runtime engine was not compiled ahead of time." }
+    if (-not (Test-Path -LiteralPath (Join-Path $OutputDirectory 'libSkiaSharp.dll'))) { throw "$Runtime engine: libSkiaSharp.dll missing." }
+}
 $expected = (Get-Content (Join-Path $repositoryRoot 'VERSION') -Raw).Trim()
 # An ARM64 build runs on ARM64 Windows only (an ARM64 PC also runs x64 builds): checked where it can run.
 $hostArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }

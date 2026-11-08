@@ -1,6 +1,6 @@
 # Release, in two channels, with the shared Nexus release workflows of NexusSystem.
 # - Development: every push to main checks one version everywhere, runs test.ps1 and builds the self-contained engine
-#   for both Windows architectures (NexusBrowser-win-x64.zip, NexusBrowser-win-arm64.zip: what get.ps1 installs), the
+#   for both Windows architectures, compiled ahead of time (Native AOT: no .NET to install; NexusBrowser-win-x64.zip, NexusBrowser-win-arm64.zip: what get.ps1 installs), the
 #   Chrome Web Store package of the extension (nexus-browser-extension-<extension version>.zip), the Claude Desktop
 #   extension for each architecture (nexus-browser-win-x64.mcpb, nexus-browser-win-arm64.mcpb, server type binary),
 #   get.ps1 and SHA256SUMS.txt. product-dev-release attests them (Sigstore: `gh attestation verify <file> --repo
@@ -80,6 +80,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory dist | Out-Null
+          # Native AOT (scripts/build-native.ps1 -Runtime): x64 and Arm64 engines, the Arm64 one cross-compiled with the
+          # runner's MSVC Arm64 tools.
           ./scripts/package-release.ps1 -Runtime win-x64 -OutDir dist -Mcpb
           ./scripts/package-release.ps1 -Runtime win-arm64 -OutDir dist -Mcpb
           $store = ./scripts/store-package.ps1 -OutDir dist

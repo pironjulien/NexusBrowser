@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -25,16 +24,15 @@ public static partial class RestartRequest
             ? configured
             : Path.Join(BridgeSecurity.DefaultDataDir(), "daemon-restart.request");
 
-    /// <summary>SHA-256 of the code this process runs: the main assembly (framework-dependent build) or the single-file
-    /// executable (release build). The installer computes the same value to name the immutable version folder.</summary>
+    /// <summary>SHA-256 of the code this process runs: the main assembly beside it (framework-dependent build) or the
+    /// executable compiled ahead of time (Native AOT release build, no assembly file). The installer computes the same
+    /// value to name the immutable version folder (EngineBuilds.Fingerprint).</summary>
     public static string CodeFingerprint()
     {
         try
         {
-#pragma warning disable IL3000 // Empty in the single-file release build on purpose: Environment.ProcessPath is used then.
-            string location = Assembly.GetEntryAssembly()?.Location ?? "";
-#pragma warning restore IL3000
-            string path = location.Length > 0 && File.Exists(location) ? location : Environment.ProcessPath ?? "";
+            string assembly = Path.Join(AppContext.BaseDirectory, "NexusBrowser.dll");
+            string path = File.Exists(assembly) ? assembly : Environment.ProcessPath ?? "";
             if (path.Length > 0 && File.Exists(path))
             {
                 using var stream = File.OpenRead(path);

@@ -45,7 +45,7 @@ tabs, while you keep browsing in yours.
 </tr>
 </table>
 
-Windows 10/11 (x64 and ARM64) · Chrome 116+ · self-contained .NET engine, nothing else to install · MIT licence
+Windows 10/11 (x64 and ARM64) · Chrome 116+ · native .NET engine (Native AOT), nothing else to install · MIT licence
 
 ### See it in action
 
@@ -188,7 +188,7 @@ flowchart LR
 ```
 
 `NexusBrowser.exe` is the only engine (C#, .NET 10; the Python one was removed in 2.33.0). A release carries it
-self-contained for each Windows architecture (`NexusBrowser-win-x64.zip`, `NexusBrowser-win-arm64.zip`), with their
+compiled ahead of time (Native AOT, no .NET to install) for each Windows architecture (`NexusBrowser-win-x64.zip`, `NexusBrowser-win-arm64.zip`), with their
 `SHA256SUMS.txt` and build provenance (Sigstore: `gh attestation verify <file> --repo pironjulien/NexusBrowser
 --signer-repo pironjulien/NexusSystem`). Each build is installed once in
 `%LOCALAPPDATA%\NexusBrowser\versions\<fingerprint>` and never overwritten while it runs: an update leaves the running

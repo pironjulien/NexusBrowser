@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Include="..\..\native\ChromeLauncher.cs" Link="ChromeLauncher.cs" />
     <Compile Include="..\..\native\UserApplication.cs" Link="UserApplication.cs" />
+    <Compile Include="..\..\native\ShellDispatch.cs" Link="ShellDispatch.cs" />
     <Compile Include="..\..\native\Boundary.cs" Link="Boundary.cs" />
   </ItemGroup>
 </Project>

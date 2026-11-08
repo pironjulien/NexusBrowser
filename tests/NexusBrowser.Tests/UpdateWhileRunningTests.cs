@@ -48,13 +48,13 @@ public sealed class ReleaseEngine : IDisposable
 
 /// <summary>
 /// An AI session keeps its engine for hours (shared daemon, bridge, stdio server) while an update installs the next
-/// build. The release engine is a .NET single file that reads its own executable for each assembly on first use:
-/// NexusFree 1.3.3 found that replacing that file under a running engine (renamed aside, new version copied to its
-/// path) makes every later tool call fail with an empty error. NexusBrowser installs each build in its own folder,
-/// never written again, and removes an older folder only once no engine runs from it. Here the real release engine
-/// runs from such a folder, the next build is installed and the cleanup runs with the installer's own code
-/// (native\InstallSupport.cs, EngineBuilds), and the engine must still answer; the in-place replacement is checked too, to show this
-/// test sees the failure when it happens. The release publish loads the whole machine for a while: this class runs
+/// build. A .NET single file reads its own executable for each assembly on first use: NexusFree 1.3.3 found that
+/// replacing that file under a running engine (renamed aside, new version copied to its path) makes every later tool
+/// call fail with an empty error. NexusBrowser installs each build in its own folder, never written again, and removes
+/// an older folder only once no engine runs from it. Here the real release engine (Native AOT since 2.37.0) runs from
+/// such a folder, the next build is installed and the cleanup runs with the installer's own code
+/// (native\InstallSupport.cs, EngineBuilds), and the engine must still answer; replaced in place, the engine compiled
+/// ahead of time keeps answering too. The release publish loads the whole machine for a while: this class runs
 /// alone, after the parallel tests, so their timing budgets (daemon restart polls) are not eaten by it.
 /// </summary>
 [Collection(ProcessEnvironmentCollection.Name)]
@@ -143,12 +143,10 @@ public sealed class UpdateWhileRunningTests(ReleaseEngine release) : IClassFixtu
         // No bridge here (port 1): the call goes as far as the HTTP request, and a working engine says why it failed.
         var call = await Post("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"browser_list_tabs","arguments":{}}}""");
         var error = JsonNode.Parse((string)call["result"]!["content"]![0]!["text"]!)!["error"]!.GetValue<string>();
-        if (replacedInPlace)
-        {
-            Assert.Equal("", error);
-            return;
-        }
         Assert.Contains("NexusBrowser bridge", error, StringComparison.Ordinal);
+        // Compiled ahead of time, the engine never reads its executable again once mapped: unlike the former .NET
+        // single file, it keeps answering even when replaced in place. Immutable folders stay the rule all the same.
+        if (replacedInPlace) return;
 
         // Once that engine has exited, the next update removes its folder and keeps the build in use.
         daemon.Process.Kill(entireProcessTree: true);
