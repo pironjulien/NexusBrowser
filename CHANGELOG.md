@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Tests: the error-mode check in a child process expects only the two bits always inherited
+  (`SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX`): the runtime briefly sets exactly those two while it loads a
+  native library on another thread, so a child started in that window lacked `SEM_NOGPFAULTERRORBOX` and the check
+  failed now and then in CI. The full mode is still checked in the test process right after it is set.
+
 ## [2.37.1] - 2026-11-08
 
 ### Fixed
