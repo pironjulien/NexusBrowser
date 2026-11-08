@@ -203,11 +203,40 @@ public sealed class BridgeServer : IAsyncDisposable
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
             string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss,fff} {level} {message}\n";
-            File.AppendAllText(_logFile, line, new UTF8Encoding(false));
+            AppendRotating(_logFile, line);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Ignore logging error
+        }
+    }
+
+    internal const long LogMaxBytes = 1_048_576;
+    internal const int LogBackups = 3;
+    private static readonly Lock LogLock = new();
+
+    /// <summary>Appends <paramref name="line"/> to the log, first rotating it (log → log.1 → … → log.3, the oldest
+    /// dropped) when the line would take it past <see cref="LogMaxBytes"/>, as the documented 1 MB, three backups.</summary>
+    internal static void AppendRotating(string path, string line, long maxBytes = LogMaxBytes, int backups = LogBackups)
+    {
+        var encoding = new UTF8Encoding(false);
+        lock (LogLock)
+        {
+            var info = new FileInfo(path);
+            if (info.Exists && info.Length > 0 && info.Length + encoding.GetByteCount(line) > maxBytes)
+            {
+                for (int i = backups - 1; i >= 1; i--)
+                {
+                    string from = $"{path}.{i}";
+                    if (File.Exists(from))
+                        File.Move(from, $"{path}.{i + 1}", overwrite: true);
+                }
+                if (backups >= 1)
+                    File.Move(path, $"{path}.1", overwrite: true);
+                else
+                    File.Delete(path);
+            }
+            File.AppendAllText(path, line, encoding);
         }
     }
 

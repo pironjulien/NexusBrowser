@@ -110,6 +110,29 @@ public sealed partial class NativeProcessTests : IDisposable
         return await line ?? throw new InvalidOperationException($"process ended without banner; stderr={child.Stderr}");
     }
 
+    private static string SharedRead(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    [Fact]
+    public void BridgeLogRotatesAtItsCapAndKeepsThreeBackups()
+    {
+        string log = _dir["rotating.log"];
+        for (int i = 1; i <= 5; i++)
+            BridgeServer.AppendRotating(log, $"line {i}\n", maxBytes: 10, backups: 3);
+        Assert.Equal("line 5\n", File.ReadAllText(log));
+        Assert.Equal("line 4\n", File.ReadAllText(log + ".1"));
+        Assert.Equal("line 3\n", File.ReadAllText(log + ".2"));
+        Assert.Equal("line 2\n", File.ReadAllText(log + ".3"));
+        Assert.False(File.Exists(log + ".4")); // line 1 dropped with the oldest backup
+
+        BridgeServer.AppendRotating(log, "a\n", maxBytes: 10, backups: 3); // still under the cap: appended
+        Assert.Equal("line 5\na\n", File.ReadAllText(log));
+    }
+
     [Fact]
     public async Task BridgeProcessAndMcpStdioProcessReachAFakeExtension()
     {
@@ -123,11 +146,18 @@ public sealed partial class NativeProcessTests : IDisposable
             ["NEXUS_SHARED_HOME"] = _dir["shared"],
             ["NEXUS_STATUS_DIR"] = _dir["status"],
         };
+        // A log already at its 1 MB cap: the bridge's first line rotates it (README: rotated at 1 MB, three backups).
+        string fullLog = new string('x', (int)BridgeServer.LogMaxBytes - 10) + "\n";
+        File.WriteAllText(_dir["bridge.log"], fullLog);
         using var bridge = new ChildProcess(NativeExe.Path,
             ["--bridge", "--port", "0", "--token-file", tokenFile, "--log-file", _dir["bridge.log"]], env);
         // The OS allocates both ports while binding. Releasing "free" probes before starting a child raced with
         // parallel tests and outbound ephemeral sockets. Read the bound addresses from the startup banner.
         Assert.StartsWith("===", await FirstLineAsync(bridge, 15));
+        Assert.Equal(fullLog, File.ReadAllText(_dir["bridge.log.1"]));
+        string currentLog = SharedRead(_dir["bridge.log"]); // the bridge may be appending
+        Assert.True(currentLog.Length < BridgeServer.LogMaxBytes);
+        Assert.Contains(" INFO starting version=", currentLog);
         await FirstLineAsync(bridge, 15); // title
         string wsAddress = (await FirstLineAsync(bridge, 15)).Trim()["WebSocket: ".Length..];
         string httpAddress = (await FirstLineAsync(bridge, 15)).Trim()["HTTP REST: ".Length..];

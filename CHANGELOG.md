@@ -5,7 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.37.2] - 2026-11-08
+
 ### Fixed
+- `bridge.log` rotates again at 1 MB with three backups (`bridge.log.1` to `.3`), as documented: the rotation was
+  lost when the bridge moved from Python to C#, so the log grew without limit.
 - Tests: the error-mode check in a child process expects only the two bits always inherited
   (`SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX`): the runtime briefly sets exactly those two while it loads a
   native library on another thread, so a child started in that window lacked `SEM_NOGPFAULTERRORBOX` and the check
