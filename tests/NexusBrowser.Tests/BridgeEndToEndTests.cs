@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using NexusBrowser.Native;
 using Xunit;
@@ -154,14 +155,45 @@ public sealed class BridgeEndToEndTests : IDisposable
         Assert.Equal("list_tabs", (string?)first["action"]);
         Assert.Contains("claude-oldsession", (first["gone"] as JsonArray ?? []).Select(x => (string?)x));
 
+        // A full address with a private path and query: the journal keeps the registrable domain only.
+        const string privateUrl = "https://www.example.com/private-folder/report?q=secret-term";
         var newTab = await mcp.HandleJsonRpcLineAsync(
-            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_new_tab\",\"arguments\":{\"url\":\"https://example.com\"}}}", identity, Environment.ProcessId, ct);
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_new_tab\",\"arguments\":{\"url\":\"" + privateUrl + "\"}}}", identity, Environment.ProcessId, ct);
         Assert.False((bool)newTab!["result"]!["isError"]!, newTab.ToJsonString());
         lock (received)
-            Assert.Contains(received, c => (string?)c["action"] == "create_tab" && (string?)c["params"]?["url"] == "https://example.com");
+            Assert.Contains(received, c => (string?)c["action"] == "create_tab" && (string?)c["params"]?["url"] == privateUrl);
 
+        // Shared journal FORMAT.md v1: one complete line per tool call, so a journal that goes silent or loses a field
+        // fails here (NexusRelay's journal stopped for 9 days after an engine rewrite without any test noticing).
         string journal = Path.Join(_dir.Path, "journal", "browser", "claude");
-        Assert.True(Directory.Exists(journal) && Directory.GetFiles(journal, "*.jsonl").Length > 0, $"no journal in {journal}");
+        string[] files = Directory.Exists(journal) ? Directory.GetFiles(journal, "*.jsonl") : [];
+        string file = Assert.Single(files);
+        Assert.Matches(@"^\d{4}-\d{2}\.jsonl$", Path.GetFileName(file));
+        string raw = File.ReadAllText(file);
+        Assert.DoesNotContain("private-folder", raw);
+        Assert.DoesNotContain("secret-term", raw);
+        Assert.DoesNotContain("www.example.com", raw);
+        Assert.DoesNotContain("https://", raw);
+        var lines = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => (JsonObject)JsonNode.Parse(l)!).ToList();
+        Assert.Equal(["list_tabs", "new_tab"], lines.Select(l => (string?)l["action"]));
+        string[] validIssues = ["✓", "=", "~", "✗", "refus", "différé", "arrêt"];
+        foreach (var line in lines)
+        {
+            foreach (var key in new[] { "v", "ts", "agent", "outil", "appel", "app", "cadre", "action", "technique", "issue", "ms", "premier_plan", "erreur" })
+                Assert.True(line.ContainsKey(key), $"journal line without {key}: {line.ToJsonString()}");
+            Assert.Equal(1, line["v"]!.GetValue<int>());
+            Assert.Matches(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$", (string?)line["ts"]);
+            Assert.Equal("claude", (string?)line["agent"]);
+            Assert.Equal(BridgeSecurity.Version, (string?)line["outil"]);
+            Assert.False(string.IsNullOrEmpty((string?)line["appel"]));
+            Assert.Contains((string?)line["issue"], validIssues);
+            Assert.Equal(JsonValueKind.Number, line["ms"]!.GetValueKind());
+            Assert.True(line["ms"]!.AsValue().TryGetValue(out int ms) && ms >= 0, $"ms must be a non-negative integer: {line["ms"]}");
+            Assert.Equal(JsonValueKind.False, line["premier_plan"]!.GetValueKind());
+            Assert.Null(line["erreur"]);
+        }
+        Assert.Equal("✓", (string?)lines[1]["issue"]);
+        Assert.Equal("example.com", (string?)lines[1]["app"]);
 
         responder.Cancel();
         try { await responderTask; } catch (OperationCanceledException) { /* stopped on purpose */ }
