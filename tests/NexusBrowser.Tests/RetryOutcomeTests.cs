@@ -31,6 +31,19 @@ public sealed class RetryOutcomeTests
         Assert.Equal(message, (string?)answer["error"]);
     }
 
+    [Fact]
+    public void ASelectorNotFoundGivesTheExtensionsSuggestionsAsAnArrayAndStaysNotDone()
+    {
+        const string message = "Element not found for {\"selector\":\"textarea[name=releaseNotes]\",\"index\":0}. Did you mean: " +
+            "[\"textarea#releaseNotes\",\"input[placeholder=\\\"releaseNotes\\\"]\"]? Nothing was sent.";
+        var answer = Outcome(Error(message), idempotent: false);
+        Assert.Equal("not_done", (string?)answer["outcome"]);
+        Assert.True((bool)answer["retry_safe"]!);
+        var list = Assert.IsType<JsonArray>(answer["did_you_mean"]);
+        Assert.Equal(["textarea#releaseNotes", "input[placeholder=\"releaseNotes\"]"], list.Select(n => (string)n!));
+        Assert.Null(Outcome(Error("Element not found for {\"selector\":\"#x\",\"index\":0}."), idempotent: false)["did_you_mean"]);
+    }
+
     [Theory]
     [InlineData("Command 'click' timed out after 15s.")]
     [InlineData("No response from the NexusBrowser bridge for 'click': the command may have run. It is not resent automatically; check the page state before running it again.")]

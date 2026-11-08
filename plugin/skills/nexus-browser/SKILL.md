@@ -44,6 +44,10 @@ Do not create a question card just to report progress.
   (`recovered_mark` in the answer); otherwise the gesture fails with nothing sent.
 - A failed call carries `retry_safe`: `outcome="not_done"` means nothing reached the page (fix and resend);
   `"partial"`: a batch stopped after earlier steps ran (resend only the remaining steps).
+- A CSS `selector` that matches nothing (`browser_click`, `browser_fill`, `browser_upload`...) answers
+  `did_you_mean`: visible elements carrying the same value in id, name, aria-label, formcontrolname, placeholder or
+  label, each as a selector matching it alone (`textarea[name=releaseNotes]` -> `["textarea#releaseNotes"]`). Resend
+  with one of them; never guess another attribute.
 - `outcome="unknown"` (a timeout, a lost connection) means it may have acted, or may still be acting: **never
   resend blindly**. Read the page first (state, list, status text, network) and resend only what did not happen.
   A `browser_eval` cut by its 20 s timeout keeps running in the page: the identical script is refused while it runs

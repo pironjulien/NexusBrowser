@@ -2467,6 +2467,27 @@ test('fill : vrai clic de focus, Input.insertText, valeur relue (verified)', asy
     assert.deepEqual(h.focusCalls, {tabs: 0, windows: 0});
 });
 
+test('selector not found: did you mean the visible element carrying the same value (Partner Center, 08/11)', async () => {
+    const {h, dom} = richHarness((el) => [
+        el('label', {for: 'releaseNotes'}, 'Release notes'),
+        el('textarea', {id: 'releaseNotes', name: ''}),
+        el('textarea', {id: 'releasenotes-old', 'data-hidden': ''}),
+        el('input', {'aria-label': 'Release notes summary', placeholder: 'releaseNotes'}),
+        el('button', {name: 'submitBtn', 'data-testid': 'submit'}, 'Submit')
+    ]);
+    const res = await h.run('fill', {tabId: 1, selector: 'textarea[name=releaseNotes]', value: 'v1.0.20', timeoutMs: 50});
+    assert.match(res.error, /Element not found/);
+    // Same tag first, unique and visible only (the hidden textarea is left out), as a selector resent as is.
+    assert.ok(res.error.includes('Did you mean: ["textarea#releaseNotes","input[placeholder=\\"releaseNotes\\"]"]'), res.error);
+    assert.equal(dom.byId('releaseNotes').value, '');
+    const click = await h.run('click', {tabId: 1, selector: 'button[name="submit"]', timeoutMs: 50});
+    assert.ok(click.error.includes('Did you mean: ["button[data-testid=\\"submit\\"]"]?'), click.error);
+    assert.equal(dom.trusted.filter(t => t.type === 'click').length, 0);
+    const none = await h.run('click', {tabId: 1, selector: '#nothing-like-it', timeoutMs: 50});
+    assert.match(none.error, /Element not found/);
+    assert.ok(!none.error.includes('Did you mean'), none.error);
+});
+
 test('fill remplace : Ctrl+A réel (code KeyA, VK 65, modificateur Control, commande selectAll) puis texte', async () => {
     const {h, dom} = richHarness(formPage);
     dom.byId('city')._value = 'Ancienne ville';

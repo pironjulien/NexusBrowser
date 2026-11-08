@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.36.2] - 2026-11-08
+
+### Added
+- A CSS `selector` that matches nothing (`browser_click`, `browser_fill`, `browser_upload` and the other gestures)
+  now answers `did_you_mean`: the visible elements of the page carrying one of the selector's values in id, name,
+  aria-label, formcontrolname, placeholder, data-testid or their label, each as a selector that matches it alone, same
+  tag first (3 at most). In Partner Center, `textarea[name=releaseNotes]` found nothing because the field's `name` is
+  empty; the answer now says `["textarea#releaseNotes"]`, so the agent fixes it in one resend instead of a page read.
+  The call stays `outcome: "not_done"`, `retry_safe: true`.
+
 ## [2.36.1] - 2026-11-08
 
 ### Fixed
@@ -2104,7 +2114,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.1...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.2...HEAD
+[2.36.2]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.1...v2.36.2
 [2.36.1]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.0...v2.36.1
 [2.36.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.35.32...v2.36.0
 [2.33.11]: https://github.com/pironjulien/NexusBrowser/compare/v2.33.10...v2.33.11

@@ -1748,7 +1748,64 @@ function agyMouseKit(spec, textKit, locatorKit) {
         if (loc && loc.mark !== undefined && loc.mark !== null) {
             return { notFound: true, error: "No element registered for mark #" + loc.mark + ". Run vision-inspect or interactive_map first." };
         }
-        return { notFound: true, error: "Element not found for " + JSON.stringify(loc) };
+        const didYouMean = loc && loc.selector ? selectorSuggestions(String(loc.selector)) : [];
+        const hint = didYouMean.length ? " Did you mean: " + JSON.stringify(didYouMean) + "?" : "";
+        return { notFound: true, error: "Element not found for " + JSON.stringify(loc) + "." + hint, didYouMean };
+    }
+    // CSS selector that found nothing: visible elements of this document whose id, name, aria-label, formcontrolname,
+    // placeholder, data-testid or label carries one of its values (textarea[name=releaseNotes] -> textarea#releaseNotes
+    // when the page leaves name empty), each given as a selector that matches it alone. Same tag first, 3 at most.
+    const HINT_ATTRS = ["name", "aria-label", "formcontrolname", "placeholder", "data-testid"];
+    function hintKey(v) { return String(v || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ""); }
+    function cssString(v) { return "\"" + String(v).replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\n/g, "\\a ") + "\""; }
+    function attrOf(el, name) { return typeof el.getAttribute === "function" ? el.getAttribute(name) : null; }
+    function hintVisible(el) {
+        try {
+            const r = el.getBoundingClientRect();
+            if (!r || !(r.width > 0) || !(r.height > 0)) return false;
+            const st = typeof win0.getComputedStyle === "function" ? win0.getComputedStyle(el) : null;
+            return !(st && (st.display === "none" || st.visibility === "hidden"));
+        } catch (_) { return false; }
+    }
+    function selectorSuggestions(selector) {
+        if (!doc0 || typeof doc0.querySelectorAll !== "function") return [];
+        const keys = new Set();
+        const attrRe = /\[\s*[\w:-]+\s*[~|^$*]?=\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\]\s]+))\s*[is]?\s*\]/g;
+        for (let m; (m = attrRe.exec(selector));) keys.add(hintKey(m[1] !== undefined ? m[1] : m[2] !== undefined ? m[2] : m[3]));
+        for (const m of selector.replace(/\[[^\]]*\]/g, "").matchAll(/#((?:[\w-]|\\.)+)/g)) keys.add(hintKey(m[1].replace(/\\/g, "")));
+        keys.delete("");
+        if (!keys.size) return [];
+        const last = selector.trim().split(/[\s>+~]+/).pop() || "";
+        const tagM = /^([a-zA-Z][\w-]*)/.exec(last);
+        const wantedTag = tagM ? tagM[1].toUpperCase() : null;
+        let all = [];
+        try { all = Array.from(doc0.querySelectorAll("*")).slice(0, 20000); } catch (_) { return []; }
+        const found = [];
+        for (const el of all) {
+            const tag = tagUp(el);
+            if (!tag || tag === "HTML" || tag === "BODY" || tag === "HEAD") continue;
+            const values = [el.id || attrOf(el, "id"), ...HINT_ATTRS.map(a => attrOf(el, a))];
+            try { for (const l of Array.from(el.labels || [])) values.push(l.textContent); } catch (_) { /* no labels on this element */ }
+            if (!values.some(v => keys.has(hintKey(v))) || !hintVisible(el)) continue;
+            const lower = tag.toLowerCase();
+            const unique = (name, value) => all.filter(o => tagUp(o) === tag && (name === "id" ? (o.id || attrOf(o, "id")) : attrOf(o, name)) === value).length === 1
+                && (name !== "id" || all.filter(o => (o.id || attrOf(o, "id")) === value).length === 1);
+            let sel = null;
+            const id = el.id || attrOf(el, "id");
+            if (id && unique("id", id)) {
+                sel = /^[A-Za-z_][\w-]*$/.test(id) ? lower + "#" + id : lower + "[id=" + cssString(id) + "]";
+            } else {
+                // The attribute that carried the value first, then the others.
+                const order = HINT_ATTRS.filter(a => keys.has(hintKey(attrOf(el, a)))).concat(HINT_ATTRS.filter(a => !keys.has(hintKey(attrOf(el, a)))));
+                for (const name of order) {
+                    const v = attrOf(el, name);
+                    if (v && unique(name, v)) { sel = lower + "[" + name + "=" + cssString(v) + "]"; break; }
+                }
+            }
+            if (sel && sel !== selector.trim() && !found.some(f => f.sel === sel)) found.push({ sel, same: tag === wantedTag });
+        }
+        found.sort((a, b) => Number(b.same) - Number(a.same));
+        return found.slice(0, 3).map(f => f.sel);
     }
     // Champ réellement éditable visé : contrôle d'un <label>, ou unique champ éditable contenu dans l'élément.
     function tagUp(n) { return String((n && n.tagName) || "").toUpperCase(); }

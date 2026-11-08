@@ -29,6 +29,7 @@ public sealed partial class McpServer
     internal static string WithOutcome(string answer, bool idempotent)
     {
         if (JsonNode.Parse(answer) is not JsonObject failure || GetString(failure, "status") != "error") return answer;
+        if (DidYouMean(GetString(failure, "error")) is { } suggestions) failure["did_you_mean"] = suggestions;
         if (failure["steps"] is JsonArray steps && TryGetInt(failure, "stopped_at") is int stoppedAt)
         {
             if (stoppedAt > 0)
@@ -60,8 +61,33 @@ public sealed partial class McpServer
             failure["outcome"] = "not_done";
             failure["retry_safe"] = true;
         }
-        else return answer;
+        else return failure["did_you_mean"] is null ? answer : failure.ToJsonString(CompactJson);
         return failure.ToJsonString(CompactJson);
+    }
+
+    private const string DidYouMeanMarker = "Did you mean: [";
+
+    /// <summary>
+    /// Selectors the extension proposes after a CSS selector found nothing ("Did you mean: [...]" in the error, elements
+    /// of the page carrying the same value in id, name, aria-label, label...), as an array the agent resends as is.
+    /// </summary>
+    internal static JsonArray? DidYouMean(string? error)
+    {
+        int start = error?.IndexOf(DidYouMeanMarker, StringComparison.Ordinal) ?? -1;
+        if (start < 0) return null;
+        start += DidYouMeanMarker.Length - 1;
+        // The array ends at one of the following "]" (a selector may hold "]" itself): the first that parses.
+        for (int end = error!.IndexOf(']', start); end >= 0; end = error.IndexOf(']', end + 1))
+        {
+            try
+            {
+                if (JsonNode.Parse(error[start..(end + 1)]) is JsonArray list && list.Count > 0 &&
+                    list.All(n => n is JsonValue v && v.GetValueKind() == JsonValueKind.String))
+                    return list;
+            }
+            catch (JsonException) { /* "]" inside a selector: the array goes on */ }
+        }
+        return null;
     }
 
     private static bool IsIdempotentTool(string name) =>
