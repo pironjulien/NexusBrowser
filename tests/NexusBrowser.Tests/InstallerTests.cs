@@ -329,6 +329,33 @@ public sealed class InstallerTests : IDisposable
         foreach (string leftover in new[] { ".next", ".previous", ".failed" }) Assert.False(Directory.Exists(_layout.App + leftover), leftover);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AnExtensionConnectedBeforeTheUpdateIsWaitedForAndNeverGuidedAgain(bool reconnects)
+    {
+        string first = Package("2.36.0", "first");
+        Make().Switch(first, From(first, Options()), null, sandbox: false);
+        File.WriteAllText(_layout.TokenFile, new string('b', 64));  // written by the running bridge
+        _host.Scripts.Clear();
+        _host.Calls.Clear();
+        // Connected before the update; the restarted bridge then waits for the extension's next attempt (backoff up to
+        // 30 s, keep-alive alarm every minute): the first waits find nothing.
+        int waits = 0;
+        _host.OnEngine = (_, args) => args switch
+        {
+            ["--refresh-extension", "--check-only", ..] => (0, """{"connected":true,"verified":true}"""),
+            ["--refresh-extension", "--wait-ready", ..] => ++waits <= Installer.ExtensionReconnectWaits && reconnects || !reconnects
+                ? (2, """{"connected":false,"verified":false}""") : (0, """{"connected":true,"verified":true}"""),
+            _ => null,
+        };
+        string second = Package("2.36.1", "second");
+        Assert.Equal(0, Make().Switch(second, From(second, Options()), null, sandbox: false));
+        Assert.Empty(_host.Scripts);  // never the "add the extension" guide: it is in Chrome already
+        Assert.Equal(1 + Installer.ExtensionReconnectWaits, waits);
+        Assert.Equal(!reconnects, _output.ToString().Contains("has not reconnected yet: it reconnects by itself", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void AConcurrentInstallDefersWithoutTouchingAnything()
     {

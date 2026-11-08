@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.37.1] - 2026-11-08
+
+### Fixed
+- An update no longer opens `chrome://extensions` and the "add the extension" guide when the extension was connected
+  before it: the restarted bridge waits for the extension's next attempt (its reconnection backoff reaches 30 s, then
+  its keep-alive alarm runs every minute), so the installer now gives such an extension up to 90 s, and if it still has
+  not reconnected says it will by itself, without touching Chrome. The guide stays for a first install only.
+
 ## [2.37.0] - 2026-11-08
 
 ### Changed

@@ -164,6 +164,9 @@ internal sealed class Installer(InstallLayout layout, IInstallHost host, TextWri
         bool Pack = false, string? Candidate = null);
 
     public const int Port = 16182;
+    /// <summary>Further 30-second waits for an extension connected before the update (90 s in all: the extension's
+    /// 30 s reconnection backoff, then its one-minute keep-alive alarm).</summary>
+    internal const int ExtensionReconnectWaits = 2;
     /// <summary>Exit code of --reuse-installed when the installed release cannot be reused (get.ps1 then downloads it).</summary>
     public const int NotReusable = 10;
 
@@ -410,10 +413,13 @@ internal sealed class Installer(InstallLayout layout, IInstallHost host, TextWri
         Files.WriteIfChanged(Path.Join(build.Directory, "installation.json"), new JsonObject { ["repository_root"] = sourceRoot }.ToJsonString(Files.Indented));
 
         // --- 2. Agents driving tabs: the running bridge and daemon are left alone (their new build waits for the next start).
-        bool busy = false;
+        bool busy = false, extensionLinked = false;
         if (!o.SkipLaunch && File.Exists(layout.TokenFile))
         {
-            busy = host.RunEngine(controlExe, ["--refresh-extension", "--check-only", "--source-root", sourceRoot], 60).Code == 3;
+            int linked = host.RunEngine(controlExe, ["--refresh-extension", "--check-only", "--source-root", sourceRoot], 60).Code;
+            busy = linked == 3;
+            // Connected before the update (up to date, behind or busy): the extension is in Chrome, whatever happens next.
+            extensionLinked = linked is 0 or 1 or 3;
             if (busy) Warn("Agents are driving Chrome tabs: the running bridge and daemon keep their build until their next start.");
         }
         Files.WriteAtomic(layout.CurrentFile, new JsonObject { ["exe"] = exe, ["version"] = version, ["fingerprint"] = build.Fingerprint }.ToJsonString(Files.Indented));
@@ -567,8 +573,15 @@ internal sealed class Installer(InstallLayout layout, IInstallHost host, TextWri
                 Warn($"Bridge task not started: NexusBrowser.exe {string.Join(", ", unreadable)} runs with a role that cannot be read (another account or SYSTEM).");
             if (bridgeDeferred) Warn("Bridge upgrade deferred: running instance kept until its next natural exit; the extension refresh has its own ownership check.");
             var refresh = host.RunEngine(controlExe, ["--refresh-extension", "--wait-ready", o.Pack ? "0" : "30", "--source-root", sourceRoot], 90);
+            // A restarted bridge waits for the extension's next attempt: its backoff reaches 30 s, then its keep-alive
+            // alarm runs every minute. An extension connected before the update gets that long, never the "add the
+            // extension" guide (it opened chrome://extensions in the user's Chrome on 08/11/2026 for nothing).
+            for (int wait = 0; refresh.Code == 2 && extensionLinked && !o.Pack && wait < ExtensionReconnectWaits; wait++)
+                refresh = host.RunEngine(controlExe, ["--refresh-extension", "--wait-ready", "30", "--source-root", sourceRoot], 90);
             Say($"Extension: {refresh.Output}");
-            if (refresh.Code == 2 && o.Register)
+            if (refresh.Code == 2 && extensionLinked)
+                Warn("The extension was connected before this update and has not reconnected yet: it reconnects by itself, nothing to add to Chrome.");
+            else if (refresh.Code == 2 && o.Register)
             {
                 if (!o.Pack) host.RunScript(Path.Join(sourceRoot, "scripts", "guide-extension.ps1"), [], output);
             }
