@@ -23,8 +23,8 @@
   <ItemGroup>
     <!-- The AOT compiler and the trimmer, pinned like any package (packages.lock.json, Dependabot): left implicit, their
          version would follow the .NET SDK of the machine and break the locked restore whenever the CI's SDK moves. -->
-    <PackageReference Include="Microsoft.DotNet.ILCompiler" Version="10.0.14" />
-    <PackageReference Include="Microsoft.NET.ILLink.Tasks" Version="10.0.14" />
+    <PackageReference Include="Microsoft.DotNet.ILCompiler" Version="10.0.15" />
+    <PackageReference Include="Microsoft.NET.ILLink.Tasks" Version="10.0.15" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="SkiaSharp" Version="4.154.0" />

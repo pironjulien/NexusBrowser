@@ -206,6 +206,9 @@ public sealed partial class McpServer : IDisposable
         lock (_httpSessionsLock)
         {
             double cutoff = EmergencyStop.NowMonotonic() - _sessionIdleSeconds;
+            // A closed id is refused for one lease only: purged here, on every tick and request, not only on the next
+            // DELETE (an Antigravity id closed at night stayed 404 for 18 h, its client never initializing again).
+            foreach (var old in _closedByClient.Where(p => p.Value < cutoff).Select(p => p.Key).ToList()) _closedByClient.TryRemove(old, out _);
             foreach (var session in _sessionAgents.Where(session =>
                          _sessionLastSeen.TryGetValue(session.Key, out var seen) && seen < cutoff &&
                          _httpSessionResponses.GetValueOrDefault(session.Key) == 0 &&
@@ -670,9 +673,7 @@ public sealed partial class McpServer : IDisposable
             {
                 if (!string.IsNullOrEmpty(sessionId))
                 {
-                    double now = EmergencyStop.NowMonotonic();
-                    foreach (var old in _closedByClient.Where(p => now - p.Value > _sessionIdleSeconds).Select(p => p.Key).ToList()) _closedByClient.TryRemove(old, out _);
-                    _closedByClient[sessionId] = now;
+                    _closedByClient[sessionId] = EmergencyStop.NowMonotonic();
                     CloseHttpSession(sessionId, agentDisplay, "closed by the client (DELETE)");
                 }
                 await WriteHttpPlainAsync(stream, 200, "");

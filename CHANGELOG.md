@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.37.3] - 2026-11-11
+
+### Fixed
+- A session id closed by its client (`DELETE`) is refused for one idle lease only, as intended: closed ids were
+  forgotten only on the next `DELETE`, so Antigravity, which kept sending the id it had closed at night without ever
+  initializing again, got a 404 on every call for 18 hours until the daemon restarted.
+- The Native AOT compiler and trimmer move to 10.0.15, the runtime of the current .NET SDK (10.0.404): with the
+  older pin, the release build stopped on "Overriding System.Private.CoreLib.dll with a newer version".
+
 ## [2.37.2] - 2026-11-08
 
 ### Fixed
