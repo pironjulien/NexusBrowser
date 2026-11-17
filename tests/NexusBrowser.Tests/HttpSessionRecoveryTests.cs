@@ -105,17 +105,34 @@ public sealed class HttpSessionRecoveryTests : IDisposable
     [Fact]
     public async Task AClosedIdIsRefusedForOneLeaseOnlyEvenWithoutAnotherDelete()
     {
-        // Antigravity closed its session at night, then sent the same id for 18 h without ever initializing again:
-        // the closed ids were only forgotten on the next DELETE, so every call was a 404 until the daemon restarted.
+        // The closed ids were only forgotten on the next DELETE, so a client that kept sending its closed id got a 404
+        // on every call until the daemon restarted (Antigravity, 18 h).
         using var bridge = new FakeBridge((action, _) => action == "list-tabs" ? new JsonArray() : new JsonObject());
         using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "1");
+        string closed = await daemon.OpenSessionAsync("claude");
+        using (var deleted = await daemon.SendAsync(HttpMethod.Delete, "claude", null, closed))
+            Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, await daemon.ListToolsAsync("claude", closed));
+        await Task.Delay(TimeSpan.FromSeconds(2.5), TestContext.Current.CancellationToken); // past the 1 s lease
+        Assert.Equal(HttpStatusCode.OK, await daemon.ListToolsAsync("claude", closed));
+        await daemon.WaitForStderrAsync($"session {closed[..8]} (Claude) resumed", TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task AntigravityGetsTheIdItClosedBackAtOnceBecauseItsClientKeepsSendingIt()
+    {
+        // 17/11: Antigravity's client closed its session (DELETE) and kept sending that id, even after a restart, never
+        // initializing again: each call was a 404 for the whole 27-minute lease and its mails waited.
+        using var bridge = new FakeBridge((action, _) => action == "list-tabs" ? new JsonArray() : new JsonObject());
+        using var daemon = await Daemon.StartAsync(bridge, _dir, idleSeconds: "30");
         string closed = await daemon.OpenSessionAsync("antigravity");
         using (var deleted = await daemon.SendAsync(HttpMethod.Delete, "antigravity", null, closed))
             Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, await daemon.ListToolsAsync("antigravity", closed));
-        await Task.Delay(TimeSpan.FromSeconds(2.5), TestContext.Current.CancellationToken); // past the 1 s lease
         Assert.Equal(HttpStatusCode.OK, await daemon.ListToolsAsync("antigravity", closed));
         await daemon.WaitForStderrAsync($"session {closed[..8]} (Antigravity) resumed", TimeSpan.FromSeconds(3));
+        await daemon.CallToolAsync("antigravity", closed, "browser_list_tabs");
+        Assert.Equal(Identity("Antigravity", closed), bridge.Requests.Last(r => r.Action == "list-tabs").Header(BridgeSecurity.ClientHeader));
+        Assert.Equal(HttpStatusCode.NotFound, await daemon.ListToolsAsync("codex", closed)); // never another agent's
     }
 
     private static string Identity(string agent, string session) => McpServer.SessionIdentity(agent, session).Id;

@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.37.4] - 2026-11-17
+
+### Fixed
+- Antigravity gets the session id it closed itself (`DELETE`) back at once: its client keeps sending that id, even
+  after a restart, and never initializes again, so the one-lease refusal meant for clients that do (Claude Code) left
+  it with a 404 on every call for 27 minutes. Claude Code's closed ids are still refused for one lease.
+
 ## [2.37.3] - 2026-11-11
 
 ### Fixed

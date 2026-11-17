@@ -192,6 +192,12 @@ public sealed partial class McpServer : IDisposable
     /// conversation lost its own tabs to a sibling session ("driven by Claude in another session").</summary>
     internal static bool ResumesStaleSessions(string agent) => agent is "Antigravity" or "Claude";
 
+    /// <summary>Clients whose id is opened again even right after they closed it themselves (DELETE). Claude Code
+    /// initializes a new session after its DELETE, so its closed id stays refused for one lease; Antigravity's client
+    /// closes its session and then keeps sending the same id without ever initializing again, so a refusal only left
+    /// it with a 404 on every call for 27 minutes (17/11: three mails waiting while NexusBrowser was unreachable).</summary>
+    internal static bool ResumesClosedSessions(string agent) => agent is "Antigravity";
+
     /// <summary>The daemon's own session id format (Guid "N"): only such ids are opened again.</summary>
     private static bool IsSessionId(string sessionId) => sessionId.Length == 32 && sessionId.All(char.IsAsciiHexDigitLower);
 
@@ -651,8 +657,9 @@ public sealed partial class McpServer : IDisposable
                     unknownSession = !_sessionAgents.TryGetValue(sessionId, out var owner) || owner != agentDisplay;
                     // Its own expired or pre-restart session id is opened again instead of a 404 (ResumesStaleSessions).
                     if (unknownSession && owner is null && method == "POST" && ResumesStaleSessions(agentDisplay) && IsSessionId(sessionId) &&
-                        !_closedByClient.ContainsKey(sessionId))
+                        (ResumesClosedSessions(agentDisplay) || !_closedByClient.ContainsKey(sessionId)))
                     {
+                        _closedByClient.TryRemove(sessionId, out _);
                         _sessionAgents[sessionId] = agentDisplay;
                         if (_goneSessions.TryGetValue(agentDisplay, out var gone)) gone.TryRemove(SessionIdentity(agentDisplay, sessionId).Id, out _);
                         unknownSession = false;
