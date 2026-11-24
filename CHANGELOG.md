@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Build: the relay's shutdown waits for the replies in flight with `WaitAsync` instead of racing them against a
+  `Task.Delay` that kept its timer running (analyzer CA2027, an error since 2026-11-21, broke the build).
+
 ## [2.37.4] - 2026-11-17
 
 ### Fixed

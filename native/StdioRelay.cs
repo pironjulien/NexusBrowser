@@ -73,7 +73,8 @@ public sealed class StdioRelay
             pending.RemoveAll(t => t.IsCompleted);
             pending.Add(task);
         }
-        await Task.WhenAny(Task.WhenAll(pending), Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
+        // Up to 5 s for the replies in flight; a failed or late forward does not stop the shutdown.
+        await Task.WhenAll(pending).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         await stop.CancelAsync().ConfigureAwait(false);
         if (relay._session is not null)
         {
