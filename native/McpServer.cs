@@ -182,6 +182,9 @@ public sealed partial class McpServer : IDisposable
         var identity = (Agent: agent, Id: $"{agent.ToLowerInvariant()}-daemon-{_processPid}");
         if (PendingGone(agent, identity.Id) is null) return;
         try { await CallBridgeRawAsync("heartbeat", new JsonObject { ["reclaim"] = false }, 5.0, identity, _processPid, CancellationToken.None, recover: false); }
+        // Chrome closed: no extension to tell, and nothing is lost (the ids stay pending and go with the next command or
+        // beat once it connects), so no line per closed session (9 such lines in the daemon log on 27/11).
+        catch (InvalidOperationException ex) when (BridgeServer.IsNoExtension(ex.Message)) { }
         catch (Exception ex) when (ex is not OutOfMemoryException) { DaemonLog($"gone sessions of {agent} not announced yet: {ex.Message}"); }
     }
 
@@ -1062,7 +1065,7 @@ public sealed partial class McpServer : IDisposable
         {
             // Deliberate boundary: any tool failure is journaled and returned as a tool error
             if (name != "browser_batch")
-                WriteJournalLine(name, args, null, failed: true, started, appel, identity);
+                WriteJournalLine(name, args, null, failed: true, started, appel, identity, ex.Message);
 
             var errPayload = new JsonObject
             {
@@ -1090,7 +1093,8 @@ public sealed partial class McpServer : IDisposable
         bool failed,
         double started,
         string appel,
-        (string Agent, string Id) identity)
+        (string Agent, string Id) identity,
+        string? exceptionMessage = null)
     {
         try
         {
@@ -1120,7 +1124,8 @@ public sealed partial class McpServer : IDisposable
                 ["issue"] = Journal.Issue(answer, failed),
                 ["ms"] = (int)Math.Round((EmergencyStop.NowMonotonic() - started) * 1000.0),
                 ["premier_plan"] = name == "browser_select_tab" && GetBool(arguments, "focus_window", false),
-                ["erreur"] = failed ? "exception" : (Journal.ErreurPropre(rawError) is { } ep ? JsonValue.Create(ep) : null),
+                // A thrown failure is classified by its own message (timeout, bridge unavailable...), like an error answer.
+                ["erreur"] = Journal.ErreurPropre(failed ? exceptionMessage : rawError) is { } ep ? JsonValue.Create(ep) : (failed ? "exception" : null),
             };
             Journal.Ecrire(identity.Agent, ligne);
         }
@@ -1325,7 +1330,13 @@ public sealed partial class McpServer : IDisposable
                 if (args["locator"] is not null) p["locator"] = args["locator"]!.DeepClone();
                 if (TryGetInt(args, "mark") is { } mark) p["mark"] = mark;
                 if (GetString(args, "selector") is { } sel) p["selector"] = sel;
-                return await CallBridgeFormattedAsync("fill", p, 20.0, identity, pid, waitMs: timeoutMs, ct: ct);
+                if (!GetBool(args, "per_key", false))
+                    return await CallBridgeFormattedAsync("fill", p, 20.0, identity, pid, waitMs: timeoutMs, ct: ct);
+                // Key by key: the wait for the field, then the typing itself.
+                TransportTimeout(timeoutMs);
+                double budget = TypingTransportSeconds((string)p["value"]!, (p["keys"] as JsonArray)?.Count ?? 0, timeoutMs / 1000.0);
+                p["deadlineMs"] = TypingDeadlineMs(budget);
+                return await CallBridgeFormattedAsync("fill", p, budget, identity, pid, ct: ct);
             }
 
             case "browser_select_option":
@@ -1375,7 +1386,9 @@ public sealed partial class McpServer : IDisposable
                 if (args["locator"] is not null) p["locator"] = args["locator"]!.DeepClone();
                 if (GetString(args, "selector") is { } sel) p["selector"] = sel;
                 if (args["keys"] is JsonArray keys && keys.Count > 0) p["keys"] = keys.DeepClone();
-                return await CallBridgeFormattedAsync("type-keys", p, 20.0, identity, pid, ct: ct);
+                double budget = TypingTransportSeconds((string)p["text"]!, (p["keys"] as JsonArray)?.Count ?? 0, 0);
+                p["deadlineMs"] = TypingDeadlineMs(budget);
+                return await CallBridgeFormattedAsync("type-keys", p, budget, identity, pid, ct: ct);
             }
 
             case "browser_handle_dialog":
@@ -2571,7 +2584,7 @@ public sealed partial class McpServer : IDisposable
                 if (!response.IsSuccessStatusCode || json is null || !GetBool(json, "success", false))
                 {
                     string message = json is null ? $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}" : GetString(json, "error") ?? "Unknown error from the NexusBrowser bridge";
-                    if (retry && message.Contains("No Chrome browser extension connected", StringComparison.Ordinal))
+                    if (retry && BridgeServer.IsNoExtension(message))
                     {
                         bool allowLaunch = BridgeServer.NormalizeAction(action) == "create_tab";
                         if (await EnsureChromeRunningAsync(allowLaunch, ct)) return await Send(false);
@@ -2599,6 +2612,21 @@ public sealed partial class McpServer : IDisposable
         }
         return Math.Min(Math.Max(floor, waitS + TransportMarginSeconds), MaxTransportSeconds);
     }
+
+    // Key-by-key typing sends two CDP key events per character, each answered only once the page has handled it: on a
+    // heavy page (x.com) about 70 ms a character, so a fixed 20 s cut a post in the middle (24/11, 27/11: outcome
+    // unknown, text half typed). The budget follows the text, within the bridge limit.
+    internal const double PerKeySeconds = 0.15, PerShortcutSeconds = 0.25;
+
+    /// <summary>Transport budget of a key-by-key typing: the wait before it, each character and shortcut, the margin;
+    /// never under the ordinary 20 s, at most <see cref="MaxTransportSeconds"/>.</summary>
+    internal static double TypingTransportSeconds(string text, int shortcuts, double waitSeconds) =>
+        Math.Min(MaxTransportSeconds, Math.Max(20.0,
+            waitSeconds + text.EnumerateRunes().Count() * PerKeySeconds + shortcuts * PerShortcutSeconds + TransportMarginSeconds));
+
+    /// <summary>Time the extension may spend typing: it stops before the transport gives up, so a text too long for
+    /// one call ends as a known partial typing (characters typed, no key after them), never an unknown outcome.</summary>
+    internal static int TypingDeadlineMs(double budgetSeconds) => (int)((budgetSeconds - TransportMarginSeconds) * 1000);
 
     private static string DefaultCapturePath(string prefix)
     {

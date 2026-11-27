@@ -498,4 +498,82 @@ public sealed partial class ToolContractTests
         Assert.Contains("at most 115000 ms", (string)payload["error"]!);
         Assert.Empty(session.Commands);
     }
+
+    [Fact]
+    public async Task KeyByKeyTypingGetsABudgetThatFollowsTheText()
+    {
+        // A 280-character post typed key by key on x.com needed more than the fixed 20 s (24/11, 27/11: cut mid-text).
+        using var session = new EngineSession((action, _) => action == "cdp-send" ? NeutralTrigger() : new JsonObject { ["ok"] = true });
+        string post = new('a', 280), longText = new('b', 2000);
+        await session.CallAsync("browser_type_keys", Args($$"""{"text":"hi","tab_id":1}"""));
+        await session.CallAsync("browser_type_keys", Args($$"""{"text":"{{post}}","keys":["Tab"],"tab_id":1}"""));
+        await session.CallAsync("browser_type_keys", Args($$"""{"text":"{{longText}}","tab_id":1}"""));
+        await session.CallAsync("browser_fill", Args($$"""{"selector":"a","value":"{{post}}","per_key":true,"timeout_ms":2000,"tab_id":1}"""));
+        await session.CallAsync("browser_fill", Args($$"""{"selector":"a","value":"{{post}}","timeout_ms":2000,"tab_id":1}""")); // one insertText
+        var sent = session.Commands.Where(c => (string?)c["action"] is "type-keys" or "fill").ToList();
+        Assert.Equal(5, sent.Count);
+        Assert.Equal([20.0, 47.25, 115.0, 49.0, 20.0], // 280 keys at 0.15 s, a shortcut 0.25 s, the wait, 5 s margin
+            sent.Select(c => Math.Round((double)c["timeout"]!, 6)));
+        // The extension stops typing before the transport gives up: a known partial typing, never an unknown outcome.
+        Assert.Equal([15000, 42250, 110000, 44000],
+            sent.Take(4).Select(c => (int)c["params"]!["deadlineMs"]!));
+        Assert.Null(sent[4]["params"]!["deadlineMs"]);
+    }
+
+    [Fact]
+    public async Task TypingStoppedAtItsTimeLimitIsAPartialOutcome()
+    {
+        const string stopped = "Typing stopped at its time limit (timeout) after 120 of 300 characters were typed; no key was sent after them. Read the field, then send only the remaining characters (from character 121).";
+        using var session = new EngineSession((action, _) => action switch
+        {
+            "cdp-send" => NeutralTrigger(),
+            "type-keys" => throw new InvalidOperationException(stopped),
+            _ => new JsonObject { ["ok"] = true },
+        });
+        var payload = Payload(await session.CallAsync("browser_type_keys", Args("""{"text":"abc","tab_id":1}""")));
+        Assert.Equal(stopped, (string?)payload["error"]);
+        Assert.Equal("partial", (string?)payload["outcome"]);
+        Assert.False((bool)payload["retry_safe"]!);
+    }
+
+    [Fact]
+    public async Task FullPageScreenshotGetsTheBridgeLimit()
+    {
+        using var session = new EngineSession((action, _) => action == "cdp-send" ? NeutralTrigger() : new JsonObject { ["ok"] = true });
+        await session.CallAsync("browser_screenshot", Args("""{"tab_id":1,"full_page":true}"""));
+        await session.CallAsync("browser_screenshot", Args("""{"tab_id":1}"""));
+        var timeouts = session.Commands.Where(c => (string?)c["action"] == "screenshot").Select(c => (double)c["timeout"]!).ToList();
+        Assert.Equal([McpServer.MaxTransportSeconds, 20.0], timeouts);
+    }
+}
+
+/// <summary>The journal keeps the kind of a thrown failure, not "exception" (process environment: its own journal).</summary>
+[Collection(ProcessEnvironmentCollection.Name)]
+public sealed class JournalFailureTests : IDisposable
+{
+    private readonly TempDir _dir = new();
+    private readonly EnvScope _env;
+
+    public JournalFailureTests() => _env = new EnvScope(("NEXUS_JOURNAL_HOME", Path.Join(_dir.Path, "journal")));
+
+    public void Dispose()
+    {
+        _env.Dispose();
+        _dir.Dispose();
+    }
+
+    [Fact]
+    public async Task AThrownTimeoutIsJournaledAsATimeout()
+    {
+        // An inline capture reads the bridge directly: its failure is thrown up to the tool boundary.
+        using var session = new EngineSession((action, _) => action == "screenshot"
+            ? throw new InvalidOperationException("Command 'screenshot' timed out after 20s.")
+            : new JsonObject { ["ok"] = true });
+        var result = await session.CallAsync("browser_screenshot", (JsonObject)JsonNode.Parse("""{"tab_id":1,"inline":true}""")!);
+        Assert.True((bool)result["isError"]!);
+        string file = Assert.Single(Directory.GetFiles(Path.Join(_dir.Path, "journal", "browser", "codex"), "*.jsonl"));
+        var line = File.ReadAllLines(file).Select(l => (JsonObject)JsonNode.Parse(l)!).Single(l => (string?)l["action"] == "screenshot");
+        Assert.Equal("✗", (string?)line["issue"]);
+        Assert.Equal("timeout", (string?)line["erreur"]);
+    }
 }

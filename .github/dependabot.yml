@@ -18,6 +18,13 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    # The AOT compiler and trimmer follow the runtime of the SDK global.json pins (.NET 10): a new major comes with the
+    # SDK change, never alone (11.0.0 proposed on 2026-11-22 would break the locked restore).
+    ignore:
+      - dependency-name: Microsoft.DotNet.ILCompiler
+        update-types: ["version-update:semver-major"]
+      - dependency-name: Microsoft.NET.ILLink.Tasks
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /
     schedule:

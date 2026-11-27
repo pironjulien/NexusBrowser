@@ -51,7 +51,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73  # v6.1.0
         with:
           global-json-file: global.json
       - name: One version everywhere
@@ -107,7 +107,7 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    uses: pironjulien/NexusSystem/.github/workflows/product-dev-release.yml@6a66dbe3c76ee85b4cde38f6b71c6410ec08c7e8  # v1.7.2
+    uses: pironjulien/NexusSystem/.github/workflows/product-dev-release.yml@0e7bd4e2a9c68e0350923e0b79bf2c64c4b49ac6  # v1.8.0
     with:
       product: NexusBrowser
       version: ${{ needs.build.outputs.version }}
@@ -122,7 +122,7 @@ jobs:
       actions: read  # the commit's checks, read before anything is published
       checks: read
       statuses: read
-    uses: pironjulien/NexusSystem/.github/workflows/product-promote.yml@6a66dbe3c76ee85b4cde38f6b71c6410ec08c7e8  # v1.7.2
+    uses: pironjulien/NexusSystem/.github/workflows/product-promote.yml@0e7bd4e2a9c68e0350923e0b79bf2c64c4b49ac6  # v1.8.0
     with:
       product: NexusBrowser
       promote: ${{ inputs.promote || needs.dev.outputs.tag }}

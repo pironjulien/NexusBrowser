@@ -15,7 +15,7 @@
     <TestingPlatformCommandLineArguments>$(TestingPlatformCommandLineArguments) --results-directory "$(NexusBrowserBuild)TestResults"</TestingPlatformCommandLineArguments>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="xunit.v3" Version="4.0.2" />
+    <PackageReference Include="xunit.v3" Version="4.0.3" />
     <!-- Property-based robustness tests (RobustnessTests.cs). -->
     <PackageReference Include="FsCheck" Version="3.6.0" />
   </ItemGroup>

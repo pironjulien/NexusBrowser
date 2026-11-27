@@ -4301,6 +4301,29 @@ test('arrêt d\'urgence : la frappe touche par touche s\'interrompt au caractèr
     assert.ok(h.localData.nexusBrowserStopUntil > Date.now());
 });
 
+test('frappe touche par touche : arrêt à l\'échéance du moteur, résultat partiel connu, aucune touche finale envoyée', async () => {
+    // x.com, 24/11 : un texte long coupé par le délai du transport, issue inconnue, texte à moitié tapé.
+    let ref = null;
+    const {h, dom} = richHarness(formPage, {virtualTime: true, debuggerSendCommand: (target, method, params) => {
+        if (method === 'Input.dispatchKeyEvent' && params.type === 'keyDown') ref.advanceTime(1000);  // page lente : 1 s par touche
+    }});
+    ref = h;
+    const res = await h.run('type_keys', {tabId: 1, locator: {placeholder: 'Rechercher'}, text: 'Bonjour le monde', keys: ['Enter'], deadlineMs: 5000});
+    assert.match(res.error, /^Typing stopped at its time limit \(timeout\) after 5 of 16 characters were typed/);
+    assert.match(res.error, /from character 6/);
+    const keys = h.keyboard().filter(k => k.method === 'Input.dispatchKeyEvent');
+    assert.equal(keys.filter(k => k.type === 'keyDown').length, 5);
+    assert.ok(!keys.some(k => k.key === 'Enter'), 'Enter sent after a truncated text');
+    assert.equal(keys.at(-1).type, 'keyUp');
+    assert.equal(dom.byId('search').value, 'Bonjo');
+
+    // Sans échéance (ancien moteur) ou dans le temps : tout le texte, puis les touches.
+    const {h: h2, dom: dom2} = richHarness(formPage);
+    const done = await h2.run('type_keys', {tabId: 1, locator: {placeholder: 'Rechercher'}, text: 'Bonjour', deadlineMs: 60000});
+    assert.equal(done.error, undefined);
+    assert.equal(dom2.byId('search').value, 'Bonjour');
+});
+
 test('arrêt d\'urgence : le glisser en cours s\'arrête et le bouton est relâché', async () => {
     const dp = dragPage();
     let moves = 0;

@@ -20,6 +20,12 @@ public sealed partial class McpServer
         @"timed out after|may have run|disconnected while processing|cancelled while running",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // A key-by-key typing the extension stopped at its time limit: the characters it names were typed, nothing after
+    // them (outcome "partial": send only the rest).
+    internal static readonly Regex PartialTypingError = new(
+        @"^Typing stopped at its time limit \(timeout\) after \d+ of \d+ characters were typed",
+        RegexOptions.Compiled);
+
     /// <summary>
     /// Adds to a failed answer retry_safe and, for a tool that changes the page, outcome: "not_done" (nothing reached
     /// the page), "unknown" (it may have acted: check the page before resending) or "partial" (a batch stopped after
@@ -51,7 +57,12 @@ public sealed partial class McpServer
             return failure.ToJsonString(CompactJson);
         }
         string error = GetString(failure, "error") ?? "";
-        if (UnknownOutcomeError.IsMatch(error))
+        if (PartialTypingError.IsMatch(error))
+        {
+            failure["outcome"] = "partial";
+            failure["retry_safe"] = false;
+        }
+        else if (UnknownOutcomeError.IsMatch(error))
         {
             failure["outcome"] = "unknown";
             failure["retry_safe"] = false;

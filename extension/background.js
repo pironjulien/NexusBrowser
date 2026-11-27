@@ -5052,12 +5052,28 @@ async function pressKeyCombo(target, combo) {
 }
 
 /**
- * Frappe touche par touche (keydown, keypress, beforeinput, input, keyup de confiance par caractère).
+ * Échéance de frappe donnée par le moteur (deadlineMs) : la frappe s'arrête avant que le transport n'abandonne, pour
+ * un résultat partiel connu au lieu d'un délai dépassé à l'issue inconnue (texte à moitié tapé sur x.com, 24/11).
  */
-async function typeCharacters(target, text) {
+function typingDeadline(params) {
+    const ms = Number(params.deadlineMs);
+    return Number.isFinite(ms) && ms > 0 ? Date.now() + ms : null;
+}
+
+function typingBudgetError(typed, total) {
+    return `Typing stopped at its time limit (timeout) after ${typed} of ${total} characters were typed; no key was ` +
+        `sent after them. Read the field, then send only the remaining characters (from character ${typed + 1}).`;
+}
+
+/**
+ * Frappe touche par touche (keydown, keypress, beforeinput, input, keyup de confiance par caractère).
+ * deadline (Date.now) : arrêt avant le caractère suivant une fois dépassée ({ stopped: true, typed }).
+ */
+async function typeCharacters(target, text, deadline = null) {
     await ensureFocusEmulation(target);
     let typed = 0;
     for (const ch of String(text)) {
+        if (deadline !== null && Date.now() >= deadline) return { dialog: null, typed, stopped: true };
         if (ch === "\n" || ch === "\r") {
             const r = await pressKeyCombo(target, "Enter");
             if (r.dialog) return { dialog: r.dialog, typed };
@@ -5254,8 +5270,12 @@ async function typeWithDebugger(target, locate, opts) {
         // 3. Texte : Input.insertText (beforeinput/input de confiance) ou touche par touche.
         if (opts.value.length) {
             if (opts.perKey) {
-                const r = await typeCharacters(target, opts.value);
+                const r = await typeCharacters(target, opts.value, opts.deadline ?? null);
                 if (r.dialog) return { data: { ...dialogInterruption(r.dialog), ...base, method: "cdp", typedLength: r.typed } };
+                if (r.stopped) {
+                    await releaseMouseProbes(root, [prep.probeId]);
+                    return { error: typingBudgetError(r.typed, [...opts.value].length) };
+                }
             } else {
                 assertNotStopped();
                 const r = await sendCommandWatchingDialogs(target, "Input.insertText", { text: opts.value });
@@ -5329,7 +5349,8 @@ async function fillElement(params, defaults = {}) {
         mode: typingMode(params),
         perKey: boolParam(params.perKey !== undefined ? params.perKey : params.per_key, false),
         keys: keyList(params.keys),
-        timeoutMs: mouseTimeout(params, defaults.timeoutMs || 1200)
+        timeoutMs: mouseTimeout(params, defaults.timeoutMs || 1200),
+        deadline: typingDeadline(params)
     });
 }
 
@@ -5340,16 +5361,19 @@ async function typeKeys(params) {
     const tabId = await resolveTargetTab(params);
     const text = params.text !== undefined && params.text !== null ? String(params.text) : "";
     const locate = targetLocate(params, { allowText: false });
+    const deadline = typingDeadline(params);
     if (locate) {
         return await typeIntoElement(tabId, locate, {
             value: text, replace: boolParam(params.replace, false), mode: "trusted", perKey: true,
-            keys: keyList(params.keys), timeoutMs: mouseTimeout(params, 1200)
+            keys: keyList(params.keys), timeoutMs: mouseTimeout(params, 1200), deadline
         });
     }
     lastActionAt.set(tabId, Date.now());
     const target = await ensureDebugger(tabId);
-    const r = await typeCharacters(target, text);
+    const r = await typeCharacters(target, text, deadline);
     if (r.dialog) return { data: { ...dialogInterruption(r.dialog), typedLength: r.typed } };
+    // Jamais les touches finales (Entrée) après un texte incomplet : elles enverraient un message tronqué.
+    if (r.stopped) return { error: typingBudgetError(r.typed, [...text].length) };
     for (const combo of keyList(params.keys)) {
         const k = await pressKeyCombo(target, combo);
         if (k.dialog) return { data: { ...dialogInterruption(k.dialog), typedLength: r.typed } };

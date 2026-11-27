@@ -98,6 +98,25 @@ public sealed class ChromeLauncherTests
         Assert.Equal(["--profile-directory=Default"], ChromeLauncher.LaunchArguments(Forbidden));
 
     [Fact]
+    public void OnlyTheUsersOwnBrowserProcessCountsAsChromeRunning()
+    {
+        const string profile = @"C:\Users\test\AppData\Local\Google\Chrome\User Data";
+        const string exe = "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\"";
+        // 27/11: the user's Chrome was closed; only a headless Playwright Chrome ran, and was taken for it.
+        string playwright = exe + @" --disable-field-trial-config --disable-background-networking --headless --no-sandbox " +
+            @"--user-data-dir=C:\Users\test\AppData\Local\Temp\playwright_chromiumdev_profile-AbC123 --remote-debugging-pipe --no-startup-window";
+        Assert.False(ChromeLauncher.IsUserBrowser(playwright, profile));
+        Assert.False(ChromeLauncher.IsUserBrowser(exe + " --headless=new about:blank", profile));
+        Assert.False(ChromeLauncher.IsUserBrowser(exe + " --user-data-dir=\"C:\\Temp\\other profile\"", profile));
+        Assert.False(ChromeLauncher.IsUserBrowser(exe + " --type=renderer --user-data-dir=\"" + profile + "\"", profile));
+
+        Assert.True(ChromeLauncher.IsUserBrowser(exe, profile));
+        Assert.True(ChromeLauncher.IsUserBrowser(exe + " --profile-directory=Default", profile));
+        Assert.True(ChromeLauncher.IsUserBrowser(exe + " --user-data-dir=\"" + profile.ToUpperInvariant() + "\"", profile));
+        Assert.True(ChromeLauncher.IsUserBrowser(null, profile)); // unreadable: never "closed" by doubt
+    }
+
+    [Fact]
     public void NoExtraFlagsMeansTheDefaultProfileOnly() =>
         Assert.Equal(["--profile-directory=Default"], ChromeLauncher.LaunchArguments(null));
 

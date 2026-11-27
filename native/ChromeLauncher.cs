@@ -57,17 +57,59 @@ internal sealed class ChromeLauncher
         }
     }
 
+    /// <summary>The user's own Chrome runs in this Windows session: its browser process, on the user's real profile.
+    /// Another chrome.exe (a headless Playwright Chrome with its own temporary profile, 27/11) is not the user's
+    /// Chrome: counting it said "Chrome is running, but its extension has not connected" while Chrome was closed, and
+    /// kept browser_new_tab from opening it.</summary>
     internal static bool IsRunning()
     {
         using var current = Process.GetCurrentProcess();
         int session = current.SessionId;
+        string defaultProfile = DefaultUserDataDir();
         bool running = false;
         // Every handle is disposed, also after a match.
         foreach (var process in Process.GetProcessesByName("chrome"))
             using (process)
-                try { running = running || !process.HasExited && process.SessionId == session; }
+                try
+                {
+                    running = running || !process.HasExited && process.SessionId == session &&
+                        IsUserBrowser(EngineProcesses.Read(process.Id).CommandLine, defaultProfile);
+                }
                 catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { /* exited or inaccessible: not ours */ }
         return running;
+    }
+
+    /// <summary>Chrome's own user data folder (%LOCALAPPDATA%\Google\Chrome\User Data), where the extension lives.</summary>
+    internal static string DefaultUserDataDir() =>
+        Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Google", "Chrome", "User Data");
+
+    /// <summary>
+    /// Whether a chrome.exe command line is the user's browser: the browser process itself (Chrome's renderers, GPU and
+    /// utility processes carry --type=), not headless, on the default user data folder (no --user-data-dir, or that
+    /// very folder). An unreadable command line (null) counts as the user's, as before: never "closed" by doubt.
+    /// </summary>
+    internal static bool IsUserBrowser(string? commandLine, string defaultUserDataDir)
+    {
+        if (commandLine is null) return true;
+        foreach (string arg in EngineProcesses.SplitCommandLine(commandLine).Skip(1))
+        {
+            if (arg.StartsWith("--type=", StringComparison.OrdinalIgnoreCase)) return false;
+            if (arg.Equals("--headless", StringComparison.OrdinalIgnoreCase) || arg.StartsWith("--headless=", StringComparison.OrdinalIgnoreCase)) return false;
+            if (arg.StartsWith("--user-data-dir=", StringComparison.OrdinalIgnoreCase) &&
+                !SameFolder(arg["--user-data-dir=".Length..].Trim('"'), defaultUserDataDir))
+                return false;
+        }
+        return true;
+    }
+
+    private static bool SameFolder(string a, string b)
+    {
+        try
+        {
+            return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
     }
 
     internal static string? LocateExecutable()

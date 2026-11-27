@@ -5,7 +5,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.37.5] - 2026-11-27
+
 ### Fixed
+- `browser_type_keys` (and `browser_fill` with `per_key=True`) no longer cut a long text at a fixed 20 s: typing key
+  by key sends two key events per character, each answered once the page has handled it, so a post on x.com timed
+  out mid-text with an unknown outcome. The call's budget now follows the text (0.15 s a character, 0.25 s a
+  shortcut, plus the wait for the field), up to the bridge limit of 115 s. For a text longer than that, the extension
+  (2.37.5) stops typing before the limit and answers a partial outcome naming how many characters were typed; no
+  final key (Enter) is ever sent after a truncated text. `browser_type_keys` keeps its documented key-by-key typing:
+  input masks and page shortcuts need the real keys.
+- A full-page `browser_screenshot` gets the bridge limit instead of 20 s: a long page outlasted it.
+- The usage journal records the kind of a thrown failure (timeout, bridge unavailable...) instead of "exception".
+- Closing a session while Chrome is closed no longer writes "gone sessions ... not announced yet: No Chrome browser
+  extension connected" to the daemon log: the closed ids still go with the next command once the extension connects.
+- "Chrome is closed" is diagnosed again when the only `chrome.exe` running is not the user's browser (a headless
+  Playwright Chrome on a temporary profile was taken for it): only Chrome's browser process on the user's own profile
+  counts, not its child processes, a headless Chrome or one on another `--user-data-dir`. `browser_new_tab` then
+  opens Chrome as intended.
+- Dependencies: SkiaSharp 4.156.1, Tomlyn 2.11.1, xunit.v3 4.0.3, devtools-protocol 0.0.1744848 (type checks),
+  pinned actions (CodeQL 4.39.3, setup-dotnet 6.1.0, zizmor 0.8.1) and NexusSystem's shared release workflows 1.8.0.
+  Dependabot no longer proposes a new major of the AOT compiler and trimmer: they follow the .NET 10 SDK pinned in
+  `global.json`.
 - Build: the relay's shutdown waits for the replies in flight with `WaitAsync` instead of racing them against a
   `Task.Delay` that kept its timer running (analyzer CA2027, an error since 2026-11-21, broke the build).
 
@@ -2166,7 +2187,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.2...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.37.5...HEAD
+[2.37.5]: https://github.com/pironjulien/NexusBrowser/compare/v2.37.4...v2.37.5
 [2.36.2]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.1...v2.36.2
 [2.36.1]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.0...v2.36.1
 [2.36.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.35.32...v2.36.0

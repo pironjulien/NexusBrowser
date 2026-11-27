@@ -227,6 +227,31 @@ public sealed class SessionLifetimeTests : IDisposable
     }
 
     [Fact]
+    public async Task AClosedSessionIsNotLoggedAsUnannouncedWhileChromeIsClosed()
+    {
+        // 27/11: Chrome closed, nine "gone sessions of Claude not announced yet: No Chrome browser extension connected"
+        // lines in the daemon log, one per closed conversation. Nothing to tell then: the ids wait for the extension.
+        using var bridge = new FakeBridge((action, _) => action == "list-tabs" ? new JsonArray() : new JsonObject())
+        {
+            FailHeartbeat = r => r.Header(BridgeSecurity.ClientHeader)?.Contains("-daemon-", StringComparison.Ordinal) == true,
+        };
+        using var daemon = await Daemon.StartAsync(bridge, _dir);
+        string a = await daemon.OpenSessionAsync("claude");
+        string announcer = $"claude-daemon-{daemon.Process.Process.Id}";
+        using (var deleted = await daemon.SendAsync(HttpMethod.Delete, "claude", null, a))
+            Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+        await bridge.WaitForAsync(r => r.Action == "heartbeat" && r.Header(BridgeSecurity.ClientHeader) == announcer,
+            TimeSpan.FromSeconds(McpServer.HeartbeatIntervalSeconds / 3));
+        await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken); // the refused answer is read
+        Assert.DoesNotContain("not announced", daemon.Process.Stderr);
+
+        // Still carried by the next call once the extension is back.
+        string c = await daemon.OpenSessionAsync("claude");
+        await daemon.CallToolAsync("claude", c, "browser_list_tabs");
+        Assert.Equal([Identity("Claude", a)], bridge.Requests.Last(r => r.Action == "list-tabs").Gone);
+    }
+
+    [Fact]
     public async Task LastSessionIsAnnouncedImmediatelyAndTheNextCallStillCarriesIt()
     {
         using var bridge = new FakeBridge((action, _) => action == "list-tabs" ? new JsonArray() : new JsonObject());

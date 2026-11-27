@@ -14,6 +14,12 @@ public sealed partial class McpServer
     private readonly ConcurrentDictionary<(string Session, int Tab, string Target), SentCapture> _sentCaptures = new();
     private readonly ConcurrentDictionary<(string Session, int Tab), ViewCapture> _viewCaptures = new();
 
+    /// <summary>A whole page is rendered beyond the view (up to Chrome's largest image) and its size is only known in
+    /// the page: its capture gets the bridge limit, not the 20 s of a view, which a long page outlasted. The call still
+    /// returns as soon as the image is ready.</summary>
+    internal static double CaptureTransportSeconds(JsonObject bridgeParams) =>
+        GetBool(bridgeParams, "fullPage", false) ? MaxTransportSeconds : 20.0;
+
     private async Task<string> ExecuteCaptureToolAsync(string name, JsonObject args,
         (string Agent, string Id) identity, int? pid, CancellationToken ct)
     {
@@ -47,12 +53,13 @@ public sealed partial class McpServer
             else if (full) p["fullPage"] = true;
         }
         string action = vision ? "vision-inspect" : "screenshot";
+        double budget = CaptureTransportSeconds(p);
         if (!inline)
         {
             p["output"] = GetString(args, "output_path") ?? DefaultCapturePath(vision ? "vision" : "browser");
-            return await CallBridgeFormattedAsync(action, p, 20, identity, pid, ct: ct);
+            return await CallBridgeFormattedAsync(action, p, budget, identity, pid, ct: ct);
         }
-        var data = await CallBridgeRawAsync(action, p, 20, identity, pid, ct) as JsonObject;
+        var data = await CallBridgeRawAsync(action, p, budget, identity, pid, ct) as JsonObject;
         if (data is null) return ErrorJson("Unexpected capture answer");
         if (GetBool(data, "dialogOpened", false))
             return new JsonObject { ["status"] = "error", ["error"] = GetString(data, "message") ?? "A dialog interrupted the page.", ["dialogOpened"] = true, ["data"] = data }.ToJsonString(CompactJson);

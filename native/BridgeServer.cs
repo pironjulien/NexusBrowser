@@ -35,6 +35,11 @@ public sealed class BridgeServer : IAsyncDisposable
     public const double HandshakeTimeoutSeconds = 10.0;
     public const double StopPollSeconds = 0.2;
     public const int MaxKnownSessions = 256;
+    public const string NoExtensionMessage =
+        "No Chrome browser extension connected to the NexusBrowser bridge. Make sure the extension is active in Chrome.";
+
+    /// <summary>The bridge's answer when no extension is connected (Chrome closed), whatever follows its first words.</summary>
+    public static bool IsNoExtension(string message) => message.Contains("No Chrome browser extension connected", StringComparison.Ordinal);
 
     private static readonly string[] DefaultAllowedOrigins =
     [
@@ -962,8 +967,7 @@ public sealed class BridgeServer : IAsyncDisposable
                 throw new InvalidOperationException(ReloadingMessage);
             if (chosen is null)
             {
-                throw new InvalidOperationException(
-                    "No Chrome browser extension connected to the NexusBrowser bridge. Make sure the extension is active in Chrome.");
+                throw new InvalidOperationException(NoExtensionMessage);
             }
 
             reqId = Guid.NewGuid().ToString();
