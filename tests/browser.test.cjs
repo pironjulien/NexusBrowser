@@ -576,7 +576,7 @@ test('upload cleans interception when trigger is missing', async () => {
     const h = harness();
     h.missing();
     assert.match((await h.run('upload', {tabId: 1, files: ['C:/test/one.txt'], selector: 'button'})).error, /Element not found/);
-    assert.equal(h.calls.at(-1).params.enabled, false);
+    assert.equal(h.calls.filter(c => c.method === 'Page.setInterceptFileChooserDialog').at(-1).params.enabled, false);
 });
 
 test('focus émulé une seule fois, avant le premier événement de souris (onglet en arrière-plan)', async () => {
@@ -5021,6 +5021,109 @@ test('2.9 browser_logs : console masquée (texte, aperçus d\'objets, jetons cit
         assert.ok(!raw.includes(secret), secret);
     }
     for (const kept of ['julien', 'state=ok', 'langue', '"fr"', 'Bonjour Julien', 'page=2']) assert.ok(raw.includes(kept), kept);
+});
+
+// Erreur non interceptée telle que Chrome l'annonce (Runtime.exceptionThrown), levée « maintenant » sauf heure donnée.
+const thrown = (description, {url = 'https://shop.invalid/js/app.js?token=SECRETURL9', line = 41, at = Date.now(), extra = {}} = {}) => ({
+    timestamp: at,
+    exceptionDetails: {exceptionId: 1, text: 'Uncaught', lineNumber: line, columnNumber: 8, url,
+        exception: {type: 'object', subtype: 'error', description}, ...extra}
+});
+// Page dont le clic lève les erreurs données, annoncées par Chrome pendant l'envoi du clic.
+function throwingPage(errors) {
+    let h;
+    h = harness({}, {debuggerSendCommand: async (target, method, params) => {
+        if (method === 'Input.dispatchMouseEvent' && params.type === 'mouseReleased') {
+            for (const error of errors()) await h.emit(1, 'Runtime.exceptionThrown', error);
+        }
+        return undefined;
+    }});
+    return h;
+}
+
+test('erreur de page pendant un geste : dans sa réponse (message court, fichier:ligne), masquée, et dans browser_logs', async () => {
+    const h = throwingPage(() => [thrown("TypeError: Cannot read properties of undefined (reading 'total')\n    at pay (https://shop.invalid/js/app.js:42:9)")]);
+    const res = await h.run('click', {tabId: 1, selector: 'button'});
+    assert.equal(res.error, undefined);
+    assert.deepEqual(plain(res.data.pageErrors), {count: 1, errors: [
+        {message: "TypeError: Cannot read properties of undefined (reading 'total')", at: 'app.js:42'}]});
+    assert.ok(!JSON.stringify(res).includes('SECRETURL9'));
+    // Même journal que la console : browser_logs la rend aussi.
+    const logs = (await h.run('logs', {tabId: 1})).data;
+    assert.deepEqual(plain(logs.map(e => e.method)), ['Runtime.exceptionThrown']);
+    assert.ok(!JSON.stringify(logs).includes('SECRETURL9'));
+    // Le geste suivant, sans erreur, n'en reporte aucune.
+    const quiet = throwingPage(() => []);
+    assert.equal((await quiet.run('click', {tabId: 1, selector: 'button'})).data.pageErrors, undefined);
+});
+
+test('erreur de page arrivée après la réponse du clic : attendue par un aller-retour qui n\'exécute rien dans la page', async () => {
+    let h;
+    h = harness({}, {debuggerSendCommand: async (target, method) => {
+        // Chrome répond au clic avant d'annoncer l'erreur : elle n'arrive qu'avec la commande suivante.
+        if (method === 'Runtime.getHeapUsage') await h.emit(1, 'Runtime.exceptionThrown', thrown('Error: tardive'));
+        return undefined;
+    }});
+    const res = await h.run('click', {tabId: 1, selector: 'button'});
+    assert.equal(res.data.pageErrors.errors[0].message, 'Error: tardive');
+    assert.equal(h.calls.at(-1).method, 'Runtime.getHeapUsage');
+    // Boîte de dialogue ouverte : la page est bloquée, aucun aller-retour n'est tenté.
+    await h.emit(1, 'Page.javascriptDialogOpening', {type: 'alert', message: 'Stop'});
+    const before = h.calls.length;
+    await h.run('scroll', {tabId: 1});
+    assert.ok(!h.calls.slice(before).some(c => c.method === 'Runtime.getHeapUsage'));
+    // Une lecture n'en fait pas non plus.
+    const reads = h.calls.length;
+    await h.run('logs', {tabId: 1});
+    assert.ok(!h.calls.slice(reads).some(c => c.method === 'Runtime.getHeapUsage'));
+});
+
+test('erreur de page avant le geste : jamais comptée (déjà au journal, ou rejouée par Chrome au rattachement)', async () => {
+    let replay = [];
+    const h = throwingPage(() => replay);
+    await h.run('eval', {tabId: 1, code: '1'});
+    await h.emit(1, 'Runtime.exceptionThrown', thrown('Error: ancienne'));
+    await h.emit(1, 'Runtime.consoleAPICalled', {type: 'error', args: [{type: 'string', value: 'console.error pendant le geste'}]});
+    const res = await h.run('click', {tabId: 1, selector: 'button'});
+    assert.equal(res.error, undefined);
+    assert.equal(res.data.pageErrors, undefined);
+    // Rejouée pendant le geste avec son heure d'origine (Runtime.enable sur un onglet tout juste rattaché).
+    replay = [thrown('Error: rejouée', {at: Date.now() - 60000})];
+    assert.equal((await h.run('click', {tabId: 1, selector: 'button'})).data.pageErrors, undefined);
+    // Une lecture ne reporte rien, même si une erreur tombe pendant qu'elle court.
+    await h.emit(1, 'Runtime.exceptionThrown', thrown('Error: pendant une lecture'));
+    assert.equal((await h.run('logs', {tabId: 1})).data.pageErrors, undefined);
+});
+
+test('erreurs de page pendant un geste : comptées toutes, 3 listées, messages bornés et secrets masqués', async () => {
+    const long = 'RangeError: ' + 'x'.repeat(500);
+    const h = throwingPage(() => [
+        thrown(long),
+        thrown('Error: refus avec Authorization: Bearer abcdefgh12345678', {url: '', extra: {stackTrace: {callFrames: [{url: 'https://cdn.invalid/v2/vendor.min.js', lineNumber: 0}]}}}),
+        thrown('Error: sans fichier', {url: ''}),
+        thrown('Error: quatrième'), thrown('Error: cinquième'),
+    ]);
+    const found = plain((await h.run('click', {tabId: 1, selector: 'button'})).data.pageErrors);
+    assert.equal(found.count, 5);
+    assert.equal(found.errors.length, 3);
+    assert.equal(found.errors[0].message.length, 201);
+    assert.ok(found.errors[0].message.endsWith('…'));
+    assert.equal(found.errors[1].at, 'vendor.min.js:1');
+    assert.ok(!JSON.stringify(found).includes('abcdefgh12345678'));
+    assert.deepEqual(found.errors[2], {message: 'Error: sans fichier'});
+    assert.ok(JSON.stringify(found).length < 600, 'réponse bornée');
+});
+
+test('erreur de page pendant un geste qui échoue : à la suite du message d\'échec ; valeur lancée sans objet Error', async () => {
+    let h;
+    h = harness({}, {debuggerSendCommand: async (target, method) => {
+        if (method !== 'Input.dispatchKeyEvent') return undefined;
+        await h.emit(1, 'Runtime.exceptionThrown', {timestamp: Date.now(), exceptionDetails: {text: 'Uncaught', lineNumber: 4, url: 'https://x.invalid/',
+            exception: {type: 'string', value: 'panne'}}});
+        throw new Error('Target closed');
+    }});
+    const res = await h.run('press_key', {tabId: 1, key: 'Enter'});
+    assert.match(res.error, /\[1 uncaught page error during this gesture \(page text, data\): Uncaught panne \(x\.invalid:5\)\]$/);
 });
 
 test('2.9 journal réseau : carte, cryptogramme, code et IBAN masqués dans les corps et les URL', async () => {

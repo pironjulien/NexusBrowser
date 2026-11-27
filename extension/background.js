@@ -32,7 +32,8 @@ const AGY_FEATURES = [
     "capture-field-masking", "console-masking", "capture-screencast-ack", "cdp-mark-world", "ax-full-tree",
     "history-navigation-cdp", "full-page-capture", "opener-tabs-webnav",
     "installer-reload", "tab-list-redaction", "download-ownership", "gmail-counter", "wait-load-navigation",
-    "map-field-labels", "bridge-pairing", "scroll-panel", "bridge-watch", "reload-drain"
+    "map-field-labels", "bridge-pairing", "scroll-panel", "bridge-watch", "reload-drain",
+    "page-errors"
 ];
 
 let attachedDebuggers = new Set();
@@ -725,7 +726,9 @@ chrome.debugger.onEvent.addListener(async (source, method, /** @type {any} */ pa
         }
         return;
     }
-    if (method === "Runtime.consoleAPICalled" || method === "Log.entryAdded") {
+    // Runtime.exceptionThrown : erreur non interceptée de la page, gardée avec la console (browser_logs) et relue
+    // à la fin d'un geste (pageErrorsSince).
+    if (method === "Runtime.consoleAPICalled" || method === "Log.entryAdded" || method === "Runtime.exceptionThrown") {
         if (!tabConsoleLogs.has(source.tabId)) tabConsoleLogs.set(source.tabId, []);
         const logs = tabConsoleLogs.get(source.tabId);
         logs.push({ timestamp: Date.now(), method, params });
@@ -1074,6 +1077,7 @@ async function handleCommand(req) {
     // les battements ni les listes, qui tournent en continu.
     const busyAgent = client && (tabId !== null || action === "create_tab") ? client.agent : null;
     if (busyAgent) busyStart(busyAgent);
+    const errorMark = tabId !== null && GESTURE_ACTIONS.has(action) ? pageErrorMark(tabId) : null;
     let result;
     try {
         result = await routeCommand({ action, params }, client);
@@ -1099,7 +1103,97 @@ async function handleCommand(req) {
     if ((action === "create_tab" || action === "navigate") && result?.data && isChromeProtectedPage(params.url)) {
         result = { ...result, data: { ...result.data, protected_page: true, warning: chromeProtectedMessage(params.url) } };
     }
+    if (errorMark && visible !== null) {
+        await flushPageEvents(visible);
+        result = annotatePageErrors(result, pageErrorsSince(visible, errorMark));
+    }
     return annotatePendingDialogs(result, visible);
+}
+
+// Gestes : commandes qui agissent sur la page. Les erreurs non interceptées qu'elle lève pendant l'une d'elles sont
+// jointes à sa réponse ; les lectures n'en déclenchent pas.
+const GESTURE_ACTIONS = new Set(["click", "fill", "check", "type_keys", "press_key", "select_option", "hover", "scroll",
+    "drag_and_drop", "upload", "handle_dialog", "navigate", "reload"]);
+const PAGE_ERRORS_LISTED = 3;
+const PAGE_ERROR_MESSAGE_CHARS = 200;
+const PAGE_ERROR_FILE_CHARS = 60;
+
+const PAGE_EVENTS_FLUSH_MS = 300;
+
+/**
+ * Aller-retour avec le moteur de rendu à la fin d'un geste : Chrome répond à un événement de souris par un autre canal
+ * que celui des événements de la page, et l'erreur levée par le clic arrivait parfois après sa réponse (11 clics sur
+ * 60 mesurés le 28/11 dans un Chrome sans tête) ; les événements émis avant cette réponse-ci sont, eux, déjà reçus.
+ * Sans débogueur attaché (rien n'est écouté) ou boîte de dialogue ouverte (page bloquée) : rien à attendre.
+ */
+async function flushPageEvents(tabId) {
+    if (!attachedDebuggers.has(tabId) || pendingDialogs.has(tabId)) return;
+    try {
+        // Runtime.getHeapUsage : répondu par le moteur de rendu sans rien exécuter dans la page.
+        const call = chrome.debugger.sendCommand({ tabId }, "Runtime.getHeapUsage");
+        call.catch(() => {});
+        await withTimeout(call, PAGE_EVENTS_FLUSH_MS, "page events not flushed");
+    } catch (error) { swallowed("page events flush", error); }
+}
+
+/** Repère pris au début d'un geste : dernière entrée déjà dans le journal de console de l'onglet, et l'heure. */
+function pageErrorMark(tabId) {
+    return { last: (tabConsoleLogs.get(tabId) || []).at(-1) || null, at: Date.now() };
+}
+
+/**
+ * Erreurs non interceptées (Runtime.exceptionThrown) entrées dans le journal après le repère. Une erreur plus ancienne
+ * que le geste n'est jamais comptée : ni celle déjà au journal, ni celle que Chrome rejoue en activant Runtime sur un
+ * onglet tout juste rattaché (elle porte son heure d'origine). null s'il n'y en a aucune.
+ */
+function pageErrorsSince(tabId, mark) {
+    const logs = tabConsoleLogs.get(tabId) || [];
+    // Repère sorti du journal (plus de 100 entrées pendant le geste) : tout ce qui reste est plus récent.
+    const thrown = logs.slice(mark.last ? logs.indexOf(mark.last) + 1 : 0).filter(entry => {
+        if (entry.method !== "Runtime.exceptionThrown") return false;
+        const at = entry.params?.timestamp;
+        return typeof at !== "number" || at >= mark.at;
+    });
+    if (thrown.length === 0) return null;
+    return { count: thrown.length, errors: thrown.slice(0, PAGE_ERRORS_LISTED).map(entry => publicPageError(entry.params?.exceptionDetails)) };
+}
+
+/** { message, at } : première ligne du message, masquée et bornée ; at = fichier:ligne quand Chrome les donne. */
+function publicPageError(details) {
+    const exception = details?.exception || {};
+    const raw = exception.description || (exception.value !== undefined ? `${details?.text || "Uncaught"} ${String(exception.value)}` : details?.text) || "Uncaught error";
+    const line = maskLogText(String(raw).split("\n")[0].trim());
+    const error = { message: line.length > PAGE_ERROR_MESSAGE_CHARS ? `${line.slice(0, PAGE_ERROR_MESSAGE_CHARS)}…` : line };
+    const frame = details?.stackTrace?.callFrames?.[0];
+    const url = details?.url || frame?.url;
+    const lineNumber = details?.url || !frame ? details?.lineNumber : frame.lineNumber;
+    if (url) {
+        // Nom du fichier seul (ni requête ni fragment : aucun secret d'URL), sinon l'hôte.
+        let file = String(url);
+        try {
+            const parsed = new URL(file);
+            file = parsed.pathname.split("/").filter(Boolean).pop() || parsed.host || file;
+        } catch (_) { file = file.split(/[?#]/)[0]; }
+        file = file.slice(-PAGE_ERROR_FILE_CHARS);
+        error.at = Number.isInteger(lineNumber) ? `${file}:${lineNumber + 1}` : file;
+    }
+    return error;
+}
+
+function describePageErrors(found) {
+    const listed = found.errors.map(e => e.at ? `${e.message} (${e.at})` : e.message).join("; ");
+    const more = found.count > found.errors.length ? `; and ${found.count - found.errors.length} more` : "";
+    return `${found.count} uncaught page error${found.count > 1 ? "s" : ""} during this gesture (page text, data): ${listed}${more}`;
+}
+
+/** Erreurs de page levées pendant le geste, dans sa réponse : champ pageErrors, ou à la suite de son message d'échec. */
+function annotatePageErrors(result, found) {
+    if (!result || !found) return result;
+    if (result.error) return { ...result, error: `${result.error} [${describePageErrors(found)}]` };
+    if (result.data && typeof result.data === "object" && !Array.isArray(result.data)) {
+        return { ...result, data: { ...result.data, pageErrors: found } };
+    }
+    return result;
 }
 
 /**

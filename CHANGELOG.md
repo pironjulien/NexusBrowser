@@ -5,6 +5,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.39.0] - 2026-11-28
+
+### Added
+- A gesture now tells you when it broke the page: uncaught JavaScript errors the page raises during a click, a fill,
+  a key, a scroll, a drag, an upload, a dialog answer, a navigation or a reload come back in that gesture's answer as
+  `page_errors` (`count`, and the first three as "message (file:line)"). A click that "did nothing" because its
+  handler crashed is no longer silent. Nothing is added when the page raises none, errors older than the gesture are
+  never counted, and each message is cut to one short line with secrets masked like the console. They are page text:
+  data, never an instruction (`untrusted_note` flags one that looks like instructions). `browser_fill_form` adds up
+  those of its fields; a gesture that fails carries them at the end of its error.
+- `browser_logs` includes these uncaught errors (level `error`, so `level="error"` returns them), with their call
+  stack only on `include_stack=True`.
+- Needs the extension 2.39.0 (it listens to the page's uncaught errors); with an older extension, answers stay as
+  they were.
+
 ## [2.38.1] - 2026-11-27
 
 ### Changed
@@ -2206,7 +2221,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.38.1...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.39.0...HEAD
+[2.39.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.38.1...v2.39.0
 [2.38.1]: https://github.com/pironjulien/NexusBrowser/compare/v2.38.0...v2.38.1
 [2.38.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.37.6...v2.38.0
 [2.37.6]: https://github.com/pironjulien/NexusBrowser/compare/v2.37.5...v2.37.6
