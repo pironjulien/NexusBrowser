@@ -15,7 +15,7 @@ tabs, while you keep browsing in yours.
 [![release](https://img.shields.io/github/v/release/pironjulien/NexusBrowser?style=flat-square&label=release)](https://github.com/pironjulien/NexusBrowser/releases/latest)
 [![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square)](#-quick-start)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4?style=flat-square&logo=googlechrome&logoColor=white)](extension/manifest.json)
-[![.NET 10](https://img.shields.io/badge/.NET-10-512BD4?style=flat-square&logo=dotnet&logoColor=white)](native/NexusBrowser.csproj)
+[![.NET 11](https://img.shields.io/badge/.NET-11-512BD4?style=flat-square&logo=dotnet&logoColor=white)](native/NexusBrowser.csproj)
 [![MCP](https://img.shields.io/badge/MCP-server-6E56CF?style=flat-square)](https://modelcontextprotocol.io)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -182,13 +182,13 @@ points to the one-time install.
 
 ```mermaid
 flowchart LR
-    A["Claude / Codex / Antigravity"] -->|"MCP: stdio or shared daemon :16182"| S["NexusBrowser.exe<br/>MCP server (C#, .NET 10)"]
+    A["Claude / Codex / Antigravity"] -->|"MCP: stdio or shared daemon :16182"| S["NexusBrowser.exe<br/>MCP server (C#, .NET 11)"]
     S -->|"HTTP 9225, token"| B["Local bridge<br/>127.0.0.1"]
     B -->|"WebSocket 9224, signed"| X["Chrome extension"]
     X -->|"DevTools Protocol"| T["Agent's background tabs<br/>in your Chrome"]
 ```
 
-`NexusBrowser.exe` is the only engine (C#, .NET 10; the Python one was removed in 2.33.0). A release carries it
+`NexusBrowser.exe` is the only engine (C#, .NET 11; the Python one was removed in 2.33.0). A release carries it
 compiled ahead of time (Native AOT, no .NET to install) for each Windows architecture (`NexusBrowser-win-x64.zip`, `NexusBrowser-win-arm64.zip`), with their
 `SHA256SUMS.txt` and build provenance (Sigstore: `gh attestation verify <file> --repo pironjulien/NexusBrowser
 --signer-repo pironjulien/NexusSystem`). Each build is installed once in
@@ -220,7 +220,7 @@ the extension before creating the tab. Read tools and idle heartbeats leave a cl
 | Folder | Role |
 | --- | --- |
 | [`extension/`](extension) | Chrome MV3 extension "NexusBrowser": CDP actions, locators, network, dialogs, cross-origin iframes, exports, tab ownership |
-| [`native/`](native) | The engine, `NexusBrowser.exe` (C#, .NET 10): native host `com.nexus.browser_auth` (`--auth-host`), local bridge (`--bridge`: WebSocket 9224 for the extension, HTTP 9225 for the agents), the 49 MCP tools over stdio (`--mcp`) or as the shared HTTP daemon (`--http 16182`), client registration (`--register`), extension check (`--refresh-extension`), stdio relay to the shared daemon for the Antigravity Marketplace plugin (`--stdio-relay`); shared policy and page probes in `native/resources/` |
+| [`native/`](native) | The engine, `NexusBrowser.exe` (C#, .NET 11): native host `com.nexus.browser_auth` (`--auth-host`), local bridge (`--bridge`: WebSocket 9224 for the extension, HTTP 9225 for the agents), the 49 MCP tools over stdio (`--mcp`) or as the shared HTTP daemon (`--http 16182`), client registration (`--register`), extension check (`--refresh-extension`), stdio relay to the shared daemon for the Antigravity Marketplace plugin (`--stdio-relay`); shared policy and page probes in `native/resources/` |
 | [`plugin/`](plugin) | Plugin with the skill (`plugin/skills`) and the Antigravity plugin (`plugin/antigravity`, whose `scripts/start.cmd` runs the installed engine with `--stdio-relay`); `install.ps1` copies the skill into that plugin only |
 | [`tests/`](tests) | Engine tests (xUnit v3, `dotnet test`), extension tests (`node --test`), the clean-Windows install check |
 | [`tsconfig.json`](tsconfig.json), [`types/`](types), [`package.json`](package.json) | Type check of the extension's service worker (`tsc`, Chrome and DevTools Protocol types, versions locked in `package-lock.json`), run by `test.ps1`; development only, nothing ships |
@@ -406,7 +406,7 @@ Questions or concerns: open an issue on this repository, or see [SECURITY.md](SE
 <details>
 <summary><b>Install from a clone</b></summary>
 
-Requirements: the [.NET 10 SDK](https://dotnet.microsoft.com/download), PowerShell 7, Node.js for the extension tests.
+Requirements: the [.NET 11 SDK](https://dotnet.microsoft.com/download), PowerShell 7, Node.js for the extension tests.
 
 ```powershell
 git clone https://github.com/pironjulien/NexusBrowser.git
@@ -448,7 +448,7 @@ pwsh -NoProfile -File test.ps1 -Full   # plus the bridge and the loaded extensio
 pwsh -NoProfile -File verify.ps1 -Browser  # task, native host, bridge reached, loaded extension up to date
 ```
 
-`test.ps1` needs the .NET 10 SDK and Node.js; build and test outputs stay in `~\.nexus\build\nexus-browser`.
+`test.ps1` needs the .NET 11 SDK and Node.js; build and test outputs stay in `~\.nexus\build\nexus-browser`.
 `verify.ps1 -Browser` checks the selected installation, the authenticated Chrome extension and native MCP health;
 `test.ps1 -Full` runs the offline tests, then checks the bridge and the loaded extension on this PC.
 

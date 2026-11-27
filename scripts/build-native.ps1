@@ -11,7 +11,7 @@ $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 if ($OutputDirectory.StartsWith([IO.Path]::GetFullPath($repositoryRoot) + '\', [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Native build output must stay outside the repository and OneDrive.'
 }
-if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw '.NET 10 SDK is required to build NexusBrowser.' }
+if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw '.NET 11 SDK is required to build NexusBrowser.' }
 if (Test-Path -LiteralPath $OutputDirectory) { Remove-Item -LiteralPath $OutputDirectory -Recurse -Force }
 $arguments = @('publish', (Join-Path $repositoryRoot 'native\NexusBrowser.csproj'), '-c', 'Release', '-o', $OutputDirectory, '--nologo')
 if ($Runtime) {

@@ -1,6 +1,6 @@
 # NexusBrowser install entry point, run in place (safe to run again):
 #  - from a release package (engine\NexusBrowser.exe present: %LOCALAPPDATA%\NexusBrowser\app), its engine installs it;
-#  - from a development checkout, the engine is built first with the .NET 10 SDK (scripts\build-native.ps1, outputs in
+#  - from a development checkout, the engine is built first with the .NET 11 SDK (scripts\build-native.ps1, outputs in
 #    ~\.nexus\build\nexus-browser), test.ps1 runs unless -SkipTests, then that build installs the checkout.
 # Everything else is NexusBrowser.exe --install (native\Installer.cs). Windows PowerShell 5.1 and pwsh 7 (ASCII file).
 # Usage: pwsh -NoProfile -File install.ps1 [-SkipTests] [-SkipLaunch] [-Register] [-UpdateOnly]

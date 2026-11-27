@@ -337,7 +337,7 @@ public sealed partial class McpServer : IDisposable
             await writeLock.WaitAsync(ct);
             try
             {
-                await writer.WriteLineAsync(response.ToJsonString(CompactJson));
+                await writer.WriteLineAsync(response.ToJsonString(CompactJson), ct);
                 await writer.FlushAsync(ct);
             }
             finally { writeLock.Release(); }
