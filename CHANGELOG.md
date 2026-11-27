@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.38.1] - 2026-11-27
+
+### Changed
+- Dependencies: SkiaSharp 4.157.0, devtools-protocol 0.0.1750115 (type checks) and pinned actions (CodeQL 4.39.4,
+  Scorecard 2.6.0).
+
 ## [2.38.0] - 2026-11-27
 
 ### Changed
@@ -2200,7 +2206,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.38.0...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.38.1...HEAD
+[2.38.1]: https://github.com/pironjulien/NexusBrowser/compare/v2.38.0...v2.38.1
 [2.38.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.37.6...v2.38.0
 [2.37.6]: https://github.com/pironjulien/NexusBrowser/compare/v2.37.5...v2.37.6
 [2.37.5]: https://github.com/pironjulien/NexusBrowser/compare/v2.37.4...v2.37.5
