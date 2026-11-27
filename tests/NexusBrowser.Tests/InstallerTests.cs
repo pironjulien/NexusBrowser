@@ -112,7 +112,11 @@ internal sealed class FakeHost(InstallLayout layout) : IInstallHost
     public void SetUserVariable(string name, string value) => UserVariables[name] = value;
     public string? Variable(string name) => Variables.GetValueOrDefault(name);
     public void SetVariable(string name, string value) => Variables[name] = value;
-    public bool IsRunning(string processName) => false;
+    // Chrome is only ever asked through the shared detection (IsChromeRunning), never by process name.
+    public bool IsRunning(string processName) => processName.Equals("chrome", StringComparison.OrdinalIgnoreCase)
+        ? throw new InvalidOperationException("chrome asked by process name: a headless or test Chrome would count") : false;
+    public bool ChromeRunning { get; set; }
+    public bool IsChromeRunning() => ChromeRunning;
 
     public int RunScript(string script, IReadOnlyList<string> args, TextWriter output)
     {
@@ -354,6 +358,21 @@ public sealed class InstallerTests : IDisposable
         Assert.Empty(_host.Scripts);  // never the "add the extension" guide: it is in Chrome already
         Assert.Equal(1 + Installer.ExtensionReconnectWaits, waits);
         Assert.Equal(!reconnects, _output.ToString().Contains("has not reconnected yet: it reconnects by itself", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ChromeOpenWithoutTheExtensionIsReportedOnlyForTheUsersOwnChrome(bool usersChrome)
+    {
+        // 27/11: only a headless Playwright Chrome ran; a check by process name took it for the user's Chrome.
+        string first = Package("2.36.0", "first");
+        Make().Switch(first, From(first, Options()), null, sandbox: false);
+        _host.ChromeRunning = usersChrome;
+        _host.OnEngine = (_, args) => args is ["--refresh-extension", ..] ? (2, """{"connected":false,"verified":false}""") : null;
+        string second = Package("2.36.1", "second");
+        Assert.Equal(0, Make().Switch(second, From(second, Options(register: false)), null, sandbox: false));
+        Assert.Equal(usersChrome, _output.ToString().Contains("Chrome is open but its NexusBrowser extension is not connected", StringComparison.Ordinal));
     }
 
     [Fact]

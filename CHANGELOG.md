@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.37.6] - 2026-11-27
+
+### Fixed
+- The installer reports "Chrome is open but its NexusBrowser extension is not connected" only for the user's own
+  Chrome, with the engine's detection (browser process on the user's profile): a headless or test Chrome running
+  alone (Playwright) no longer counts as an open Chrome.
+
 ## [2.37.5] - 2026-11-27
 
 ### Fixed
@@ -2187,7 +2194,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.37.5...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.37.6...HEAD
+[2.37.6]: https://github.com/pironjulien/NexusBrowser/compare/v2.37.5...v2.37.6
 [2.37.5]: https://github.com/pironjulien/NexusBrowser/compare/v2.37.4...v2.37.5
 [2.36.2]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.1...v2.36.2
 [2.36.1]: https://github.com/pironjulien/NexusBrowser/compare/v2.36.0...v2.36.1

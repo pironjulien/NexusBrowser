@@ -42,6 +42,10 @@ internal interface IInstallHost
 
     bool IsRunning(string processName);
 
+    /// <summary>The user's own Chrome runs (<see cref="ChromeLauncher.IsRunning"/>: its browser process on the user's
+    /// profile, never a headless or test Chrome), the one detection the engine also uses.</summary>
+    bool IsChromeRunning();
+
     /// <summary>Runs a PowerShell script file (the extension guide) and forwards its output.</summary>
     int RunScript(string script, IReadOnlyList<string> args, TextWriter output);
 
@@ -114,6 +118,8 @@ internal sealed class WindowsInstallHost : IInstallHost, IDisposable
     public string? Variable(string name) => Environment.GetEnvironmentVariable(name);
 
     public void SetVariable(string name, string value) => Environment.SetEnvironmentVariable(name, value);
+
+    public bool IsChromeRunning() => ChromeLauncher.IsRunning();
 
     public bool IsRunning(string processName)
     {
@@ -585,7 +591,7 @@ internal sealed class Installer(InstallLayout layout, IInstallHost host, TextWri
             {
                 if (!o.Pack) host.RunScript(Path.Join(sourceRoot, "scripts", "guide-extension.ps1"), [], output);
             }
-            else if (refresh.Code == 2 && host.IsRunning("chrome")) Warn("Chrome is open but its NexusBrowser extension is not connected to the bridge.");
+            else if (refresh.Code == 2 && host.IsChromeRunning()) Warn("Chrome is open but its NexusBrowser extension is not connected to the bridge.");
             else if (refresh.Code == 1) Warn("The loaded extension is not this version yet: reload it in chrome://extensions.");
             else if (refresh.Code == 3)
                 Warn("Extension reload deferred while agents work (commands still running, or an extension older than 2.35.10 that would lose their tabs). " +
