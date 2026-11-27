@@ -13,7 +13,7 @@ updates:
       actions:
         patterns: ["*"]
   - package-ecosystem: nuget
-    directories: ["/native", "/tests/NexusBrowser.Tests"]
+    directories: ["/native", "/tests/NexusBrowser.Tests", "/tests/native_lifetime"]
     schedule:
       interval: weekly
     cooldown:
