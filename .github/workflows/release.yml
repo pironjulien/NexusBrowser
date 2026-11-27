@@ -107,7 +107,7 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    uses: pironjulien/NexusSystem/.github/workflows/product-dev-release.yml@0e7bd4e2a9c68e0350923e0b79bf2c64c4b49ac6  # v1.8.0
+    uses: pironjulien/NexusSystem/.github/workflows/product-dev-release.yml@10fbb0b540e7d26c430079a7d13a4395a205c98c  # v1.11.1
     with:
       product: NexusBrowser
       version: ${{ needs.build.outputs.version }}
@@ -122,7 +122,7 @@ jobs:
       actions: read  # the commit's checks, read before anything is published
       checks: read
       statuses: read
-    uses: pironjulien/NexusSystem/.github/workflows/product-promote.yml@0e7bd4e2a9c68e0350923e0b79bf2c64c4b49ac6  # v1.8.0
+    uses: pironjulien/NexusSystem/.github/workflows/product-promote.yml@10fbb0b540e7d26c430079a7d13a4395a205c98c  # v1.11.1
     with:
       product: NexusBrowser
       promote: ${{ inputs.promote || needs.dev.outputs.tag }}
