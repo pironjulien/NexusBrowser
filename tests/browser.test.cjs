@@ -5810,6 +5810,144 @@ test('new_tab et navigate vers le Chrome Web Store : avertissement dès la répo
     assert.equal(plainNav.data.protected_page, undefined);
 });
 
+// Page factice pour la sonde de vérification : titre, texte, et parties de sélecteur présentes dans le document.
+function handoffPage({title = '', text = '', present = []} = {}) {
+    return {document: {
+        title, body: {innerText: text},
+        querySelector: (sel) => sel.split(', ').some(part => present.includes(part)) ? {} : null,
+        querySelectorAll: () => []
+    }};
+}
+
+test('navigate : page de vérification ou de blocage à l\'arrivée dite dans la réponse, par la détection de check_handoff, sans aucun geste', async () => {
+    const cases = [
+        [{title: 'Just a moment...', text: 'Verifying you are human. This may take a few seconds.'}, 'cloudflare'],
+        [{present: ['.cf-turnstile'], text: 'Sign in'}, 'cloudflare'],
+        [{present: ['.g-recaptcha:not([data-size="invisible"])'], text: 'Our systems have detected unusual traffic from your computer network.'}, 'captcha'],
+        [{present: ['iframe[src*="captcha-delivery.com"]']}, 'captcha'],
+        [{present: ['input[autocomplete="one-time-code"]'], text: 'Enter the code'}, '2fa'],
+        [{text: 'Validation en deux étapes\nAppuyez sur Oui sur votre téléphone'}, '2fa'],
+        [{title: 'Access Denied', text: 'Access Denied\nYou don\'t have permission to access "http://shop.invalid/" on this server.\nReference #18.2d3a'}, 'blocked'],
+        [{title: 'Attention Required! | Cloudflare', text: 'Sorry, you have been blocked'}, 'blocked'],
+        [{text: 'Pardon Our Interruption\nAs you were browsing something about your browser made us think you were a bot.'}, 'blocked'],
+    ];
+    for (const [page, type] of cases) {
+        const h = harness(handoffPage(page));
+        const nav = await h.run('navigate', {tabId: 1, url: 'https://shop.invalid/'});
+        assert.equal(nav.error, undefined, type);
+        assert.equal(nav.data.handoff?.type, type, JSON.stringify(page));
+        assert.ok(nav.data.handoff.message.length > 10);
+        // Même détection, même réponse à la demande.
+        assert.deepEqual(plain((await h.run('check_handoff', {tabId: 1})).data), {handoffRequired: true, type, message: nav.data.handoff.message});
+        // Constat seul : ni clic, ni touche, ni script dans le monde de la page.
+        assert.ok(!h.calls.some(c => c.method.startsWith('Input.') || (c.method === 'Runtime.evaluate' && c.params.contextId === undefined)), type);
+    }
+});
+
+test('navigate : page ordinaire sans signalement (reCAPTCHA invisible, article qui parle de 2FA, refus d\'accès applicatif) ; sonde en échec = navigation réussie', async () => {
+    const ordinary = [
+        {},
+        {present: ['.grecaptcha-badge', '.g-recaptcha[data-size="invisible"]', 'textarea.g-recaptcha-response'], text: 'Create your account'},
+        {title: 'Two-factor authentication explained', text: 'How to set up an authenticator app. You have been blocked? Access denied? ' + 'Lorem ipsum. '.repeat(400)},
+        {title: 'Access denied', text: 'Access denied. You need permission to open this document. Request access.'},
+    ];
+    for (const page of ordinary) {
+        const h = harness(handoffPage(page));
+        const nav = await h.run('navigate', {tabId: 1, url: 'https://example.invalid/'});
+        assert.equal(nav.error, undefined);
+        assert.equal(nav.data.handoff, undefined, JSON.stringify(page).slice(0, 120));
+        assert.equal((await h.run('check_handoff', {tabId: 1})).data.handoffRequired, false);
+    }
+    // Page sans document lisible (harnais par défaut) ou sonde qui échoue : la navigation reste réussie, sans signalement.
+    assert.equal((await harness().run('navigate', {tabId: 1, url: 'https://example.invalid/'})).data.handoff, undefined);
+    const broken = harness(handoffPage({title: 'Just a moment...'}), {debuggerSendCommand: async (target, method) => {
+        if (method === 'Runtime.evaluate') throw new Error('Cannot attach to this target');
+        return undefined;
+    }});
+    const nav = await broken.run('navigate', {tabId: 1, url: 'https://example.invalid/'});
+    assert.equal(nav.error, undefined);
+    assert.equal(nav.data.handoff, undefined);
+    assert.equal(nav.data.url, 'https://example.invalid/');
+});
+
+test('onglet ouvert par l\'onglet de fond d\'un agent (target=_blank, window.open) : l\'onglet que l\'utilisateur regardait lui est rendu', async () => {
+    const activated = [];
+    const onActivated = (info) => { for (const fn of activated) fn(info); };
+    const updates = [];
+    const windowUpdates = [];
+    // Fenêtre 10 : onglet 5 de l'agent (fond), onglet 6 adopté, onglet 7 de l'utilisateur (devant).
+    const tabs = new Map([[5, {id: 5, windowId: 10, active: false}], [6, {id: 6, windowId: 10, active: false}], [7, {id: 7, windowId: 10, active: true}]]);
+    const front = (id) => {
+        const windowId = tabs.get(id).windowId;
+        for (const t of tabs.values()) if (t.windowId === windowId) t.active = t.id === id;
+    };
+    const h = harness({}, {autoOwn: false, tabs: {
+        get: async (id) => { if (!tabs.has(id)) throw new Error(`No tab with id: ${id}`); return {...tabs.get(id)}; },
+        query: async (q = {}) => [...tabs.values()].filter(t => (q.windowId === undefined || t.windowId === q.windowId) && (q.active === undefined || t.active === q.active)),
+        update: async (id, p) => { updates.push([id, p]); if (p.active) front(id); return {...tabs.get(id)}; },
+        onActivated: {addListener(fn) { activated.push(fn); }}
+    }, windows: {update: async (id, p) => { windowUpdates.push([id, p]); }}});
+    const settle = () => new Promise(r => setTimeout(r, 10));
+    await h.own(5);
+    await h.own(6, TEST_CLIENT, 'adopted');
+    await settle();
+    const opens = (id, windowId = 10) => { tabs.set(id, {id, windowId, active: false}); front(id); };
+
+    // Lien target=_blank : Chrome active le nouvel onglet, puis annonce d'où il vient (seul signal).
+    opens(50);
+    onActivated({tabId: 50, windowId: 10});
+    h.navigationTarget({tabId: 50, sourceTabId: 5});
+    await settle();
+    assert.deepEqual(plain(updates), [[7, {active: true}]]);
+    assert.equal(h.owners()[50].openedBy, 5);  // toujours à l'agent, derrière
+    onActivated({tabId: 7, windowId: 10});
+
+    // window.open : l'onglet arrive avec son ouvreur avant que son activation soit annoncée ; rendu une seule fois.
+    updates.length = 0;
+    opens(51);
+    h.createdTab({id: 51, openerTabId: 5});
+    await settle();
+    onActivated({tabId: 51, windowId: 10});
+    h.navigationTarget({tabId: 51, sourceTabId: 5});
+    await settle();
+    assert.deepEqual(plain(updates), [[7, {active: true}]]);
+    onActivated({tabId: 7, windowId: 10});
+
+    // Fenêtre ouverte pour lui (window.open avec dimensions) : réduite, aucun onglet déplacé.
+    updates.length = 0;
+    opens(52, 20);
+    onActivated({tabId: 52, windowId: 20});
+    h.createdTab({id: 52, openerTabId: 5});
+    await settle();
+    assert.deepEqual(plain(updates), []);
+    assert.deepEqual(plain(windowUpdates), [[20, {state: 'minimized'}]]);
+
+    // Onglet ouvert par un onglet de l'utilisateur ou par un onglet adopté : jamais touché.
+    windowUpdates.length = 0;
+    for (const [id, opener] of [[53, 7], [54, 6]]) {
+        opens(id);
+        onActivated({tabId: id, windowId: 10});
+        h.createdTab({id, openerTabId: opener});
+        await settle();
+        front(7);
+        onActivated({tabId: 7, windowId: 10});
+    }
+    // L'onglet de l'agent est lui-même devant (l'utilisateur le regarde ou y clique) : Chrome fait comme d'habitude.
+    front(5);
+    onActivated({tabId: 5, windowId: 10});
+    opens(55);
+    onActivated({tabId: 55, windowId: 10});
+    h.createdTab({id: 55, openerTabId: 5});
+    await settle();
+    // Onglet ouvert sans passer devant : rien à rendre.
+    tabs.set(56, {id: 56, windowId: 10, active: false});
+    h.createdTab({id: 56, openerTabId: 5});
+    await settle();
+    assert.deepEqual(plain(updates), []);
+    assert.deepEqual(plain(windowUpdates), []);
+    assert.equal(h.owners()[55].openedBy, 5);
+});
+
 // Instantané d'accessibilité compact (axtree mode snapshot) : références [#N] utilisables par les gestes par mark.
 function snapshotAx() {
     return [

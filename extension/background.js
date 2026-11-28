@@ -850,6 +850,7 @@ if (chrome.tabs?.onActivated?.addListener) {
         activeTabs.set(windowId, { current: tabId, previous: seen ? seen.current : null, at: Date.now() });
         // Activation annoncée après la boîte : même règle.
         if (pendingDialogs.has(tabId)) keepDialogTabBehind(tabId).catch(() => {});
+        if (openedTabs.has(tabId)) keepOpenedTabBehind(tabId).catch(() => {});
     });
     // Service worker (re)lancé : onglets actifs du moment, pour connaître celui d'avant à la prochaine activation.
     Promise.resolve(chrome.tabs.query?.({ active: true })).then((tabs) => {
@@ -864,6 +865,7 @@ if (chrome.tabs?.onRemoved?.addListener) {
         if (attachedDebuggers.has(tabId)) detachDebugger(tabId);
         clearDebuggerIdleTimer(tabId);
         pendingDialogs.delete(tabId);
+        openedTabs.delete(tabId);
         attachedDebuggers.delete(tabId);
         tabConsoleLogs.delete(tabId);
         recentUploads.delete(tabId);
@@ -894,8 +896,43 @@ function inheritOpenerOwner(tabId, openerTabId) {
         tabOwners.set(tabId, {
             agent: opener.agent, client: opener.client, adopted: false, since: Date.now(), openedBy: openerTabId
         });
+        openedTabs.set(tabId, { opener: openerTabId, since: Date.now() });
+        keepOpenedTabBehind(tabId).catch(() => {});
         await saveExtensionState();
     }).catch(() => {});
+}
+
+// Onglets tout juste ouverts par un onglet d'agent, à garder derrière : numéro → { opener, since }.
+const openedTabs = new Map();
+
+/**
+ * Onglet ouvert par l'onglet de fond d'un agent (lien target=_blank, window.open) : Chrome l'ouvre au premier plan, à
+ * la place de l'onglet que l'utilisateur regardait (mesuré le 28/11 dans Chrome 151 : 4 cas sur 4). Cet onglet lui est
+ * rendu aussitôt ; l'onglet ouvert reste à l'agent, en arrière-plan. Une fenêtre ouverte pour lui (window.open avec
+ * dimensions : connexion OAuth) est réduite, comme la fenêtre de repli de new_tab. Rien si l'onglet de l'agent était
+ * lui-même devant (l'utilisateur le regarde, ou y a cliqué lui-même), ni passé DIALOG_ACTIVATION_MS.
+ */
+async function keepOpenedTabBehind(tabId) {
+    const opened = openedTabs.get(tabId);
+    if (!opened) return;
+    if (Date.now() - opened.since > DIALOG_ACTIVATION_MS) { openedTabs.delete(tabId); return; }
+    let tab = null;
+    try { tab = await chrome.tabs.get(tabId); } catch (_) { openedTabs.delete(tabId); return; }
+    if (!tab?.active) return;  // pas devant (ou pas encore : onActivated rappelle)
+    if (!openedTabs.delete(tabId)) return;  // une seule fois, quel que soit le signal arrivé le premier
+    const seen = activeTabs.get(tab.windowId);
+    const previous = seen ? (seen.current === tabId ? seen.previous : seen.current) : null;
+    try {
+        if (Number.isInteger(previous) && previous !== tabId) {
+            if (previous !== opened.opener) await chrome.tabs.update(previous, { active: true });
+            return;
+        }
+        if (!chrome.windows?.update || !chrome.tabs.query) return;
+        const opener = await chrome.tabs.get(opened.opener);
+        if (opener?.active || opener?.windowId === undefined || opener.windowId === tab.windowId) return;
+        if ((await chrome.tabs.query({ windowId: tab.windowId })).length !== 1) return;
+        await chrome.windows.update(tab.windowId, { state: "minimized" });
+    } catch (error) { swallowed("opened tab kept behind", error); }
 }
 if (chrome.tabs?.onCreated?.addListener) {
     chrome.tabs.onCreated.addListener((tab) => inheritOpenerOwner(tab?.id, tab?.openerTabId));
@@ -4372,7 +4409,7 @@ async function navigateTab(params) {
     let before = null;
     try { before = (await chrome.tabs.get(tabId))?.url || null; } catch (error) { swallowed("address before navigation", error); }
     const updatedTab = await chrome.tabs.update(tabId, { url });
-    return await settleNavigation(tabId, updatedTab, { before, url });
+    return await withHandoff(tabId, await settleNavigation(tabId, updatedTab, { before, url }));
 }
 
 /**
@@ -6408,28 +6445,62 @@ async function visionInspect(params = {}) {
 }
 
 /**
- * Detect security challenges (2FA, SMS code, Authenticator, Cloudflare Turnstile, CAPTCHA)
+ * Sonde exécutée dans la page (monde isolé) : vérification humaine (Cloudflare), CAPTCHA, écran 2FA ou page de blocage.
+ * Elle constate seulement : rien n'est cliqué, rempli ni contourné, la suite revient à l'utilisateur. Seule détection
+ * de l'extension, pour browser_check_handoff comme pour la réponse d'une navigation : elle doit donc rester muette sur
+ * une page ordinaire. Un widget visible compte, pas un reCAPTCHA invisible (v3 : badge seul, rien à passer) ; les
+ * phrases ne comptent que sur une page courte (un écran de vérification, pas un article qui parle de 2FA).
+ */
+function handoffProbe() {
+    const doc = document;
+    const text = String((doc.body && doc.body.innerText) || "").toLowerCase();
+    const title = String(doc.title || "").toLowerCase();
+    const has = (selector) => { try { return !!doc.querySelector(selector); } catch (_) { return false; } };
+    const shortPage = text.length < 3000;
+    const says = (pattern) => shortPage && pattern.test(`${title}\n${text}`);
+
+    if (has('.cf-turnstile, iframe[src*="challenges.cloudflare.com"], script[src*="challenges.cloudflare.com/turnstile"], #challenge-form, #challenge-error-text, #cf-challenge-running')
+        || says(/just a moment\.\.\.|verif(y|ying) you are human|vérifi(er|ez|cation) que vous êtes (un )?humain|checking your browser before accessing/)) {
+        return { handoffRequired: true, type: "cloudflare", message: "Cloudflare verification challenge detected." };
+    }
+    if (has('.g-recaptcha:not([data-size="invisible"]), iframe[src*="/recaptcha/"][src*="/anchor"]:not([src*="size=invisible"]), .h-captcha:not([data-size="invisible"]), iframe[src*="hcaptcha.com"][src*="frame=checkbox"], #px-captcha, iframe[src*="captcha-delivery.com"], iframe[src*="arkoselabs.com"], iframe[src*="funcaptcha.com"], .captcha-box, #captcha-box')) {
+        return { handoffRequired: true, type: "captcha", message: "CAPTCHA challenge detected." };
+    }
+    if (has('input[autocomplete="one-time-code"]')
+        || says(/validation en (deux|2) étapes|two-factor|2-step verification|two-step verification|authenticator|code envoyé par sms|appuyez sur oui sur votre téléphone/)) {
+        return { handoffRequired: true, type: "2fa", message: "2FA authentication challenge detected (mobile verification required)." };
+    }
+    if (says(/you have been blocked|attention required! \| cloudflare|pardon our interruption|incapsula incident|unusual traffic from your computer network|trafic exceptionnel|are you a robot\?|automated (access|queries|requests)|access denied[\s\S]{0,300}(reference #|error code:? ?10\d\d|permission to access[\s\S]{0,200}on this server)/)) {
+        return { handoffRequired: true, type: "blocked", message: "Block page detected: the site refused this visit (access denied or automated traffic suspected)." };
+    }
+    return { handoffRequired: false, message: "No verification, CAPTCHA, 2FA or block page detected." };
+}
+
+/**
+ * Detect security challenges (2FA, SMS code, Authenticator, Cloudflare Turnstile, CAPTCHA) and block pages
  */
 async function checkHandoff(params = {}) {
     let tabId = await resolveTargetTab(params);
+    return await evaluateIsolated({ tabId, code: `(${handoffProbe.toString()})()` });
+}
 
-    return await evaluateIsolated({
-        tabId,
-        code: `(() => {
-            const bodyText = (document.body ? document.body.innerText : "").toLowerCase();
-            const html = (document.documentElement ? document.documentElement.outerHTML : "").toLowerCase();
+const HANDOFF_PROBE_MS = 2000;
 
-            const isCloudflare = html.includes("cf-turnstile") || html.includes("challenges.cloudflare.com") || html.includes("vérifier que vous êtes humain");
-            const isCaptcha = html.includes("g-recaptcha") || html.includes("hcaptcha") || html.includes("captcha-box");
-            const is2FA = bodyText.includes("validation en deux étapes") || bodyText.includes("two-factor") || bodyText.includes("authenticator") || bodyText.includes("code envoyé par sms") || bodyText.includes("appuyez sur oui sur votre téléphone");
-
-            if (isCloudflare) return { handoffRequired: true, type: "cloudflare", message: "Cloudflare Turnstile verification challenge detected." };
-            if (isCaptcha) return { handoffRequired: true, type: "captcha", message: "CAPTCHA challenge detected." };
-            if (is2FA) return { handoffRequired: true, type: "2fa", message: "2FA authentication challenge detected (mobile verification required)." };
-
-            return { handoffRequired: false, message: "No authentication challenge detected." };
-        })()`
-    });
+/**
+ * Page de vérification ou de blocage à l'arrivée d'une navigation : dite dans sa réponse (handoff), avec la détection
+ * de check_handoff. La navigation, elle, a abouti : une sonde qui échoue ou tarde n'en fait jamais une erreur.
+ */
+async function withHandoff(tabId, settled) {
+    if (!settled?.data || settled.error || settled.data.dialogOpened || settled.data.note) return settled;
+    try {
+        const probe = checkHandoff({ tabId });
+        probe.catch(() => {});
+        const found = (await withTimeout(probe, HANDOFF_PROBE_MS, "handoff probe timed out"))?.data;
+        if (found?.handoffRequired === true) {
+            return { data: { ...settled.data, handoff: { type: String(found.type), message: String(found.message) } } };
+        }
+    } catch (error) { swallowed("handoff probe after navigation", error); }
+    return settled;
 }
 
 /**

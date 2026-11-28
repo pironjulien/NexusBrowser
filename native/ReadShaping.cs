@@ -74,6 +74,27 @@ public sealed partial class McpServer
         if (!string.IsNullOrEmpty(warning) && envelope["untrusted_note"] is null) envelope["untrusted_note"] = warning;
     }
 
+    internal const int HandoffChars = 200;
+    internal const string HandoffNote =
+        "The page that loaded is a human verification, a CAPTCHA, a 2FA screen or a block page: it is the user's to " +
+        "pass. Tell them, let them do it in this tab, then check with browser_check_handoff. Never try to solve it " +
+        "or get around it (no clicking through, no retry loop, no other route to the same page).";
+
+    /// <summary>
+    /// Verification or block page the extension found where a navigation landed (data.handoff: type, message), taken
+    /// out of the tab's data as the answer's handoff: type, message and the reminder that it is the user's to pass.
+    /// The engine never acts on it. Null on an ordinary page.
+    /// </summary>
+    internal static JsonObject? TakeHandoff(JsonObject? data)
+    {
+        if (data?["handoff"] is not JsonObject found) return null;
+        data.Remove("handoff");
+        static string Bounded(string? text) => (text ?? "").Trim() is { Length: > HandoffChars } t ? t[..HandoffChars] + "…" : (text ?? "").Trim();
+        string type = Bounded(GetString(found, "type"));
+        if (type.Length == 0) return null;
+        return new JsonObject { ["type"] = type, ["message"] = Bounded(GetString(found, "message")), ["note"] = HandoffNote };
+    }
+
     /// <summary>
     /// Severity of a console entry: Runtime.consoleAPICalled type or Log.entryAdded level; an uncaught page error
     /// (Runtime.exceptionThrown) is an error.

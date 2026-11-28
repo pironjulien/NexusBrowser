@@ -5,6 +5,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.40.0] - 2026-11-28
+
+### Added
+- `browser_navigate` tells you when the page that loaded is a human verification (Cloudflare), a CAPTCHA, a 2FA
+  screen or a block page: its answer carries `handoff` (`type`: `cloudflare`, `captcha`, `2fa` or `blocked`, a
+  `message`, and the reminder that it is yours to pass). The agent learns it at once instead of reading or clicking a
+  page that is not the one it asked for. NexusBrowser only reports: it never tries to solve or get around a
+  verification or a bot check. Nothing is added on an ordinary page.
+- `browser_check_handoff` uses the same check and now recognizes block pages (`blocked`: "you have been blocked",
+  "Access Denied" server pages, "Pardon Our Interruption"...).
+
+### Changed
+- A tab opened by an agent's background tab (a `target=_blank` link, `window.open`) no longer takes the place of the
+  tab you are looking at: Chrome opened it in front (measured in Chrome 151); the tab you were on is given back at
+  once and the new tab stays behind, still the agent's. A window opened for it (`window.open` with a size: a sign-in
+  popup) is minimized. Nothing changes when the agent's tab is itself in front, or for tabs opened by your own tabs.
+
+### Fixed
+- `browser_check_handoff` no longer reports a CAPTCHA on a page that only carries an invisible reCAPTCHA (nothing to
+  pass), nor a 2FA screen on a long page that merely talks about two-factor authentication.
+
+Needs the extension 2.40.0; with an older extension, answers and tabs behave as before.
+
 ## [2.39.0] - 2026-11-28
 
 ### Added
@@ -2221,7 +2244,8 @@ request (cause not found, not reproduced since); the failure now prints the log 
 
 Versions up to 2.4.0 were published as "Antigravity Browser Bridge" in the same public repository; see its git history.
 
-[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.39.0...HEAD
+[Unreleased]: https://github.com/pironjulien/NexusBrowser/compare/v2.40.0...HEAD
+[2.40.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.39.0...v2.40.0
 [2.39.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.38.1...v2.39.0
 [2.38.1]: https://github.com/pironjulien/NexusBrowser/compare/v2.38.0...v2.38.1
 [2.38.0]: https://github.com/pironjulien/NexusBrowser/compare/v2.37.6...v2.38.0

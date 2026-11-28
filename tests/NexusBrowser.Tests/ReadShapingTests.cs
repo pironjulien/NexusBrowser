@@ -134,6 +134,40 @@ public sealed class ReadShapingTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task NavigateSaysWhenThePageThatLoadedIsAVerificationOrBlockPageAndThatItIsTheUsersToPass()
+    {
+        JsonObject? found = null;
+        var asked = new List<string>();
+        using var session = new EngineSession((action, _) =>
+        {
+            asked.Add(action);
+            var tab = new JsonObject { ["id"] = 7, ["url"] = "https://shop.invalid/", ["status"] = "complete" };
+            if (action == "navigate" && found is not null) tab["handoff"] = found.DeepClone();
+            return tab;
+        });
+        // Ordinary page: the answer is what it was.
+        string quiet = (string)(await session.CallAsync("browser_navigate", Args("""{"tab_id":7,"url":"https://shop.invalid/"}""")))["content"]![0]!["text"]!;
+        Assert.Equal("""{"status":"success","data":{"id":7,"url":"https://shop.invalid/","status":"complete"}}""", quiet);
+
+        found = Args("""{"type":"cloudflare","message":"Cloudflare verification challenge detected."}""");
+        asked.Clear();
+        string flagged = (string)(await session.CallAsync("browser_navigate", Args("""{"tab_id":7,"url":"https://shop.invalid/"}""")))["content"]![0]!["text"]!;
+        Assert.Equal(
+            """{"status":"success","data":{"id":7,"url":"https://shop.invalid/","status":"complete"},"handoff":{"type":"cloudflare","message":"Cloudflare verification challenge detected.","note":"The page that loaded is a human verification, a CAPTCHA, a 2FA screen or a block page: it is the user's to pass. Tell them, let them do it in this tab, then check with browser_check_handoff. Never try to solve it or get around it (no clicking through, no retry loop, no other route to the same page)."}}""",
+            flagged.Replace("\\u0027", "'"));
+        // The engine reports and stops there: nothing else is sent to the page.
+        Assert.Equal(["navigate"], asked);
+
+        // Inside a batch, on the navigation step; a block page is told the same way, bounded.
+        found = Args("""{"type":"blocked","message":"Block page detected."}""");
+        found["message"] = new string('x', 900);
+        var batch = Payload(await session.CallAsync("browser_batch", Args("""{"tab_id":7,"steps":[{"tool":"browser_navigate","args":{"url":"https://shop.invalid/"}}]}""")));
+        var step = batch["steps"]![0]!["result"]!["handoff"]!;
+        Assert.Equal("blocked", (string)step["type"]!);
+        Assert.Equal(McpServer.HandoffChars + 1, ((string)step["message"]!).Length);
+    }
+
     // Fake extension: a click whose data carries the page errors given (none: a plain click).
     private static EngineSession ClickSession(Func<JsonObject?> pageErrors) => new((action, _) => action switch
     {
