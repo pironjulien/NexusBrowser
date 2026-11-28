@@ -3,13 +3,16 @@
 # the release's SHA256SUMS.txt. The token comes from gcloud as the cws-publisher service account, impersonated by the
 # Google account signed in to gcloud that has roles/iam.serviceAccountTokenCreator on it (-Account, else each signed-in
 # account in turn): no key or secret is stored.
-# Says plainly when the store already has this version, or when an earlier submission is still in review.
-# Usage: pwsh -NoProfile -File scripts\publish-store.ps1 [-Tag vX.Y.Z] [-Account <gcloud account>]
+# Says plainly when the store already has this version, or when an earlier submission is still in review: -Replace
+# then cancels that review (the store's own "cancel review", API v2 cancelSubmission) and sends this version in its
+# place, so one review covers both; users keep the published version meanwhile.
+# Usage: pwsh -NoProfile -File scripts\publish-store.ps1 [-Tag vX.Y.Z] [-Account <gcloud account>] [-Replace]
 #        (default: the latest stable release)
-param([ValidatePattern('^v\d+\.\d+\.\d+$')] [string]$Tag, [string]$Account)
+param([ValidatePattern('^v\d+\.\d+\.\d+$')] [string]$Tag, [string]$Account, [switch]$Replace)
 $ErrorActionPreference = 'Stop'
 $repository = 'pironjulien/NexusBrowser'
 $item = 'fjapmaccbgdfneoccclmlpgknbbfkaco'
+$storePublisher = 'a794d844-e7c4-4232-9e92-6c66ea0619c3'  # publisher id, from the developer dashboard address
 $publisher = 'cws-publisher@antigravity-493509.iam.gserviceaccount.com'
 
 if (-not $Tag) {
@@ -40,13 +43,20 @@ try {
     $headers = @{ Authorization = "Bearer $token"; 'x-goog-api-version' = '2' }
 
     Write-Host "Sending $($zip.Name) ($Tag) to the Chrome Web Store..."
-    $upload = Invoke-RestMethod -Method Put -Uri "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$item" -Headers $headers -InFile $zip.FullName -ContentType 'application/zip'
-    if ($upload.uploadState -notin 'SUCCESS', 'IN_PROGRESS') {
-        $details = @($upload.itemError | ForEach-Object { $_.error_detail }) -join ' | '
-        if ($details -match '(?i)pending review|ready to publish') {
-            Write-Host "Not sent: an earlier version is still in Google's review. Send $Tag again once it is published." -ForegroundColor Yellow
+    $send = { Invoke-RestMethod -Method Put -Uri "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$item" -Headers $headers -InFile $zip.FullName -ContentType 'application/zip' }
+    $upload = & $send
+    $details = @($upload.itemError | ForEach-Object { $_.error_detail }) -join ' | '
+    if ($upload.uploadState -notin 'SUCCESS', 'IN_PROGRESS' -and $details -match '(?i)pending review|ready to publish') {
+        if (-not $Replace) {
+            Write-Host "Not sent: an earlier version is still in Google's review. Send $Tag again once it is published, or now with -Replace (cancels that review)." -ForegroundColor Yellow
             return
         }
+        Write-Host "An earlier version is still in Google's review: cancelling that review to send $Tag in its place..."
+        Invoke-RestMethod -Method Post -Uri "https://chromewebstore.googleapis.com/v2/publishers/$storePublisher/items/${item}:cancelSubmission" -Headers @{ Authorization = "Bearer $token" } -Body '' | Out-Null
+        $upload = & $send
+        $details = @($upload.itemError | ForEach-Object { $_.error_detail }) -join ' | '
+    }
+    if ($upload.uploadState -notin 'SUCCESS', 'IN_PROGRESS') {
         if ($details -match '(?i)version') {
             Write-Host "Not sent: the store already has this extension version (only the engine changed in $Tag)." -ForegroundColor Yellow
             return

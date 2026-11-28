@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- `scripts/publish-store.ps1 -Replace`: when an earlier version is still in Google's review, cancels that review and
+  sends the requested version in its place, so one review covers both. Without it the script still stops and says so.
+
 ## [2.40.0] - 2026-11-28
 
 ### Added
